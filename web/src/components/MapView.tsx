@@ -1,8 +1,13 @@
 import { useEffect, useRef } from 'react'
-import { GeoJSONSource, LngLatBounds, Map as MapLibre, NavigationControl, ScaleControl, type LngLatLike, type MapLayerMouseEvent } from 'maplibre-gl'
+import { GeoJSONSource, LngLatBounds, Map as MapLibre, NavigationControl, ScaleControl, setWorkerUrl, type LngLatLike, type MapLayerMouseEvent } from 'maplibre-gl'
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import type { FeatureCollection } from '../types'
+
+// MapLibre resolves its worker next to its own module, which does not exist in the production bundle.
+// Importing it as an asset makes Vite emit it in both dev and build.
+setWorkerUrl(workerUrl)
 
 // Public vector basemap without API key. Tile requests reveal the viewed area, nothing else.
 const STYLE = 'https://tiles.openfreemap.org/styles/positron'
