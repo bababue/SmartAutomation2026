@@ -84,6 +84,7 @@ export default function App() {
 
       <header className="topbar">
         <h1 className="brand">Borehole Atlas</h1>
+        {stats?.demo && <span className="demo-flag" title="The API serves data/demo.sqlite: synthetic records without source pages">Synthetic demo data</span>}
         <nav className="tabs" aria-label="Views">
           <button className={`tab${view === 'map' ? ' tab-on' : ''}`} aria-current={view === 'map'} onClick={() => setView('map')}>Map</button>
           <button className={`tab${view === 'review' ? ' tab-on' : ''}`} aria-current={view === 'review'} onClick={() => setView('review')}>

@@ -172,6 +172,7 @@ def stats(con: DB):
         "countries": [dict(r) for r in countries],
         "status": {s.value: by_status.get(s.value, 0) for s in ReviewStatus},
         "threshold": config.AUTO_APPROVE_THRESHOLD,
+        "demo": config.DB_PATH.name.startswith("demo"),  # synthetic fixtures, no source pages
     }
 
 

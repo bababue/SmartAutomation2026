@@ -177,6 +177,7 @@ export interface Stats {
   countries: { country: string; n: number }[]
   status: Record<ReviewStatus, number>
   threshold: number
+  demo: boolean
 }
 
 export type StatusFilter = 'all' | 'released' | 'pending' | 'rejected'
