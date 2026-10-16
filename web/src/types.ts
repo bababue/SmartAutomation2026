@@ -99,7 +99,35 @@ export interface Borehole {
   sources: SourceRef[]
   confidence: number | null
   issues: string[]
-  reviewed: boolean
+  score: number | null
+  score_reasons: string[]
+  review_status: ReviewStatus
+  reviewed_by: string | null
+  reviewed_at: string | null
+  review_comment: string | null
+}
+
+export type ReviewStatus = 'auto_approved' | 'pending_review' | 'approved' | 'rejected'
+
+export interface ReviewEvent {
+  decision: ReviewStatus
+  reviewer: string
+  comment: string | null
+  at: string
+}
+
+export interface QueueItem {
+  id: string
+  name: string
+  project: string | null
+  location_name: string | null
+  country: string | null
+  score: number | null
+  confidence: number | null
+  loc_confidence: number | null
+  loc_method: string | null
+  n_layers: number
+  reasons: string[]
 }
 
 export interface BoreholeSummary {
@@ -118,7 +146,8 @@ export interface BoreholeSummary {
   n_issues: number
   lithologies: string | null
   strip: [number, number, Lithology][] | null
-  reviewed: number
+  score: number | null
+  review_status: ReviewStatus
 }
 
 export interface Feature {
@@ -135,6 +164,8 @@ export interface FeatureCollection {
 export interface Detail {
   borehole: Borehole
   source_pages: { file: string; page: number; url: string }[]
+  review_log: ReviewEvent[]
+  threshold: number
 }
 
 export interface Stats {
@@ -144,11 +175,15 @@ export interface Stats {
   documents: number
   pages: number
   countries: { country: string; n: number }[]
+  status: Record<ReviewStatus, number>
+  threshold: number
 }
+
+export type StatusFilter = 'all' | 'released' | 'pending' | 'rejected'
 
 export interface Filters {
   q: string
   lithology: Lithology[]
-  minConfidence: number | null
-  issuesOnly: boolean
+  minPosition: number | null
+  status: StatusFilter
 }

@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Detail, Layer } from '../types'
 import { lithStyle, patternId } from '../lithology'
 import { Profile } from './Profile'
+import { ReviewBox } from './ReviewBox'
 
 interface Props {
   detail: Detail
   onClose: () => void
-  onReviewed: (reviewed: boolean) => void
+  onReviewChange: (update: Pick<Detail, 'borehole' | 'review_log'>) => void
 }
 
 const fmt = (v: number | null | undefined, digits = 2) =>
@@ -29,14 +30,13 @@ function Level({ value, label }: { value: number | null; label: string }) {
   )
 }
 
-export function DetailPanel({ detail, onClose, onReviewed }: Props) {
+export function DetailPanel({ detail, onClose, onReviewChange }: Props) {
   const bh = detail.borehole
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
   const [pageIndex, setPageIndex] = useState(0)
   const pages = detail.source_pages
-
-  useEffect(() => setPageIndex(0), [bh.borehole_id])
+  const page = pages[Math.min(pageIndex, pages.length - 1)]  // the panel is keyed by id; clamp anyway
 
   // Follow the hovered layer to the page it was read from.
   useEffect(() => {
@@ -62,9 +62,6 @@ export function DetailPanel({ detail, onClose, onReviewed }: Props) {
           <p className="detail-sub">{[bh.project_name, bh.location_name].filter(Boolean).join(', ') || 'No project name on the log'}</p>
         </div>
         <div className="detail-actions">
-          <button className={`btn${bh.reviewed ? ' btn-on' : ''}`} onClick={() => onReviewed(!bh.reviewed)}>
-            {bh.reviewed ? 'Checked' : 'Mark as checked'}
-          </button>
           <button className="btn btn-icon" onClick={onClose} aria-label="Close details">✕</button>
         </div>
       </header>
@@ -80,9 +77,10 @@ export function DetailPanel({ detail, onClose, onReviewed }: Props) {
         </section>
 
         <section className="detail-data">
+          <ReviewBox detail={detail} onChange={onReviewChange} />
           {bh.issues.length > 0 && (
             <div className="checks">
-              <h3>To check</h3>
+              <h3>Plausibility findings</h3>
               <ul>{bh.issues.map((i) => <li key={i}>{i}</li>)}</ul>
             </div>
           )}
@@ -149,9 +147,9 @@ export function DetailPanel({ detail, onClose, onReviewed }: Props) {
                   </button>
                 ))}
               </div>
-              <p className="muted source-file">{pages[pageIndex].file}</p>
-              <a href={pages[pageIndex].url} target="_blank" rel="noreferrer" className="source-link">
-                <img src={pages[pageIndex].url} alt={`Original page ${pages[pageIndex].page} of ${pages[pageIndex].file}`} />
+              <p className="muted source-file">{page.file}</p>
+              <a href={page.url} target="_blank" rel="noreferrer" className="source-link">
+                <img src={page.url} alt={`Original page ${page.page} of ${page.file}`} />
               </a>
             </>
           ) : (

@@ -8,6 +8,7 @@ from __future__ import annotations
 import random
 
 from pipeline import store
+from pipeline.scoring import score
 from schema.borehole import (
     SPT,
     Borehole,
@@ -77,7 +78,7 @@ def build(seed: int = 7) -> list[Borehole]:
                 location=Location(
                     lat=lat + rnd.uniform(-0.01, 0.01), lon=lon + rnd.uniform(-0.01, 0.01), country=country,
                     method=GeorefMethod.stated_coordinates if j else GeorefMethod.geocoded_place,
-                    confidence=0.9 if j else 0.3, crs_epsg=4326, coords_raw="synthetic",
+                    confidence=0.95 if j else 0.3, crs_epsg=4326, coords_raw="synthetic",
                 ),
                 surface_elevation_m=elev, elevation_datum="mASL", depth_m=depth,
                 layers=layers,
@@ -86,9 +87,10 @@ def build(seed: int = 7) -> list[Borehole]:
                 groundwater=[GroundwaterObservation(depth_m=round(rnd.uniform(1, 4), 1), kind="standing")],
                 sources=[SourceRef(file="demo", page=1)],
             )
-            issues = bh.validate_log()
-            bh.issues = [i for i in issues] + (["position from place name only"] if not j else [])
-            bh.confidence = 0.92 if j else 0.6
+            if j == 2 and i % 3 == 0 and len(bh.layers) > 2:
+                bh.layers[1].bottom_m -= 0.4  # a gap, as a misread boundary would produce
+            bh.issues = bh.validate_log() + (["position from place name only"] if not j else [])
+            score(bh, {}, unreadable=rnd.choice([0, 0, 0, 0, 1, 3]))
             out.append(bh)
     return out
 

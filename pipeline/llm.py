@@ -1,6 +1,8 @@
 """Claude calls for page classification and log extraction.
 
-- Structured outputs via `messages.parse` with the Pydantic models in `extraction_models`.
+- Classification: strict structured output (small schema).
+- Extraction: JSON validated locally with Pydantic; the schema is too large for strict structured
+  outputs (max. 16 nullable fields per request).
 - Server-side refusal fallback enabled (`fallbacks: "default"`).
 - Responses are cached on disk by input hash, so re-runs cost nothing and a crash mid-run
   loses no work.
@@ -15,7 +17,7 @@ from pathlib import Path
 from typing import TypeVar
 
 import anthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from . import config
 from .extraction_models import PageClassification, PageExtraction
@@ -89,7 +91,28 @@ def _cache_key(*parts: str | bytes) -> str:
     return h.hexdigest()
 
 
-def _call(model: str, effort: str, system: str, content: list[dict], out: type[T], max_tokens: int) -> T:
+def _classify_key(page: PageImage) -> str:
+    thumb = config.PAGES_DIR / page.thumb
+    return _cache_key(config.PROMPT_VERSION, config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT, thumb.read_bytes(),
+                      page.text[:1500])
+
+
+def _extract_key(page: PageImage, kind: str) -> str:
+    image = config.PAGES_DIR / page.image
+    return _cache_key(config.PROMPT_VERSION, config.EXTRACT_MODEL, config.EXTRACT_EFFORT, image.read_bytes(),
+                      page.text[:8000], kind)
+
+
+def _check_stop(response) -> None:
+    if response.stop_reason == "refusal":
+        raise ExtractionRefused(str(response.stop_details))
+    if response.stop_reason == "max_tokens":
+        raise RuntimeError("output truncated (max_tokens)")
+
+
+def _call_structured(model: str, effort: str, system: str, content: list[dict], out: type[T], max_tokens: int) -> T:
+    """Strict structured output. Only for small schemas: the API allows at most 16 union-typed
+    (nullable) fields and 24 optional fields per request."""
     response = client().beta.messages.parse(
         model=model,
         max_tokens=max_tokens,
@@ -100,11 +123,56 @@ def _call(model: str, effort: str, system: str, content: list[dict], out: type[T
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
     )
-    if response.stop_reason == "refusal":
-        raise ExtractionRefused(str(response.stop_details))
-    if response.stop_reason == "max_tokens" or response.parsed_output is None:
-        raise RuntimeError(f"incomplete structured output (stop_reason={response.stop_reason})")
+    _check_stop(response)
+    if response.parsed_output is None:
+        raise RuntimeError("no structured output")
     return response.parsed_output
+
+
+def _json_text(response) -> str:
+    text = "".join(b.text for b in response.content if b.type == "text").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+    return text
+
+
+def _call_json(model: str, effort: str, system: str, content: list[dict], out: type[T], max_tokens: int) -> T:
+    """JSON output validated locally. Used for the large extraction schema, which exceeds the
+    structured-output complexity limits. One repair round with the validation error."""
+    schema = json.dumps(out.model_json_schema(), ensure_ascii=False)
+    system_blocks = [
+        {"type": "text", "text": system},
+        {
+            "type": "text",
+            "text": "Answer with one JSON object only, no prose and no code fences. "
+            "It must validate against this JSON Schema (all listed properties are required; use null "
+            f"where a value is not printed):\n{schema}",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+    messages: list[dict] = [{"role": "user", "content": content}]
+    for attempt in range(2):
+        with client().beta.messages.stream(
+            model=model,
+            max_tokens=max_tokens,
+            system=system_blocks,
+            messages=messages,
+            output_config={"effort": effort},
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+        ) as stream:
+            response = stream.get_final_message()
+        _check_stop(response)
+        try:
+            return out.model_validate_json(_json_text(response))
+        except ValidationError as exc:
+            if attempt:
+                raise
+            messages += [
+                {"role": "assistant", "content": response.content},
+                {"role": "user", "content": f"The JSON did not validate:\n{str(exc)[:3000]}\nReturn the corrected JSON object only."},
+            ]
+    raise AssertionError("unreachable")
 
 
 def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
@@ -119,48 +187,49 @@ def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
     return result
 
 
-def _from_cache(stage: str, page: PageImage, out: type[T]) -> T | None:
+def _from_cache(stage: str, page: PageImage, key: str, out: type[T]) -> T | None:
+    """Cached result only if it was produced from the same input and settings."""
     path = _cache_path(stage, page)
-    return out.model_validate(json.loads(path.read_text())["result"]) if path.exists() else None
+    if not path.exists():
+        return None
+    cached = json.loads(path.read_text())
+    return out.model_validate(cached["result"]) if cached.get("key") == key else None
 
 
 def cached_classification(page: PageImage) -> PageClassification | None:
-    return _from_cache("classify", page, PageClassification)
+    return _from_cache("classify", page, _classify_key(page), PageClassification)
 
 
-def cached_extraction(page: PageImage) -> PageExtraction | None:
-    return _from_cache("extract", page, PageExtraction)
+def cached_extraction(page: PageImage, kind: str) -> PageExtraction | None:
+    return _from_cache("extract", page, _extract_key(page, kind), PageExtraction)
 
 
 def classify_page(page: PageImage) -> PageClassification:
     thumb = config.PAGES_DIR / page.thumb
-    hint = page.text[:1500]
-    key = _cache_key(config.PROMPT_VERSION, config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT, thumb.read_bytes(), hint)
-    content = [_image_block(thumb), {"type": "text", "text": f"Text layer (may be empty or scrambled):\n{hint}"}]
+    content = [_image_block(thumb), {"type": "text", "text": f"Text layer (may be empty or scrambled):\n{page.text[:1500]}"}]
     return _cached(
         "classify",
         page,
-        key,
+        _classify_key(page),
         PageClassification,
-        lambda: _call(config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT, CLASSIFY_SYSTEM, content, PageClassification, 2000),
+        lambda: _call_structured(config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT, CLASSIFY_SYSTEM, content,
+                                 PageClassification, 2000),
     )
 
 
 def extract_page(page: PageImage, kind: str) -> PageExtraction:
     image = config.PAGES_DIR / page.image
-    hint = page.text[:8000]
-    key = _cache_key(config.PROMPT_VERSION, config.EXTRACT_MODEL, config.EXTRACT_EFFORT, image.read_bytes(), hint, kind)
     content = [
         _image_block(image),
         {
             "type": "text",
-            "text": f"Page type (from a quick pre-check): {kind}\n\nText layer (may be empty or scrambled):\n{hint}",
+            "text": f"Page type (from a quick pre-check): {kind}\n\nText layer (may be empty or scrambled):\n{page.text[:8000]}",
         },
     ]
     return _cached(
         "extract",
         page,
-        key,
+        _extract_key(page, kind),
         PageExtraction,
-        lambda: _call(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, EXTRACT_SYSTEM, content, PageExtraction, 20000),
+        lambda: _call_json(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, EXTRACT_SYSTEM, content, PageExtraction, 32000),
     )

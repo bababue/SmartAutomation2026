@@ -34,6 +34,32 @@ input files ──► page classification ──► extraction (vision LLM, stru
 6. **Validation** – gaps/overlaps between layers, depth consistency, position sanity; findings are stored as issues, not thrown away.
 7. **Storage & UI** – database with spatial index and full-text search; map with clustering and filters; borehole detail view with a two-column profile (stratigraphy code + colour, DIN 4023 lithology pattern) next to the original page (inspired by the LGRB BW borehole portal).
 
+## Human in the loop
+
+Every record gets a **release score (0–100)**: the weaker of extraction confidence and position confidence.
+Extraction confidence is computed, not self-reported by the model: plausibility of the layer sequence,
+items the model reported as unreadable, and – for PDFs with a text layer – the share of extracted layer
+depths that literally appear in that text.
+
+- Score ≥ `AUTO_APPROVE_THRESHOLD` (default 90) and no blocking finding → **released automatically**.
+- Otherwise → **review queue** in the UI. Blocking findings always need a person: layer gaps/overlaps,
+  depth mismatch, ambiguous coordinate system, empty log.
+- Reviewers approve, reject or reopen with name and optional comment; every decision is logged.
+- Re-runs keep human decisions as long as the reviewed content is unchanged; if the data changes, the
+  record returns to the queue with a note.
+- The CSV export contains released records only by default.
+
+## Large documents
+
+Documents are never sent as a whole. Every page is rendered locally and processed on its own, so file
+size (some inputs are ~80 MB / 150 pages) does not matter for API limits:
+
+1. Cheap classification of every page on a small thumbnail.
+2. Full-resolution extraction only for log and coordinate-table pages (typically a third of a report).
+3. Per-page cache: interrupted runs resume, re-assembly (`pipeline rebuild`) costs nothing.
+4. Context across pages is restored in code: multi-sheet logs are merged by hole name, coordinate tables
+   are linked to logs, lab sheets can be linked by hole name and depth.
+
 ## Repository layout
 
 | Path | Content |

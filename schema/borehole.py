@@ -14,7 +14,7 @@ Conventions:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 import math
 from typing import Annotated, Literal
@@ -350,6 +350,13 @@ class LabResult(BaseModel):
 # Borehole
 
 
+class ReviewStatus(str, Enum):
+    auto_approved = "auto_approved"  # score above the threshold, no blocking findings
+    pending_review = "pending_review"  # waits for a human decision
+    approved = "approved"  # released by a human
+    rejected = "rejected"  # rejected by a human
+
+
 class InvestigationType(str, Enum):
     borehole = "borehole"
     test_pit = "test_pit"  # trial pits are logged in the same reports
@@ -392,9 +399,14 @@ class Borehole(BaseModel):
 
     # --- Provenance & quality ---
     sources: list[SourceRef] = Field([], description="All pages this borehole was assembled from")
-    confidence: Confidence | None = Field(None, description="Overall extraction confidence")
-    issues: list[str] = Field([], description="Validation findings, filled by validate()")
-    reviewed: bool = Field(False, description="Checked by a human in the review UI")
+    confidence: Confidence | None = Field(None, description="Extraction confidence (layers, values)")
+    issues: list[str] = Field([], description="Validation findings, filled by validate_log()")
+    score: Confidence | None = Field(None, description="Release score: the weaker of extraction and position")
+    score_reasons: list[str] = Field([], description="Why the score is what it is / why review is needed")
+    review_status: ReviewStatus = ReviewStatus.pending_review
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    review_comment: str | None = None
 
     def validate_log(self, tol: float = 0.02) -> list[str]:
         """Plausibility checks; returns findings instead of raising so data is still stored.

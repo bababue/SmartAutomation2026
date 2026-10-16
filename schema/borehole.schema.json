@@ -841,6 +841,16 @@
       "title": "Qualifier",
       "type": "string"
     },
+    "ReviewStatus": {
+      "enum": [
+        "auto_approved",
+        "pending_review",
+        "approved",
+        "rejected"
+      ],
+      "title": "ReviewStatus",
+      "type": "string"
+    },
     "SPT": {
       "properties": {
         "depth_m": {
@@ -1386,23 +1396,82 @@
         }
       ],
       "default": null,
-      "description": "Overall extraction confidence",
+      "description": "Extraction confidence (layers, values)",
       "title": "Confidence"
     },
     "issues": {
       "default": [],
-      "description": "Validation findings, filled by validate()",
+      "description": "Validation findings, filled by validate_log()",
       "items": {
         "type": "string"
       },
       "title": "Issues",
       "type": "array"
     },
-    "reviewed": {
-      "default": false,
-      "description": "Checked by a human in the review UI",
-      "title": "Reviewed",
-      "type": "boolean"
+    "score": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Release score: the weaker of extraction and position",
+      "title": "Score"
+    },
+    "score_reasons": {
+      "default": [],
+      "description": "Why the score is what it is / why review is needed",
+      "items": {
+        "type": "string"
+      },
+      "title": "Score Reasons",
+      "type": "array"
+    },
+    "review_status": {
+      "$ref": "#/$defs/ReviewStatus",
+      "default": "pending_review"
+    },
+    "reviewed_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reviewed By"
+    },
+    "reviewed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reviewed At"
+    },
+    "review_comment": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Review Comment"
     }
   },
   "required": [

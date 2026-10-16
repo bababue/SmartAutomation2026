@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -86,6 +87,8 @@ def cmd_estimate(args) -> None:
 def cmd_run(args) -> None:
     if not args.doc and not args.all:
         sys.exit("choose documents with --doc NAME (repeatable) or --all")
+    if not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
+        sys.exit("No Anthropic credentials: put ANTHROPIC_API_KEY=... into .env (git-ignored).")
     con = store.connect()
     docs = _select(args)
     print(f"Ingest {len(docs)} documents")
@@ -114,25 +117,36 @@ def cmd_run(args) -> None:
 
 def _store(con, docs, rendered, classes, extractions) -> None:
     source_file = {d.doc_id: d.path for d in docs}
+
+    def complete(doc_id: str) -> bool:
+        pages = rendered[doc_id]
+        return all((p.doc_id, p.page) in classes for p in pages) and all(
+            (p.doc_id, p.page) in extractions
+            for p in pages
+            if classes[(p.doc_id, p.page)].kind.value in EXTRACT_KINDS
+        )
+
+    done = [doc_id for doc_id in rendered if complete(doc_id)]
+    skipped = sorted(set(rendered) - set(done))
+    if skipped:
+        print(f"  ! kept previous results for incomplete documents: {', '.join(skipped)}", file=sys.stderr)
     results = [
         PageResult(p.doc_id, source_file[p.doc_id], p.page, classes[(p.doc_id, p.page)].kind.value,
-                   extractions.get((p.doc_id, p.page)))
-        for ps in rendered.values() for p in ps if (p.doc_id, p.page) in classes
+                   extractions.get((p.doc_id, p.page)), p.text)
+        for doc_id in done for p in rendered[doc_id]
     ]
     boreholes = assemble(results)
-    doc_ids = {d.doc_id for d in docs}
-    for row in con.execute("SELECT id FROM boreholes").fetchall():
-        if row["id"].split(":", 1)[0] in doc_ids:
-            con.execute("DELETE FROM boreholes_fts WHERE id = ?", (row["id"],))
-    con.execute(
-        f"DELETE FROM boreholes_rtree WHERE rid IN (SELECT rid FROM boreholes WHERE doc_id IN ({','.join('?' * len(doc_ids))}))",
-        list(doc_ids),
-    )
-    con.execute(f"DELETE FROM boreholes WHERE doc_id IN ({','.join('?' * len(doc_ids))})", list(doc_ids))
-    for bh in boreholes:
-        store.save_borehole(con, bh)
+    with con:  # replace complete documents atomically; human decisions carry over if content is unchanged
+        previous: dict[str, dict] = {}
+        for doc_id in done:
+            previous.update(store.delete_document_boreholes(con, doc_id))
+        for bh in boreholes:
+            store.save_borehole(con, bh, commit=False, previous=previous.get(bh.borehole_id))
     located = sum(1 for b in boreholes if b.location.lat is not None)
-    print(f"Stored {len(boreholes)} boreholes ({located} georeferenced) in {config.DB_PATH}")
+    auto = sum(1 for b in boreholes if b.review_status.value == "auto_approved")
+    print(f"Stored {len(boreholes)} boreholes ({located} georeferenced) from {len(done)} documents in {config.DB_PATH}")
+    print(f"  released automatically: {auto}, waiting for review: {len(boreholes) - auto} "
+          f"(threshold {round(config.AUTO_APPROVE_THRESHOLD * 100)})")
 
 
 def cmd_rebuild(args) -> None:
@@ -147,7 +161,7 @@ def cmd_rebuild(args) -> None:
             if c is None:
                 continue
             classes[(p.doc_id, p.page)] = c
-            x = llm.cached_extraction(p)
+            x = llm.cached_extraction(p, c.kind.value)
             if x is not None:
                 extractions[(p.doc_id, p.page)] = x
     print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")

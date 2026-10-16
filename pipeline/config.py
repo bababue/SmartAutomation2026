@@ -29,5 +29,9 @@ MAX_WORKERS = int(os.getenv("MAX_WORKERS", "6"))
 EXTRACT_LONG_EDGE = int(os.getenv("EXTRACT_LONG_EDGE", "2000"))
 THUMB_LONG_EDGE = int(os.getenv("THUMB_LONG_EDGE", "900"))
 
+# Human in the loop: records with a release score at or above this value and no blocking
+# findings are released automatically; all others go to the review queue.
+AUTO_APPROVE_THRESHOLD = float(os.getenv("AUTO_APPROVE_THRESHOLD", "0.9"))
+
 # Bump when prompts or extraction models change so cached responses are not reused.
 PROMPT_VERSION = "v1"

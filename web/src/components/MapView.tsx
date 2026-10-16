@@ -8,11 +8,12 @@ import type { FeatureCollection } from '../types'
 const STYLE = 'https://tiles.openfreemap.org/styles/positron'
 
 const ACCENT = '#0E6F8E'
-const CONFIDENCE_COLOR: ExpressionSpecification = [
-  'case',
-  ['>=', ['coalesce', ['get', 'loc_confidence'], 0], 0.7], '#2F7D4F',
-  ['>=', ['coalesce', ['get', 'loc_confidence'], 0], 0.4], '#B7791F',
-  '#B33A3A',
+// Point colour = release status (see review.ts); a ring instead of a dot = approximate position.
+const STATUS_COLOR: ExpressionSpecification = [
+  'match', ['get', 'review_status'],
+  ['auto_approved', 'approved'], '#2F7D4F',
+  'rejected', '#B33A3A',
+  '#B7791F',
 ]
 
 interface Props {
@@ -37,8 +38,8 @@ export function MapView({ data, selectedId, focus, onSelect }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibre | null>(null)
   const ready = useRef(false)
-  const latest = useRef({ data, onSelect })
-  latest.current = { data, onSelect }
+  const latest = useRef({ data, onSelect, selectedId, focus })
+  latest.current = { data, onSelect, selectedId, focus }
 
   useEffect(() => {
     const m = new MapLibre({
@@ -75,12 +76,12 @@ export function MapView({ data, selectedId, focus, onSelect }: Props) {
       m.addLayer({
         id: 'points', type: 'circle', source: 'boreholes',
         filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'loc_method'], 'geocoded_place']],
-        paint: { 'circle-color': CONFIDENCE_COLOR, 'circle-radius': 6, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5 },
+        paint: { 'circle-color': STATUS_COLOR, 'circle-radius': 6, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5 },
       })
       m.addLayer({
         id: 'points-approx', type: 'circle', source: 'boreholes',
         filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'loc_method'], 'geocoded_place']],
-        paint: { 'circle-color': '#FFFFFF', 'circle-opacity': 0.6, 'circle-radius': 6, 'circle-stroke-color': CONFIDENCE_COLOR, 'circle-stroke-width': 2.5 },
+        paint: { 'circle-color': '#FFFFFF', 'circle-opacity': 0.6, 'circle-radius': 6, 'circle-stroke-color': STATUS_COLOR, 'circle-stroke-width': 2.5 },
       })
       m.addLayer({
         id: 'selected', type: 'circle', source: 'boreholes', filter: ['==', ['get', 'id'], ''],
@@ -106,6 +107,7 @@ export function MapView({ data, selectedId, focus, onSelect }: Props) {
       m.on('mouseleave', 'clusters', () => (m.getCanvas().style.cursor = ''))
       ready.current = true
       fit(m, latest.current.data)
+      applySelection(m, latest.current.selectedId, latest.current.focus)  // selection made before load
     })
     return () => m.remove()
   }, [])
@@ -120,19 +122,23 @@ export function MapView({ data, selectedId, focus, onSelect }: Props) {
   useEffect(() => {
     const m = map.current
     if (!m || !ready.current) return
-    m.setFilter('selected', ['==', ['get', 'id'], selectedId ?? ''])
-    const source = m.getSource('uncertainty') as GeoJSONSource
-    if (focus) {
-      const radius = focus.approximate ? Math.max(focus.accuracy_m ?? 0, 500) : 0
-      source.setData({ type: 'FeatureCollection', features: radius ? [circlePolygon(focus.lon, focus.lat, radius)] : [] })
-      const zoom = radius ? Math.max(6, Math.min(13, 16 - Math.log2(radius / 100))) : 15
-      m.flyTo({ center: [focus.lon, focus.lat], zoom, padding: { left: 0, right: Math.min(window.innerWidth * 0.55, 760), top: 0, bottom: 0 } })
-    } else {
-      source.setData({ type: 'FeatureCollection', features: [] })
-    }
+    applySelection(m, selectedId, focus)
   }, [selectedId, focus])
 
   return <div ref={container} className="map" />
+}
+
+function applySelection(m: MapLibre, selectedId: string | null, focus: Props['focus']) {
+  m.setFilter('selected', ['==', ['get', 'id'], selectedId ?? ''])
+  const source = m.getSource('uncertainty') as GeoJSONSource
+  if (!focus) {
+    source.setData({ type: 'FeatureCollection', features: [] })
+    return
+  }
+  const radius = focus.approximate ? Math.max(focus.accuracy_m ?? 0, 500) : 0
+  source.setData({ type: 'FeatureCollection', features: radius ? [circlePolygon(focus.lon, focus.lat, radius)] : [] })
+  const zoom = radius ? Math.max(6, Math.min(13, 16 - Math.log2(radius / 100))) : 15
+  m.flyTo({ center: [focus.lon, focus.lat], zoom, padding: { left: 0, right: Math.min(window.innerWidth * 0.55, 760), top: 0, bottom: 0 } })
 }
 
 function fit(m: MapLibre, data: FeatureCollection) {

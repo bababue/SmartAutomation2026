@@ -53,10 +53,19 @@ def discover(dataset_dir: Path = config.DATASET_DIR) -> list[SourceDoc]:
     return docs
 
 
+def _native_long_edge(page: pymupdf.Page) -> int | None:
+    """Pixel size of the largest embedded image (raster sources), else None."""
+    images = page.get_images(full=True)
+    return max((max(img[2], img[3]) for img in images), default=None)
+
+
 def _save(page: pymupdf.Page, long_edge: int, out: Path, upscale: bool = True) -> tuple[int, int]:
-    scale = long_edge / max(page.rect.width, page.rect.height)
     if not upscale:
-        scale = min(scale, 1.0)
+        # Raster sources: page.rect is in points, so derive the scale from native pixels instead.
+        native = _native_long_edge(page)
+        if native:
+            long_edge = min(long_edge, native)
+    scale = long_edge / max(page.rect.width, page.rect.height)
     pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
     out.write_bytes(pix.tobytes("jpeg", jpg_quality=85))
     return pix.width, pix.height

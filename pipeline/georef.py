@@ -89,9 +89,11 @@ def crs_from_hint(crs_raw: str | None) -> list[int]:
     m = re.search(r"(4[89]|5[0-6]) ?[a-z]? ?mga ?94|mga ?94\D*(4[89]|5[0-6])", text)
     if m:
         out.append(28300 + int(m.group(1) or m.group(2)))
-    m = re.search(r"mga ?2020\D*(4[89]|5[0-9])", text)
+    for code in re.findall(r"epsg\s*:?\s*(\d{4,5})", text):
+        out.append(int(code))
+    m = re.search(r"mga ?2020\D*(4[6-9]|5[0-9])", text)
     if m:
-        out.append(7800 + int(m.group(1)) - 3)  # GDA2020 / MGA zone 49 = EPSG:7846
+        out.append(7800 + int(m.group(1)))  # GDA2020 / MGA zone 56 = EPSG:7856
     m = re.search(r"utm\D{0,8}(\d{1,2}) ?([c-x])?", text)
     if m:
         zone = int(m.group(1))
@@ -113,7 +115,7 @@ LABEL = (
     r"(?P<label>latitude|longitude|lat|lon|long|northing|easting|nord|norte|este|øst|ost|"
     r"x-coord|y-coord|n|e|x|y)"
 )
-TOKEN = r"(?P<num>-?\d[\d.,' ]*\d|-?\d)"
+TOKEN = r"(?P<num>-?\d[\d.,']*\d|-?\d)"  # no spaces: '48.1 7.9' are two values
 
 
 @dataclass
@@ -146,6 +148,9 @@ def _readings(raw: str) -> tuple[list[float], list[str]]:
     seps = [c for c in s if c in ".,"]
     groups = re.split(r"[.,]", s)
     readings: list[float] = []
+    if not s or not re.fullmatch(r"\d+(?:[.,]\d+)*", s):
+        return [], []  # malformed, e.g. '1..2'
+
     if not seps:
         readings.append(float(s))
     elif len(set(seps)) == 2:
@@ -167,12 +172,19 @@ def _readings(raw: str) -> tuple[list[float], list[str]]:
     return [sign * r for r in dict.fromkeys(readings)], (groups if len(groups) >= 3 else [])
 
 
+def _safe_readings(raw: str) -> tuple[list[float], list[str]]:
+    try:
+        return _readings(raw)
+    except ValueError:  # malformed number: no reading rather than a crash
+        return [], []
+
+
 def parse_tokens(coords_raw: str) -> list[Token]:
     tokens: list[Token] = []
     text = coords_raw.replace("−", "-").replace("–", "-")
     # Suffix labels like '812345.67mN' or '402345.67mE'
     for m in re.finditer(r"(-?\d[\d.,]*\d)\s*m\s*([NE])\b", text):
-        values, groups = _readings(m.group(1))
+        values, groups = _safe_readings(m.group(1))
         tokens.append(Token(m.group(2).lower(), m.group(1), values, groups))
     if tokens:
         return tokens
@@ -181,7 +193,7 @@ def parse_tokens(coords_raw: str) -> list[Token]:
         num = m.group("num").strip().rstrip(".,")
         if len(re.sub(r"\D", "", num)) < 2:
             continue
-        values, groups = _readings(num)
+        values, groups = _safe_readings(num)
         label = _norm_label(m.group("label"))
         # '-E: 12345' style: a minus before the label belongs to the value
         start = m.start()
@@ -296,10 +308,11 @@ class GeorefResult:
     issues: list[str]
 
 
-def _confidence(distance_km: float, precision_km: float) -> float:
+def _confidence(distance_km: float, precision_km: float, explicit: bool) -> float:
+    """explicit: the CRS/notation is stated or unambiguous (not inferred, e.g. a guessed UTM zone)."""
     tolerance = max(5.0, 2 * precision_km)
     if distance_km <= tolerance:
-        return 0.9
+        return 0.95 if explicit else 0.9
     if distance_km <= 4 * tolerance:
         return 0.7
     if distance_km <= 100:
@@ -333,7 +346,8 @@ def georeference(
         best = cands[0]
         if best.distance_km is not None and best.distance_km <= 200:
             _apply(loc, best, GeorefMethod.stated_coordinates)
-            loc.confidence = _confidence(best.distance_km, precision)
+            explicit = best.hinted or (best.epsg == GEOGRAPHIC and "guessed" not in best.note)
+            loc.confidence = _confidence(best.distance_km, precision, explicit)
             loc.accuracy_m = 10.0 if loc.confidence >= 0.7 else best.distance_km * 1000
             rivals = [
                 c for c in cands[1:]
@@ -351,11 +365,20 @@ def georeference(
         issues.append("printed coordinates could not be matched to the named place")
     elif cands:
         hinted = [c for c in cands if c.hinted] or [c for c in cands if c.epsg == GEOGRAPHIC and "guessed" not in c.note]
-        if len(hinted) >= 1:
-            _apply(loc, hinted[0], GeorefMethod.stated_coordinates)
-            loc.confidence = 0.5
-            loc.accuracy_m = 10.0
-            issues.append("no place to cross-check coordinates")
+        if hinted:
+            best = hinted[0]
+            _apply(loc, best, GeorefMethod.stated_coordinates)
+            distinct = [c for c in hinted[1:] if haversine_km(c.lat, c.lon, best.lat, best.lon) > 1.0]
+            if distinct:
+                # Several readings of the printed text are possible and nothing tells them apart.
+                loc.crs_candidates = list(dict.fromkeys([best.crs] + [c.crs for c in distinct]))
+                loc.confidence = 0.2
+                loc.accuracy_m = max(haversine_km(c.lat, c.lon, best.lat, best.lon) for c in distinct) * 1000
+                issues.append("CRS ambiguous and no place to decide: " + ", ".join(loc.crs_candidates[:4]))
+            else:
+                loc.confidence = 0.5
+                loc.accuracy_m = 10.0
+                issues.append("no place to cross-check coordinates")
             return GeorefResult(loc, issues)
         issues.append("coordinates without CRS or place – not resolvable")
 

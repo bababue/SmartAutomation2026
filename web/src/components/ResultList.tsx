@@ -1,4 +1,5 @@
 import type { Feature } from '../types'
+import { STATUS_LABEL, scoreText } from '../review'
 import { CoreStrip } from './Profile'
 
 interface Props {
@@ -15,7 +16,7 @@ export function ResultList({ features, selectedId, onSelect, loading }: Props) {
     return (
       <div className="empty">
         <p>No boreholes match these filters.</p>
-        <p className="muted">Clear the search or lower the minimum confidence.</p>
+        <p className="muted">Clear the search, remove lithology filters or show all release states.</p>
       </div>
     )
   }
@@ -37,9 +38,10 @@ export function ResultList({ features, selectedId, onSelect, loading }: Props) {
             <span className="result-place">{p.location_name ?? p.project ?? 'Unnamed site'}{p.country ? `, ${p.country}` : ''}</span>
             <CoreStrip strip={p.strip} depth={p.depth} />
             <span className="result-flags">
+              <span className={`flag flag-${p.review_status}`} title={`Release score ${scoreText(p.score)}`}>
+                {STATUS_LABEL[p.review_status]} <span className="flag-score">{scoreText(p.score)}</span>
+              </span>
               {p.loc_method === 'geocoded_place' && <span className="flag flag-warn" title="Position estimated from the place name">approx. position</span>}
-              {p.n_issues > 0 && <span className="flag" title="Plausibility checks found something to look at">{p.n_issues} to check</span>}
-              {p.reviewed ? <span className="flag flag-ok">checked</span> : null}
             </span>
           </button>
         </li>

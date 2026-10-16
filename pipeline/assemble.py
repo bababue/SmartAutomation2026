@@ -31,6 +31,7 @@ from schema.borehole import (
 
 from .extraction_models import PageExtraction, XCoordinateRow, XLog
 from .georef import georeference
+from .scoring import score
 
 LOG_KINDS = {"borehole_log", "test_pit_log", "probe_log"}
 
@@ -42,6 +43,7 @@ class PageResult:
     page: int
     kind: str
     extraction: PageExtraction | None
+    text: str = ""
 
 
 def norm_name(name: str) -> str:
@@ -51,10 +53,16 @@ def norm_name(name: str) -> str:
 
 
 def _num(raw: str | None) -> float | None:
+    """First numeric literal incl. exponent ('1.2E-6', '3,5x10-7'); decimal comma accepted."""
     if not raw:
         return None
-    m = re.search(r"[<>]?\s*(-?\d+(?:[.,]\d+)?)", raw.replace(" ", ""))
-    return float(m.group(1).replace(",", ".")) if m else None
+    text = raw.replace(" ", "").replace("×", "x")
+    m = re.search(r"(-?\d+(?:[.,]\d+)?)(?:[eE]([-+]?\d+)|x10\^?([-+−]?\d+))?", text)
+    if not m:
+        return None
+    value = float(m.group(1).replace(",", "."))
+    exponent = m.group(2) or (m.group(3) or "").replace("−", "-")
+    return value * 10 ** int(exponent) if exponent else value
 
 
 def _date(raw: str | None) -> date | None:
@@ -88,12 +96,17 @@ def _lab_value(parameter: LabParameter, value_raw: str, unit_raw: str | None) ->
     return value
 
 
+CONTINUED = re.compile(r"\((?:continued|cont'?d\.?|cont\.|fortsetzung|continuaci[oó]n|continua[çc][aã]o)\)|\bcontinued\b(?!\w)|^\s*\.{3}", re.I)
+
+
 def _continues(prev: Layer, nxt: Layer) -> bool:
-    if abs(prev.bottom_m - nxt.top_m) > 0.05:
+    """A layer split by a sheet break: same boundary, next sheet, same lithology, and either an
+    explicit continuation marker or the same description."""
+    if prev.source == nxt.source or abs(prev.bottom_m - nxt.top_m) > 0.05 or prev.primary != nxt.primary:
         return False
     a = re.sub(r"\W+", " ", prev.description_original.lower()).strip()
     b = re.sub(r"\W+", " ", nxt.description_original.lower()).strip()
-    return "contin" in b or "contd" in b or b.startswith(a[:25]) or a.startswith(b[:25])
+    return bool(CONTINUED.search(nxt.description_original)) or a == b
 
 
 def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None) -> list[Layer]:
@@ -105,7 +118,10 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None) -> li
         if tops[i] is None:
             tops[i] = bottoms[i - 1] if i > 0 else 0.0
         if bottoms[i] is None:
-            bottoms[i] = tops[i + 1] if i + 1 < len(flat) and tops[i + 1] is not None else final_depth
+            if i + 1 < len(flat):
+                bottoms[i] = tops[i + 1]  # stays None if the next top is unknown too
+            else:
+                bottoms[i] = final_depth  # only the last layer may close at the final depth
     layers: list[Layer] = []
     for (x, src), top, bottom in zip(flat, tops, bottoms):
         if top is None or bottom is None:
@@ -144,7 +160,8 @@ def _first(values):
 
 
 def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceRef]],
-                   coord_rows: dict[str, XCoordinateRow], doc_place: tuple[float, float, float] | None) -> Borehole:
+                   coord_rows: dict[str, XCoordinateRow], doc_place: tuple[float, float, float] | None,
+                   page_texts: dict[tuple[str, int | None], str] | None = None) -> Borehole:
     xs = [log for log, _ in logs]
     name = xs[0].name
     key = norm_name(name)
@@ -214,11 +231,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     unreadable = [u for x in xs for u in x.unreadable]
     issues += [f"unreadable: {u}" for u in unreadable[:5]]
     bh.issues = list(dict.fromkeys(issues))
-    structural = [i for i in bh.issues if not i.startswith("unreadable") and "georeferenced" not in i
-                  and "place" not in i and "CRS" not in i and "coordinates" not in i]
-    bh.confidence = round(max(0.1, 0.95 - 0.1 * len(structural) - 0.05 * min(len(unreadable), 4)), 2)
-    if not bh.layers:
-        bh.confidence = 0.1
+    score(bh, page_texts or {}, len(unreadable))
     return bh
 
 
@@ -233,6 +246,7 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
         coord_rows: dict[str, XCoordinateRow] = {}
         groups: dict[str, list[tuple[XLog, SourceRef]]] = defaultdict(list)
         places = []
+        page_texts = {(r.source_file, r.page): r.text for r in pages}
         for r in pages:
             if r.extraction is None:
                 continue
@@ -251,7 +265,10 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
                          statistics.median(p[2] for p in places))
         for logs in groups.values():
             if any(log.layers for log, _ in logs):
-                boreholes.append(build_borehole(doc_id, pages[0].source_file, logs, coord_rows, doc_place))
+                try:
+                    boreholes.append(build_borehole(doc_id, pages[0].source_file, logs, coord_rows, doc_place, page_texts))
+                except Exception as exc:  # one broken record must not stop the whole run
+                    print(f"  ! could not assemble {doc_id}:{logs[0][0].name}: {type(exc).__name__}: {exc}")
     return dedupe(boreholes)
 
 
@@ -260,8 +277,12 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
     kept: dict[tuple, Borehole] = {}
     for bh in boreholes:
         loc = bh.location
-        pos = (round(loc.lat, 3), round(loc.lon, 3)) if loc.lat is not None else (bh.borehole_id,)
-        key = (norm_name(bh.borehole_name), pos)
+        precise = loc.lat is not None and loc.method in (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)
+        if not precise:
+            kept[(bh.borehole_id,)] = bh  # never merge on approximate positions
+            continue
+        project = re.sub(r"\W+", "", (bh.project_name or "").lower())
+        key = (norm_name(bh.borehole_name), project, round(loc.lat, 4), round(loc.lon, 4))
         other = kept.get(key)
         if other is None:
             kept[key] = bh
