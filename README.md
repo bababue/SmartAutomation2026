@@ -104,6 +104,10 @@ CLI (`claude -p`, logged in with your subscription). Slower and subject to the s
 LLM_BACKEND=claude-code .venv/bin/python -m pipeline run --doc profile01
 ```
 
+The CLI uses its default login. For another subscription, point it to a separate profile directory
+(`CLAUDE_CONFIG_DIR=~/.claude-other`) or to a token file (`CLAUDE_CLI_TOKEN_FILE=~/path/to/token`),
+either in `.env` or on the command line. Results already in `data/cache/` are reused.
+
 Without any credentials, try the UI with synthetic data:
 
 ```bash

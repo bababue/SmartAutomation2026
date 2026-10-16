@@ -220,9 +220,15 @@ def _call_claude_code(model: str, system: str, image: Path, text: str, out: type
 
 
 def _cli_env() -> dict[str, str]:
-    """Environment for the CLI: without API credentials, so it uses its own login."""
-    drop = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
-    return {k: v for k, v in os.environ.items() if k not in drop}
+    """Environment for the CLI: without the pipeline's API credentials, so the CLI uses its own login.
+    Another subscription: set CLAUDE_CONFIG_DIR (separate profile directory, passed through) or
+    CLAUDE_CLI_TOKEN_FILE (file with that profile's OAuth token)."""
+    drop = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CLI_TOKEN_FILE"}
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    token_file = os.getenv("CLAUDE_CLI_TOKEN_FILE")
+    if token_file:
+        env["ANTHROPIC_AUTH_TOKEN"] = Path(token_file).expanduser().read_text().strip()
+    return env
 
 
 def _strip_fences(text: str) -> str:
