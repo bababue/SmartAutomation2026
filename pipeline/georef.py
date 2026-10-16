@@ -417,6 +417,15 @@ def georeference(
     return GeorefResult(loc, issues)
 
 
+def resolve_with(coords_raw: str, epsg: int, near: tuple[float, float] | None = None) -> Candidate | None:
+    """Reading of printed coordinates in a CRS chosen by a reviewer: labelled axes and the main
+    notation first, then the reading nearest the current position."""
+    cands = [c for c in candidates(coords_raw, f"EPSG:{epsg}", None, near) if c.epsg == epsg]
+    if not cands:
+        return None
+    return min(cands, key=lambda c: ("guessed" in c.note, "alternative" in c.note, c.distance_km or 0.0))
+
+
 def _apply(loc: Location, c: Candidate, method: GeorefMethod) -> None:
     loc.lat, loc.lon = round(c.lat, 7), round(c.lon, 7)
     loc.easting, loc.northing = c.easting, c.northing

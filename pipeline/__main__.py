@@ -15,7 +15,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import config, ingest, llm, store
+from . import config, corrections, ingest, llm, store
 from .assemble import LOG_KINDS, PageResult, assemble, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
@@ -197,6 +197,8 @@ def _store(con, docs, rendered, classes, extractions) -> None:
         for doc_id in done for p in rendered[doc_id]
     ]
     boreholes = assemble(results)
+    for bh in boreholes:  # reviewer fixes survive re-extraction
+        corrections.apply(bh, store.corrections_for(con, bh.borehole_id))
     with con:  # replace complete documents atomically; human decisions carry over if content is unchanged
         previous: dict[str, dict] = {}
         for doc_id in done:

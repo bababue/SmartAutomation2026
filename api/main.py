@@ -14,9 +14,11 @@ from typing import Annotated, Literal
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
+from pyproj import CRS
+from pyproj.exceptions import CRSError
 
-from pipeline import config, store
+from pipeline import config, corrections, store
 from schema.borehole import DIN4023_LABEL_DE, Borehole, Lithology, ReviewStatus
 
 app = FastAPI(title="Borehole Atlas API")
@@ -127,6 +129,7 @@ def get_borehole(borehole_id: str, con: DB):
         "borehole": bh.model_dump(mode="json"),
         "source_pages": source_pages,
         "review_log": store.review_log(con, borehole_id),
+        "corrections": store.corrections_for(con, borehole_id),
         "threshold": config.AUTO_APPROVE_THRESHOLD,
     }
 
@@ -143,6 +146,86 @@ def review(borehole_id: str, body: Review, con: DB):
     if bh is None:
         raise HTTPException(404, "borehole not found")
     return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id)}
+
+
+class CrsFix(BaseModel):
+    epsg: int
+
+
+class PositionFix(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    accuracy_m: float | None = Field(None, gt=0)
+
+
+class LayerFix(BaseModel):
+    orig_top: float
+    orig_bottom: float
+    top: float | None = None
+    bottom: float | None = None
+    primary: Lithology | None = None
+    delete: bool = False
+
+    @model_validator(mode="after")
+    def _check(self):
+        if (self.top is None) != (self.bottom is None):
+            raise ValueError("give both top and bottom")
+        if self.top is not None and not 0 <= self.top < self.bottom:
+            raise ValueError("top must be at least 0 and above bottom")
+        if not self.delete and self.top is None and self.primary is None:
+            raise ValueError("nothing to change")
+        return self
+
+
+FIXES = {"crs": CrsFix, "position": PositionFix, "layer": LayerFix}
+
+
+class Correction(BaseModel):
+    kind: Literal["crs", "position", "layer"]
+    scope: Literal["borehole", "document"] = "borehole"
+    payload: dict
+    reviewer: str = Field(min_length=1, max_length=80)
+    comment: str | None = Field(None, max_length=2000)
+
+
+@app.post("/api/boreholes/{borehole_id:path}/corrections")
+def correct(borehole_id: str, body: Correction, con: DB):
+    """Store a reviewer correction and apply it now; later runs re-apply it. A coordinate system can be
+    set for all holes of the document at once (scope 'document')."""
+    try:
+        payload = FIXES[body.kind].model_validate(body.payload).model_dump(mode="json", exclude_none=True)
+    except ValidationError as exc:
+        raise HTTPException(422, f"invalid {body.kind} correction: {exc.errors()[0]['msg']}")
+    if body.kind == "crs":
+        try:
+            CRS.from_epsg(payload["epsg"])
+        except CRSError:
+            raise HTTPException(422, f"unknown EPSG code {payload['epsg']}")
+    if body.scope == "document" and body.kind != "crs":
+        raise HTTPException(422, "only a coordinate system can be set for a whole document")
+    if store.load_borehole(con, borehole_id) is None:
+        raise HTTPException(404, "borehole not found")
+
+    group = store.document_group(borehole_id)
+    targets = store.group_borehole_ids(con, group) if body.scope == "document" else [borehole_id]
+    item = {"kind": body.kind, "payload": payload, "reviewer": body.reviewer.strip()}
+    updated = []
+    with con:
+        for target in targets:
+            bh = store.load_borehole(con, target)
+            if bh is None or (body.kind == "crs" and not bh.location.coords_raw):
+                continue
+            if not corrections.apply(bh, [item])[0]:
+                continue  # does not fit this record: leave it unchanged
+            store.save_borehole(con, bh, commit=False)
+            updated.append(target)
+        if not updated:
+            raise HTTPException(422, f"the {corrections.describe(body.kind, payload)} does not fit this record")
+        store.add_correction(con, body.scope, group if body.scope == "document" else borehole_id, body.kind, payload,
+                             item["reviewer"], body.comment)
+    bh = store.load_borehole(con, borehole_id)
+    return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
+            "corrections": store.corrections_for(con, borehole_id), "updated": updated}
 
 
 @app.get("/api/pages/{doc_id}/{page}")

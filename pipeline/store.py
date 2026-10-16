@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS review_events (
     id INTEGER PRIMARY KEY, borehole_id TEXT, decision TEXT, reviewer TEXT, comment TEXT, at TEXT,
     content_hash TEXT
 );
+-- Reviewer corrections, re-applied after every run. scope 'borehole': target is a borehole id;
+-- scope 'document': target is a document group (doc id before '__'), e.g. one CRS for all holes.
+CREATE TABLE IF NOT EXISTS corrections (
+    id INTEGER PRIMARY KEY, scope TEXT, target TEXT, kind TEXT, payload TEXT, reviewer TEXT, comment TEXT, at TEXT
+);
 """
 
 HUMAN = (ReviewStatus.approved, ReviewStatus.rejected)
@@ -175,6 +180,37 @@ def record_review(con: sqlite3.Connection, borehole_id: str, decision: ReviewSta
             (borehole_id, decision.value, reviewer, comment, now.isoformat(), row["content_hash"]),
         )
     return bh
+
+
+def document_group(borehole_id: str) -> str:
+    return borehole_id.split(":", 1)[0].split("__")[0]
+
+
+def add_correction(con: sqlite3.Connection, scope: str, target: str, kind: str, payload: dict, reviewer: str,
+                   comment: str | None) -> dict:
+    at = datetime.now(timezone.utc).isoformat()
+    cur = con.execute(
+        "INSERT INTO corrections (scope, target, kind, payload, reviewer, comment, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (scope, target, kind, as_json(payload), reviewer, comment, at),
+    )
+    return {"id": cur.lastrowid, "scope": scope, "target": target, "kind": kind, "payload": payload,
+            "reviewer": reviewer, "comment": comment, "at": at}
+
+
+def corrections_for(con: sqlite3.Connection, borehole_id: str) -> list[dict]:
+    """Corrections that apply to a record, oldest first (document-wide ones included)."""
+    rows = con.execute(
+        "SELECT * FROM corrections WHERE (scope = 'borehole' AND target = ?) OR (scope = 'document' AND target = ?) "
+        "ORDER BY id", (borehole_id, document_group(borehole_id)),
+    ).fetchall()
+    return [{**dict(r), "payload": json.loads(r["payload"])} for r in rows]
+
+
+def group_borehole_ids(con: sqlite3.Connection, group: str) -> list[str]:
+    return [r["id"] for r in con.execute(
+        "SELECT id FROM boreholes WHERE doc_id = ? OR doc_id LIKE ? ESCAPE '\\' ORDER BY id",
+        (group, group.replace("_", "\\_").replace("%", "\\%") + "\\_\\_%"),
+    )]
 
 
 def review_log(con: sqlite3.Connection, borehole_id: str) -> list[dict]:

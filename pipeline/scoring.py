@@ -19,7 +19,7 @@ from . import config
 
 # Findings that always need a human, whatever the score: anything that suggests a misread.
 BLOCKING = ("no layers extracted", "CRS ambiguous", "invalid interval", "non-finite depth", "invalid WGS84",
-            "gap", "overlap", "layers end at")
+            "gap", "overlap", "layers end at", "stale correction")
 
 # Georeferencing doubts that explain a position confidence below the release threshold.
 GEOREF_DOUBTS = ("coordinate system inferred", "coordinate axes inferred", "coordinate notation or datum ambiguous")
