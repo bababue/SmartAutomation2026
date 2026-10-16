@@ -344,3 +344,17 @@ def test_core_runs_and_samples_are_checked():
     assert "sample UD4 at 9.5 m below final depth 9 m" in issues
     assert "SPT at 10.5 m below final depth 9 m" in issues
     assert not any("S1" in i or "SCR" in i for i in issues)
+
+
+def test_final_depth_is_the_deepest_stated_over_all_sheets():
+    from pipeline.assemble import build_borehole
+    from pipeline.extraction_models import XLog
+    def sheet(sheet, final, layers):
+        return XLog.model_validate({**{k: None for k in XLog.model_fields}, "name": "BH1", "sheet": sheet,
+                                    "final_depth_m": final, "layers": [_xlayer(t, b) for t, b in layers],
+                                    "spt": [], "core_runs": [], "samples": [], "groundwater": [],
+                                    "lab_results": [], "unreadable": []})
+    logs = [(sheet("1 of 2", 8.0, [(0, 8)]), SourceRef(file="f", page=1)),
+            (sheet("2 of 2", 10.5, [(8, 10.5)]), SourceRef(file="f", page=2))]
+    bh, _ = build_borehole("d", "f", logs, {}, None)
+    assert bh.depth_m == 10.5 and not any(i.startswith("layers end at") for i in bh.issues)

@@ -338,7 +338,8 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     xs = [log for log, _ in logs]
     name = xs[0].name
     key = norm_name(name)
-    final_depth = _first(x.final_depth_m for x in xs)
+    # Earlier sheets often state where the sheet ends; the hole's final depth is the deepest one stated.
+    final_depth = max((x.final_depth_m for x in xs if x.final_depth_m is not None), default=None)
     layer_notes: list[str] = []
 
     coords_raw = _first(x.coords_raw for x in xs)
