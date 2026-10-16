@@ -21,6 +21,9 @@ from . import config
 BLOCKING = ("no layers extracted", "CRS ambiguous", "invalid interval", "non-finite depth", "invalid WGS84",
             "gap", "overlap", "layers end at")
 
+# Georeferencing doubts that explain a position confidence below the release threshold.
+GEOREF_DOUBTS = ("coordinate system inferred", "coordinate axes inferred", "coordinate notation or datum ambiguous")
+
 STRUCTURAL = ("gap", "overlap", "invalid interval", "layers end at", "log starts at", "groundwater marked dry")
 
 
@@ -75,7 +78,10 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
     elif loc.lat is None:
         reasons.append("Not georeferenced")
     elif position < 0.9:
-        reasons.append("Printed coordinates only partly match the named place")
+        doubts = [i for i in bh.issues if i.startswith(GEOREF_DOUBTS)]
+        reasons += [i[0].upper() + i[1:] for i in doubts]
+        if position < 0.8 or not doubts:
+            reasons.append("Printed coordinates only partly match the named place")
     if len(loc.crs_candidates) > 1:
         reasons.append("Coordinate system ambiguous: " + ", ".join(loc.crs_candidates[:3]))
 

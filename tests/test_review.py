@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pipeline import config, store
-from pipeline.assemble import _layers, _num
+from pipeline.assemble import _layers, _num, id_key, norm_name
 from pipeline.extraction_models import XLayer
 from pipeline.scoring import score, text_agreement
 from schema.borehole import Borehole, GeorefMethod, Layer, Location, ReviewStatus, SourceRef
@@ -70,6 +70,52 @@ def test_layers_without_bottoms_are_not_fabricated():
     layers = _layers([(Log, SourceRef(file="f", page=1))], final_depth=10)
     # The unknown internal boundary is not invented; only the fully known layer remains.
     assert [(l.top_m, l.bottom_m) for l in layers] == [(5, 10)]
+
+
+def _xlayer(top, bottom, description="a", primary="sand"):
+    return XLayer(top_m=top, bottom_m=bottom, description_original=description, description_en=None, primary=primary,
+                  secondary=[], uscs=None, stratigraphic_name=None, stratigraphic_code=None,
+                  stratigraphic_color=None, geologic_age=None, color=None, consistency=None,
+                  relative_density=None, weathering=None, rock_strength=None, moisture=None)
+
+
+def _sheets(*pages):
+    out = []
+    for page, layers in enumerate(pages, start=1):
+        log = type("Log", (), {"layers": layers})
+        out.append((log, SourceRef(file="f", page=page)))
+    return out
+
+
+def test_unit_restated_on_later_sheet_is_clipped():
+    sheets = _sheets([_xlayer(0, 5, "sand"), _xlayer(5, 20, "granite, moderately weathered", "plutonic_rock")],
+                     [_xlayer(5, 30, "joints at 22-25 m", "plutonic_rock"), _xlayer(30, 40, "clay", "clay")])
+    notes: list[str] = []
+    layers = _layers(sheets, final_depth=40, notes=notes)
+    assert [(l.top_m, l.bottom_m) for l in layers] == [(0, 5), (5, 20), (20, 30), (30, 40)]
+    assert len(notes) == 1
+
+
+def test_overlap_without_restated_top_is_kept():
+    # The top does not match any earlier layer: possibly a misread, so the overlap stays visible.
+    sheets = _sheets([_xlayer(0, 20)], [_xlayer(15, 30, "b")])
+    layers = _layers(sheets, final_depth=30)
+    assert [(l.top_m, l.bottom_m) for l in layers] == [(0, 20), (15, 30)]
+
+
+def test_leading_zeros_in_hole_names():
+    assert norm_name("BH-01") == norm_name("BH 1") == "BH1"
+    assert norm_name("BH-10") == "BH10"
+    assert norm_name("TP-0") == "TP0"
+    assert id_key("BH-01") == "BH01"  # IDs keep the written form
+
+
+def test_inferred_crs_is_explained_in_review_reasons():
+    bh = make(position=0.8)
+    bh.issues.append("coordinate system inferred, not stated: EPSG:32632")
+    score(bh, {}, unreadable=0)
+    assert bh.review_status == ReviewStatus.pending_review
+    assert bh.score_reasons == ["Coordinate system inferred, not stated: EPSG:32632"]
 
 
 def test_scientific_notation():

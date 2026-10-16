@@ -46,10 +46,16 @@ class PageResult:
     text: str = ""
 
 
-def norm_name(name: str) -> str:
+def id_key(name: str) -> str:
+    """Name part of the borehole ID: 'BH No. 01' → 'BH01'. Keeps leading zeros so IDs stay stable."""
     s = re.sub(r"[^A-Z0-9]", "", name.upper())
     s = re.sub(r"NO(?=\d)", "", s)  # 'BH No. 1' → 'BH1'
     return s or name.upper()
+
+
+def norm_name(name: str) -> str:
+    """Key for matching sheets, tables and documents: also ignores leading zeros ('BH-01' = 'BH-1')."""
+    return re.sub(r"(?<!\d)0+(?=\d)", "", id_key(name))
 
 
 def _num(raw: str | None) -> float | None:
@@ -109,7 +115,8 @@ def _continues(prev: Layer, nxt: Layer) -> bool:
     return bool(CONTINUED.search(nxt.description_original)) or a == b
 
 
-def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None) -> list[Layer]:
+def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
+            notes: list[str] | None = None) -> list[Layer]:
     flat = [(x, src) for log, src in logs for x in log.layers]
     # Fill missing boundaries from neighbours: top ← previous bottom, bottom ← next top / final depth.
     tops = [x.top_m for x, _ in flat]
@@ -126,6 +133,14 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None) -> li
     for (x, src), top, bottom in zip(flat, tops, bottoms):
         if top is None or bottom is None:
             continue
+        if (layers and src != layers[-1].source and top < layers[-1].bottom_m < bottom
+                and any(abs(l.top_m - top) < 0.05 for l in layers)):
+            # A unit running over several sheets, restated with its full range on a later sheet:
+            # keep only the part below what the earlier sheets already cover.
+            if notes is not None:
+                notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page}; "
+                             f"top set to {layers[-1].bottom_m:g} m")
+            top = layers[-1].bottom_m
         layer = Layer(
             top_m=top,
             bottom_m=bottom,
@@ -166,6 +181,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     name = xs[0].name
     key = norm_name(name)
     final_depth = _first(x.final_depth_m for x in xs)
+    layer_notes: list[str] = []
 
     coords_raw = _first(x.coords_raw for x in xs)
     crs_raw = _first(x.crs_raw for x in xs)
@@ -187,7 +203,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     itype = _first(x.investigation_type for x in xs)
     elevation_raw = _first(x.elevation_raw for x in xs) or (row.elevation_raw if row else None)
     bh = Borehole(
-        borehole_id=f"{doc_id}:{key}",
+        borehole_id=f"{doc_id}:{id_key(name)}",
         borehole_name=name,
         investigation_type=InvestigationType(itype) if itype in ("borehole", "test_pit") else (
             InvestigationType.other if itype else None),
@@ -207,7 +223,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
         inclination_deg=_first(x.inclination_deg for x in xs),
         drilling_method=_first(x.drilling_method for x in xs),
         notes="\n".join(dict.fromkeys(x.notes for x in xs if x.notes)) or None,
-        layers=_layers(logs, final_depth),
+        layers=_layers(logs, final_depth, layer_notes),
         core_runs=[CoreRun(top_m=c.top_m, bottom_m=c.bottom_m, total_core_recovery_pct=c.tcr_pct,
                            solid_core_recovery_pct=c.scr_pct, rqd_pct=c.rqd_pct,
                            fracture_frequency_per_m=c.fracture_frequency_per_m, source=src)
@@ -227,7 +243,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
                      if (v := _lab_value(lab.parameter, lab.value_raw, lab.unit_raw)) is not None],
         sources=[src for _, src in logs],
     )
-    issues = bh.validate_log() + geo.issues
+    issues = bh.validate_log() + layer_notes + geo.issues
     unreadable = [u for x in xs for u in x.unreadable]
     issues += [f"unreadable: {u}" for u in unreadable[:5]]
     bh.issues = list(dict.fromkeys(issues))

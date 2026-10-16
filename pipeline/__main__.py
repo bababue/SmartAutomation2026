@@ -5,6 +5,7 @@
     python -m pipeline run --doc AUS01        # classify + extract + store selected documents
     python -m pipeline run --all --yes        # everything
     python -m pipeline rebuild                # re-assemble from cached extractions (no API calls)
+    python -m pipeline rebuild --doc SEA01 --max-pages 6   # same page limit as the run
 """
 
 from __future__ import annotations
@@ -155,6 +156,8 @@ def cmd_rebuild(args) -> None:
     con = store.connect()
     docs = _select(args)
     rendered = {d.doc_id: ingest.render(d) for d in docs}
+    if args.max_pages:  # same page limit as the run that filled the cache
+        rendered = {doc_id: ps[: args.max_pages] for doc_id, ps in rendered.items()}
     classes, extractions = {}, {}
     for ps in rendered.values():
         for p in ps:
@@ -179,6 +182,7 @@ def main() -> None:
         if name == "run":
             p.add_argument("--all", action="store_true")
             p.add_argument("--yes", action="store_true", help="skip the cost confirmation")
+        if name in ("run", "rebuild"):
             p.add_argument("--max-pages", type=int, help="only the first N pages of each document")
     args = parser.parse_args()
     args.fn(args)

@@ -203,17 +203,21 @@ def parse_tokens(coords_raw: str) -> list[Token]:
     return tokens
 
 
-def _sexagesimal(token: Token) -> list[float]:
-    """Degree interpretations of a token: '31,12,345' → 31°12.345', 153012.40 → 15°30'12.40"."""
-    out: list[float] = []
+def _sexagesimal(token: Token) -> list[tuple[float, bool]]:
+    """Degree interpretations of a token as (value, alternative): '31,12,345' → 31°12.345' and, as an
+    alternative reading, 31°12'34.5"; 153012.40 → 15°30'12.40"."""
+    out: list[tuple[float, bool]] = []
     g = token.groups
     sign = -1.0 if token.raw.strip().startswith("-") else 1.0
     if len(g) == 3 and g[0].isdigit() and g[1].isdigit() and g[2].isdigit():
         deg, minutes = int(g[0]), float(f"{g[1]}.{g[2]}")
         if minutes < 60:
-            out.append(sign * (deg + minutes / 60))
+            out.append((sign * (deg + minutes / 60), False))
         if int(g[1]) < 60 and len(g[2]) <= 2 and int(g[2]) < 60:
-            out.append(sign * (deg + int(g[1]) / 60 + int(g[2]) / 3600))
+            out.append((sign * (deg + int(g[1]) / 60 + int(g[2]) / 3600), False))
+        elif int(g[1]) < 60 and len(g[2]) == 3 and int(g[2][:2]) < 60:
+            # Seconds with tenths: rarer than decimal minutes, kept only to flag the ambiguity.
+            out.append((sign * (deg + int(g[1]) / 60 + int(g[2]) / 36000), True))
     for v in token.values:
         whole = abs(v)
         digits = len(str(int(whole)))
@@ -222,7 +226,7 @@ def _sexagesimal(token: Token) -> list[float]:
             minutes = int((whole // 100) % 100)
             seconds = whole - deg * 10000 - minutes * 100
             if minutes < 60 and seconds < 60:
-                out.append(math.copysign(deg + minutes / 60 + seconds / 3600, v))
+                out.append((math.copysign(deg + minutes / 60 + seconds / 3600, v), False))
     return out
 
 
@@ -278,12 +282,13 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
     for north_t, east_t, labelled in _pairs(tokens):
         swap_note = "" if labelled else " (axes as guessed)"
         # Geographic: decimal degrees and sexagesimal notations
-        lats = [v for v in north_t.values if abs(v) <= 90] + _sexagesimal(north_t)
-        lons = [v for v in east_t.values if abs(v) <= 180] + _sexagesimal(east_t)
-        for lat in lats:
-            for lon in lons:
+        lats = [(v, False) for v in north_t.values if abs(v) <= 90] + _sexagesimal(north_t)
+        lons = [(v, False) for v in east_t.values if abs(v) <= 180] + _sexagesimal(east_t)
+        for lat, lat_alt in lats:
+            for lon, lon_alt in lons:
                 if abs(lat) <= 90 and abs(lon) <= 180 and (abs(lat) > 1 or abs(lon) > 1):
-                    out.append(Candidate(lat, lon, "EPSG:4326", GEOGRAPHIC, lon, lat, "geographic" + swap_note, False))
+                    note = "geographic" + (" (alternative notation)" if lat_alt or lon_alt else "") + swap_note
+                    out.append(Candidate(lat, lon, "EPSG:4326", GEOGRAPHIC, lon, lat, note, False))
         # Projected metres
         for n in north_t.values:
             for e in east_t.values:
@@ -309,10 +314,11 @@ class GeorefResult:
 
 
 def _confidence(distance_km: float, precision_km: float, explicit: bool) -> float:
-    """explicit: the CRS/notation is stated or unambiguous (not inferred, e.g. a guessed UTM zone)."""
+    """explicit: the CRS/notation is stated or unambiguous (not inferred, e.g. a guessed UTM zone).
+    An inferred CRS stays below the default release threshold: a person confirms it once."""
     tolerance = max(5.0, 2 * precision_km)
     if distance_km <= tolerance:
-        return 0.95 if explicit else 0.9
+        return 0.95 if explicit else 0.8
     if distance_km <= 4 * tolerance:
         return 0.7
     if distance_km <= 100:
@@ -340,6 +346,7 @@ def georeference(
         def rank(c: Candidate) -> float:
             penalty = 0.0 if c.hinted else 0.5
             penalty += 0.0 if "guessed" not in c.note else 1.0
+            penalty += 0.0 if "alternative" not in c.note else 2.0  # flags only, never outranks
             return (c.distance_km or 0) + penalty
 
         cands.sort(key=rank)
@@ -349,6 +356,9 @@ def georeference(
             explicit = best.hinted or (best.epsg == GEOGRAPHIC and "guessed" not in best.note)
             loc.confidence = _confidence(best.distance_km, precision, explicit)
             loc.accuracy_m = 10.0 if loc.confidence >= 0.7 else best.distance_km * 1000
+            if not explicit:
+                issues.append(f"coordinate system inferred, not stated: {best.crs}" if best.epsg != GEOGRAPHIC
+                              else "coordinate axes inferred, not labelled")
             rivals = [
                 c for c in cands[1:]
                 if c.distance_km is not None
@@ -359,6 +369,15 @@ def georeference(
                 loc.crs_candidates = list(dict.fromkeys([best.crs] + [c.crs for c in rivals]))
                 loc.confidence = min(loc.confidence, 0.5)
                 issues.append("CRS ambiguous: " + ", ".join(loc.crs_candidates[:4]))
+            else:
+                # Readings too close to tell apart via the place (e.g. decimal minutes vs. seconds,
+                # or another datum), but far enough apart to matter on site.
+                spread = max((d for c in cands[1:] if 0.05 < (d := haversine_km(c.lat, c.lon, best.lat, best.lon)) <= 1.0),
+                             default=None)
+                if spread is not None:
+                    loc.confidence = min(loc.confidence, 0.8)
+                    loc.accuracy_m = max(loc.accuracy_m or 0.0, spread * 1000)
+                    issues.append(f"coordinate notation or datum ambiguous: readings differ by up to {spread * 1000:.0f} m")
             if best.distance_km > 4 * max(5.0, 2 * precision):
                 issues.append(f"coordinates {best.distance_km:.0f} km from the named place")
             return GeorefResult(loc, issues)

@@ -112,3 +112,28 @@ def test_negative_label_prefix():
     tokens = parse_tokens("-E: 12345 (m) N: 67890 (m)")
     east = next(t for t in tokens if t.label == "e")
     assert east.values[0] == -12345
+
+
+def test_inferred_crs_is_not_released_automatically():
+    lat, lon = 40.4093, 49.8671  # Baku, UTM 39N without a printed zone
+    e, n = fwd(32639, lat, lon)
+    result = georeference(f"X {e:.2f} Y {n:.2f}", None, "AZ", lat, lon, 5.0)
+    assert result.location.confidence < 0.9
+    assert any(i.startswith("coordinate system inferred") for i in result.issues)
+
+
+def test_stated_crs_keeps_high_confidence():
+    lat, lon = -33.8568, 151.2153  # Sydney, MGA94 zone 56 printed
+    e, n = fwd(28356, lat, lon)
+    result = georeference(f"E: {e:.3f}, N: {n:.3f}", "56H MGA94", "AU", lat, lon, 5.0)
+    assert result.location.confidence >= 0.95
+    assert not any("inferred" in i or "ambiguous" in i for i in result.issues)
+
+
+def test_decimal_minutes_vs_seconds_is_flagged():
+    # '29,23,382' reads as 29°23.382' (chosen) or 29°23'38.2" – a few hundred metres apart.
+    lat, lon = 29.3897, 47.9983
+    result = georeference(f"N: {dm(lat)} E: {dm(lon)}", None, "KW", lat, lon, 5.0)
+    assert haversine_km(result.location.lat, result.location.lon, lat, lon) < 0.05
+    assert result.location.confidence < 0.9
+    assert any(i.startswith("coordinate notation or datum ambiguous") for i in result.issues)

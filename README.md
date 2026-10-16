@@ -44,6 +44,8 @@ depths that literally appear in that text.
 - Score ≥ `AUTO_APPROVE_THRESHOLD` (default 90) and no blocking finding → **released automatically**.
 - Otherwise → **review queue** in the UI. Blocking findings always need a person: layer gaps/overlaps,
   depth mismatch, ambiguous coordinate system, empty log.
+- Positions whose coordinate system is only inferred (not printed), or whose notation allows readings a
+  few hundred metres apart (decimal minutes vs. seconds), stay below the threshold until a person confirms them.
 - Reviewers approve, reject or reopen with name and optional comment; every decision is logged.
 - Re-runs keep human decisions as long as the reviewed content is unchanged; if the data changes, the
   record returns to the queue with a note.
@@ -93,6 +95,7 @@ echo "ANTHROPIC_API_KEY=..." > .env
 .venv/bin/python -m pipeline run --doc AUS01     # process one document end to end
 .venv/bin/python -m pipeline run --all --yes     # process everything
 .venv/bin/python -m pipeline rebuild             # re-run assembly/georeferencing from cached LLM output (free)
+                                                  # (pass the same --doc/--max-pages as the run)
 .venv/bin/uvicorn api.main:app --port 8000       # API (serves web/dist if built)
 npm --prefix web run dev                          # UI on http://localhost:5173
 ```
