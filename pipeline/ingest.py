@@ -44,13 +44,22 @@ def doc_id_for(rel: Path) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", slug)
 
 
+def _docx_export(path: Path) -> bool:
+    """A PDF saved next to a DOCX of the same name is that DOCX's export, not a document of its own."""
+    return path.suffix.lower() == ".pdf" and any(path.with_suffix(ext).exists() for ext in (".docx", ".DOCX"))
+
+
 def discover(dataset_dir: Path = config.DATASET_DIR) -> list[SourceDoc]:
-    docs = []
+    docs, used = [], set()
     for path in sorted(dataset_dir.rglob("*")):
-        if path.is_file() and path.suffix.lower() in SUPPORTED:
+        if path.is_file() and path.suffix.lower() in SUPPORTED and not _docx_export(path):
             rel = path.relative_to(dataset_dir)
             kind = "pdf" if path.suffix.lower() == ".pdf" else "docx" if path.suffix.lower() == ".docx" else "image"
-            docs.append(SourceDoc(doc_id_for(rel), str(rel), kind))
+            doc_id = doc_id_for(rel)
+            if doc_id in used:  # e.g. 'X.pdf' and 'X.jpg': never share pages, cache and records
+                doc_id = f"{doc_id}-{path.suffix.lower().lstrip('.')}"
+            used.add(doc_id)
+            docs.append(SourceDoc(doc_id, str(rel), kind))
     return docs
 
 
@@ -85,19 +94,21 @@ def _docx_images(path: Path) -> list[tuple[bytes, str]]:
     return images
 
 
-def converted_pdf(doc: SourceDoc) -> Path | None:
-    """PDF export of a DOCX under CONVERTED_DIR, if someone saved one."""
+def converted_pdf(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR) -> Path | None:
+    """PDF export of a DOCX: under CONVERTED_DIR, or saved next to the DOCX with the same name."""
     if doc.kind != "docx":
         return None
-    path = config.CONVERTED_DIR / Path(doc.path).with_suffix(".pdf")
-    return path if path.exists() else None
+    for path in (config.CONVERTED_DIR / Path(doc.path).with_suffix(".pdf"), (dataset_dir / doc.path).with_suffix(".pdf")):
+        if path.exists():
+            return path
+    return None
 
 
 def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool = False) -> list[PageImage]:
     out_dir = config.PAGES_DIR / doc.doc_id
     manifest = out_dir / "manifest.json"
     src = dataset_dir / doc.path
-    converted = converted_pdf(doc)
+    converted = converted_pdf(doc, dataset_dir)
     source = str(converted or src)  # rendered from; a new PDF export of a DOCX triggers a re-render
     marker = out_dir / "source.txt"
     same_source = marker.read_text() == source if marker.exists() else converted is None

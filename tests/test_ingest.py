@@ -28,3 +28,23 @@ def test_docx_uses_pdf_export_when_present(tmp_path, monkeypatch):
     assert [p.page for p in pages] == [1, 2]
     assert "Sheet 2 of 2" in pages[1].text
     assert ingest.render(doc, dataset) == pages  # cached now
+
+
+def test_discover_skips_docx_export_and_keeps_ids_unique(tmp_path):
+    for name in ("report.docx", "report.pdf", "plan.pdf", "plan.jpg"):
+        (tmp_path / name).write_bytes(b"x")
+    docs = {d.path: d.doc_id for d in ingest.discover(tmp_path)}
+    assert "report.pdf" not in docs  # the DOCX's own export
+    assert docs["report.docx"] == "report"
+    assert sorted(docs[n] for n in ("plan.jpg", "plan.pdf")) == ["plan", "plan-pdf"]
+
+
+def test_export_next_to_docx_is_used(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
+    monkeypatch.setattr(config, "CONVERTED_DIR", tmp_path / "converted")
+    docx.Document().save(tmp_path / "r.docx")
+    pdf = pymupdf.open()
+    pdf.new_page().insert_text((72, 72), "Log sheet")
+    pdf.save(tmp_path / "r.pdf")
+    pages = ingest.render(ingest.SourceDoc("r", "r.docx", "docx"), tmp_path)
+    assert len(pages) == 1 and "Log sheet" in pages[0].text
