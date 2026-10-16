@@ -429,3 +429,25 @@ def test_dedupe_prefers_the_better_checked_record():
     clean.confidence, split.confidence = 0.95, 0.6
     kept = dedupe([split, clean])
     assert len(kept) == 1 and kept[0] is clean
+
+
+def test_boreholes_and_test_pits_with_the_same_number_stay_apart():
+    from pipeline.assemble import PageResult, assemble, hole_key
+    from pipeline.extraction_models import PageExtraction, XLog
+
+    assert hole_key("Test Pit No. 2", None) == hole_key("T.P. 2", None) == hole_key("2", "test_pit") == ("test_pit", "2")
+    assert hole_key("BH-2", None) == ("borehole", "2") and hole_key("S-2", "borehole") == ("borehole", "S2")
+
+    def page(n, kind, name, layers):
+        log = XLog.model_validate({**{k: None for k in XLog.model_fields}, "name": name,
+                                   "layers": [_xlayer(t, b) for t, b in layers], "spt": [], "core_runs": [],
+                                   "samples": [], "groundwater": [], "lab_results": [], "unreadable": []})
+        return PageResult("r", "r.pdf", n, kind, PageExtraction(logs=[log], coordinate_rows=[]))
+
+    records = assemble([page(1, "borehole_log", "2", [(0, 0.3), (0.3, 6.0)]),
+                        page(2, "test_pit_log", "Test Pit No. 2", [(0, 1.6), (1.6, 2.5)]),
+                        page(3, "test_pit_log", "3", [(0, 2.0)])])
+    by_id = {b.borehole_id: b for b in records}
+    assert set(by_id) == {"r:2", "r:TESTPIT2", "r:3"}
+    assert [l.bottom_m for l in by_id["r:2"].layers] == [0.3, 6.0]  # not merged with the test pit
+    assert by_id["r:3"].investigation_type.value == "test_pit"

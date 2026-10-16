@@ -80,6 +80,44 @@ def _unique_ids(records: list[Borehole]) -> None:
             bh.borehole_id = f"{doc_id}:{id_key(bh.borehole_name, separate_numbers=True)}"
 
 
+# Type words in hole names. Reports number boreholes and test pits separately ('1'..'6' and '1'..'20'),
+# so the type is part of the matching key and the word itself is not.
+_PIT_WORDS = re.compile(r"^\s*(?:test\s*pit|trial\s*pit|t\.?\s*p\.?|pit|calicata|cata|schurf)(?![a-z])\.?\s*"
+                        r"(?:no\.?|nr\.?|n[º°]\.?)?\s*", re.I)
+_HOLE_WORDS = re.compile(r"^\s*(?:bore\s*hole|boring|bh|sondeo|drill\s*hole)(?![a-z])\.?\s*(?:no\.?|nr\.?|n[º°]\.?)?\s*",
+                         re.I)
+_KINDS = {"test_pit_log": "test_pit", "probe_log": "probe", "borehole_log": "borehole"}
+
+
+def hole_key(name: str, kind: str | None) -> tuple[str | None, str]:
+    """(type, number) for matching logs, tables and lab rows: 'Test Pit No. 2' and 'T.P. 2' are the test pit
+    '2', 'BH-2' is the borehole '2'. `kind` (from the page or the model) applies when the name has no type word."""
+    for words, word_kind in ((_PIT_WORDS, "test_pit"), (_HOLE_WORDS, "borehole")):
+        rest = words.sub("", name, count=1)
+        if rest != name and re.search(r"\d", rest):
+            return word_kind, norm_name(rest)
+    return (kind if kind in ("borehole", "test_pit", "probe") else None), norm_name(name)
+
+
+def lookup(index: dict[tuple[str | None, str], object], key: tuple[str | None, str]):
+    """Exact (type, number) match; without a known type only a number that is unique across types."""
+    if key in index:
+        return index[key]
+    if key[0] is None:
+        hits = [v for (kind, n), v in index.items() if n == key[1]]
+        return hits[0] if len(hits) == 1 else None
+    return index.get((None, key[1]))
+
+
+def _unique_ids_by_type(records: list[Borehole]) -> None:
+    """Borehole '2' and test pit '2' of one report: the test pit's id gets a 'TP' prefix."""
+    seen = Counter(bh.borehole_id for bh in records)
+    for bh in records:
+        if seen[bh.borehole_id] > 1 and bh.investigation_type and bh.investigation_type.value == "test_pit":
+            doc_id, rest = bh.borehole_id.split(":", 1)
+            bh.borehole_id = f"{doc_id}:TP{rest}"
+
+
 def _num(raw: str | None) -> float | None:
     """First numeric literal incl. exponent ('1.2E-6', '3,5x10-7'); decimal comma accepted."""
     if not raw:
@@ -194,6 +232,10 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
         if bottoms[i] is None:
             if i + 1 < len(flat):
                 bottoms[i] = tops[i + 1]  # stays None if the next top is unknown too
+            elif final_depth is not None and tops[i] is not None and final_depth <= tops[i] + 0.01:
+                # The hole ends where this unit starts (e.g. a pit stopped on rock): a finding, not a layer.
+                inferred.append(f"reached at the final depth {final_depth:g} m, thickness unknown: "
+                                f"{' '.join(flat[i][0].description_original.split())[:80]}")
             else:
                 bottoms[i] = final_depth  # only the last layer may close at the final depth
                 if final_depth is not None and tops[i] is not None:
@@ -368,11 +410,12 @@ def clean_location_text(text: str | None) -> str | None:
 
 def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceRef]],
                    coord_rows: dict[str, XCoordinateRow], doc_place: tuple[float, float, float] | None,
-                   doc_crs: tuple[str, int] | None = None) -> tuple[Borehole, int]:
-    """The record (not yet scored) and the number of items the model reported as unreadable."""
+                   doc_crs: tuple[str, int] | None = None, kind: str | None = None) -> tuple[Borehole, int]:
+    """The record (not yet scored) and the number of items the model reported as unreadable.
+    coord_rows is keyed by hole_key; kind is the hole type of the group (borehole, test_pit, probe)."""
     xs = [log for log, _ in logs]
     name = xs[0].name
-    key = norm_name(name)
+    key = hole_key(name, kind)
     # Earlier sheets often state where the sheet ends; the hole's final depth is the deepest one stated.
     final_depth = max((x.final_depth_m for x in xs if x.final_depth_m is not None), default=None)
     layer_notes: list[str] = []
@@ -380,7 +423,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     coords_raw = _first(x.coords_raw for x in xs)
     crs_raw = _first(x.crs_raw for x in xs)
     method = GeorefMethod.stated_coordinates
-    row = coord_rows.get(key)
+    row = lookup(coord_rows, key)
     if row and not coords_raw:
         coords_raw, crs_raw, method = row.coords_raw, row.crs_raw or crs_raw, GeorefMethod.linked_table
     from_document = bool(coords_raw and not crs_raw and doc_crs)
@@ -408,7 +451,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     location.source = SourceRef(file=coords_log[1].file, page=coords_log[1].page, bbox=_bbox(coords_log[0].coords_bbox)) \
         if coords_log else logs[0][1]
 
-    itype = _first(x.investigation_type for x in xs)
+    itype = _first(x.investigation_type for x in xs) or key[0]
     elevation_raw = _first(x.elevation_raw for x in xs) or (row.elevation_raw if row else None)
     bh = Borehole(
         borehole_id=f"{doc_id}:{id_key(name)}",
@@ -484,12 +527,14 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
             if r.extraction is None:
                 continue
             for row in r.extraction.coordinate_rows:
-                k = norm_name(row.name)
+                k = hole_key(row.name, None)
                 if k not in coord_rows or (coord_rows[k].is_planned and not row.is_planned):
                     coord_rows[k] = row
             for log in r.extraction.logs:
                 if log.layers or log.coords_raw or r.kind in LOG_KINDS:
-                    groups[norm_name(log.name)].append((log, SourceRef(file=r.source_file, page=r.page)))
+                    k = hole_key(log.name, log.investigation_type if log.investigation_type in ("borehole", "test_pit", "probe")
+                                 else _KINDS.get(r.kind))
+                    groups[k].append((log, SourceRef(file=r.source_file, page=r.page)))
                 if log.place_lat is not None and log.place_lon is not None:
                     places.append((log.place_lat, log.place_lon, log.place_precision_km or 10.0))
         doc_place = None
@@ -500,16 +545,17 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
             doc_place = (statistics.median(p[0] for p in precise), statistics.median(p[1] for p in precise),
                          statistics.median(p[2] for p in precise))
         doc_records: list[Borehole] = []
-        for logs in groups.values():
+        for (kind, _), logs in groups.items():
             if any(log.layers for log, _ in logs):
                 try:
                     bh, unreadable = build_borehole(doc_id, pages[0].source_file, logs, coord_rows, doc_place,
-                                                    group_crs[group])
+                                                    group_crs[group], kind)
                     built[group].append((bh, unreadable, page_texts))
                     doc_records.append(bh)
                 except Exception as exc:  # one broken record must not stop the whole run
                     print(f"  ! could not assemble {doc_id}:{logs[0][0].name}: {type(exc).__name__}: {exc}")
         _unique_ids(doc_records)
+        _unique_ids_by_type(doc_records)
     for group, records in built.items():
         linked, unmatched = link_lab_results([bh for bh, _, _ in records], by_group[group])
         if unmatched:
@@ -547,23 +593,36 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
 def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[int, int]:
     """Attach the rows of lab sheets to the holes of the same document: by hole name, else by a sample
     name that only one hole has, else to the only hole of the document. Returns (linked, unmatched)."""
-    by_name: dict[str, Borehole] = {}
+    by_name: dict[tuple[str | None, str], Borehole] = {}
     for bh in records:
-        by_name.setdefault(norm_name(bh.borehole_name), bh)
+        by_name.setdefault(hole_key(bh.borehole_name, bh.investigation_type.value if bh.investigation_type else None), bh)
     by_sample: dict[str, list[tuple[Borehole, object]]] = defaultdict(list)
     for bh in records:
         for sample in bh.samples:
             if sample.name:
                 by_sample[norm_name(sample.name)].append((bh, sample))
+    def deep_enough(bh: Borehole, depth: float | None) -> bool:
+        end = bh.depth_m or max((layer.bottom_m for layer in bh.layers), default=None)
+        return depth is None or end is None or depth <= end + 0.5
+
     linked = unmatched = 0
     for r in pages:
         if r.labs is None:
             continue
+        # A sheet that names the type for some rows ('T.P. 3') uses it for the rows that only give the number.
+        kinds = {hole_key(row.hole_name, None)[0] for row in r.labs.rows if row.hole_name} - {None}
+        page_kind = kinds.pop() if len(kinds) == 1 else None
         for row in r.labs.rows:
             value = _lab_value(row.parameter, row.value_raw, row.unit_raw)
             if value is None:
                 continue  # no number (e.g. 'NP', '-')
-            bh = by_name.get(norm_name(row.hole_name)) if row.hole_name else None
+            bh = None
+            if row.hole_name:
+                kind, number = hole_key(row.hole_name, page_kind)
+                bh = lookup(by_name, (kind, number))
+                if bh is None and kind is None:  # same number for a borehole and a pit: the depth decides
+                    fits = [b for (k, n), b in by_name.items() if n == number and deep_enough(b, row.top_m)]
+                    bh = fits[0] if len(fits) == 1 else None
             sample = None
             if row.sample_name:
                 hits = by_sample.get(norm_name(row.sample_name), [])
