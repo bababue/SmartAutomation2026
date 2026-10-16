@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS boreholes (
     id TEXT UNIQUE, name TEXT, doc_id TEXT, project TEXT, location_name TEXT, country TEXT,
     lat REAL, lon REAL, depth REAL, elevation REAL, investigation_type TEXT,
     confidence REAL, loc_confidence REAL, loc_method TEXT, score REAL, review_status TEXT,
-    n_layers INTEGER, n_issues INTEGER, lithologies TEXT, strip TEXT, content_hash TEXT, data TEXT
+    n_layers INTEGER, n_issues INTEGER, lithologies TEXT, strip TEXT, content_hash TEXT, data TEXT,
+    extracted TEXT  -- model output before reviewer corrections (layers, position), for evaluation
 );
 CREATE INDEX IF NOT EXISTS boreholes_status ON boreholes (review_status, score);
 CREATE VIRTUAL TABLE IF NOT EXISTS boreholes_rtree USING rtree(rid, min_lat, max_lat, min_lon, max_lon);
@@ -58,6 +59,8 @@ def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
         # Database from before the review workflow: derived tables, rebuildable via `pipeline rebuild`.
         con.executescript("DROP TABLE boreholes; DROP TABLE IF EXISTS boreholes_rtree; DROP TABLE IF EXISTS boreholes_fts;")
     con.executescript(SCHEMA)
+    if "extracted" not in {r["name"] for r in con.execute("PRAGMA table_info(boreholes)")}:
+        con.execute("ALTER TABLE boreholes ADD COLUMN extracted TEXT")  # database from before evaluation
     return con
 
 
@@ -85,8 +88,16 @@ def content_hash(bh: Borehole) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def extracted_summary(bh: Borehole) -> dict:
+    """What the model produced, kept before reviewer corrections are applied: layers and position."""
+    loc = bh.location
+    return {"layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
+            "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg}
+
+
 def _delete(con: sqlite3.Connection, borehole_id: str) -> dict | None:
-    row = con.execute("SELECT rid, content_hash, data FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
+    row = con.execute("SELECT rid, content_hash, data, extracted FROM boreholes WHERE id = ?",
+                      (borehole_id,)).fetchone()
     if not row:
         return None
     con.execute("DELETE FROM boreholes WHERE rid = ?", (row["rid"],))
@@ -103,10 +114,13 @@ def delete_document_boreholes(con: sqlite3.Connection, doc_id: str) -> dict[str,
     return previous
 
 
-def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, previous: dict | None = None) -> None:
-    """Insert or replace a record. `previous` is the earlier row if it was already deleted."""
+def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, previous: dict | None = None,
+                  extracted: dict | None = None) -> None:
+    """Insert or replace a record. `previous` is the earlier row if it was already deleted. `extracted` is the
+    uncorrected model output (see `extracted_summary`); without it the previous row's is kept."""
     digest = content_hash(bh)
     previous = _delete(con, bh.borehole_id) or previous
+    extracted_json = as_json(extracted) if extracted is not None else (previous or {}).get("extracted")
     if previous and previous.get("data"):
         old = Borehole.model_validate_json(previous["data"])
         if old.review_status in HUMAN:
@@ -118,20 +132,20 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
                 bh.review_status = ReviewStatus.pending_review
                 bh.score_reasons = [f"Data changed since the {old.review_status.value} decision by "
                                     f"{old.reviewed_by or 'a reviewer'}"] + bh.score_reasons
-    _insert(con, bh, digest)
+    _insert(con, bh, digest, extracted_json)
     if commit:
         con.commit()
 
 
-def _insert(con: sqlite3.Connection, bh: Borehole, digest: str) -> None:
+def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str | None = None) -> None:
     loc = bh.location
     doc_id = bh.borehole_id.split(":", 1)[0]
     lithologies = sorted({layer.primary.value for layer in bh.layers})
     cur = con.execute(
         """INSERT INTO boreholes (id, name, doc_id, project, location_name, country, lat, lon, depth, elevation,
            investigation_type, confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues,
-           lithologies, strip, content_hash, data)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           lithologies, strip, content_hash, data, extracted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             bh.borehole_id, bh.borehole_name, doc_id, bh.project_name, bh.location_name, loc.country,
             loc.lat, loc.lon, bh.depth_m or (bh.layers[-1].bottom_m if bh.layers else None), bh.surface_elevation_m,
@@ -139,7 +153,7 @@ def _insert(con: sqlite3.Connection, bh: Borehole, digest: str) -> None:
             loc.method.value if loc.method else None, bh.score, bh.review_status.value, len(bh.layers),
             len(bh.issues), ",".join(lithologies),
             as_json([[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers]),
-            digest, bh.model_dump_json(),
+            digest, bh.model_dump_json(), extracted,
         ),
     )
     if loc.lat is not None and loc.lon is not None:

@@ -1,7 +1,8 @@
 """Extraction quality against human-checked records.
 
     python -m pipeline eval snapshot    # store approved records as the reference (data/eval/reference.json)
-    python -m pipeline eval             # compare the current database with the reference
+    python -m pipeline eval             # compare the model output (before corrections) with the reference
+    python -m pipeline eval --corrected # compare the final values, reviewer corrections included
 
 The reference stays local (data/ is git-ignored): it holds confidential extracted values. A snapshot
 adds to or updates the existing reference, so records checked earlier stay in it even when a later
@@ -27,20 +28,26 @@ DEPTH_TOLERANCE_M = 0.1
 
 
 def entry(bh: Borehole) -> dict:
-    """The parts of a record the evaluation compares."""
-    loc = bh.location
-    return {
-        "doc_id": bh.borehole_id.split(":", 1)[0],
-        "layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
-        "lat": loc.lat,
-        "lon": loc.lon,
-        "crs_epsg": loc.crs_epsg,
-    }
+    """The parts of a record the evaluation compares (final values)."""
+    return {"doc_id": bh.borehole_id.split(":", 1)[0], **store.extracted_summary(bh)}
 
 
 def _records(con: sqlite3.Connection, where: str = "", params: tuple = ()) -> dict[str, Borehole]:
     return {r["id"]: Borehole.model_validate_json(r["data"])
             for r in con.execute(f"SELECT id, data FROM boreholes {where}", params)}
+
+
+def current_entries(con: sqlite3.Connection, corrected: bool = False) -> tuple[dict[str, dict], int]:
+    """Entries to compare: the model output before reviewer corrections, or the final values. Returns the
+    entries and how many records had no stored model output (saved before it was kept; final values used)."""
+    entries, fallback = {}, 0
+    for r in con.execute("SELECT id, doc_id, data, extracted FROM boreholes"):
+        if not corrected and r["extracted"]:
+            entries[r["id"]] = {"doc_id": r["doc_id"], **json.loads(r["extracted"])}
+        else:
+            entries[r["id"]] = entry(Borehole.model_validate_json(r["data"]))
+            fallback += not corrected
+    return entries, fallback
 
 
 def load_reference(path: Path = REFERENCE_PATH) -> dict[str, dict]:
@@ -173,8 +180,8 @@ def report(scores: dict[str, Score]) -> str:
               f"bounds: share of reference layer boundaries matched within {DEPTH_TOLERANCE_M} m; "
               "lith: same primary lithology on layers whose top and bottom both match.",
               "extra: records of the same documents that are not in the reference (often not yet reviewed).",
-              "corr: compared records with reviewer corrections; they are re-applied after every run, so these "
-              "records match the reference by construction."]
+              "corr: compared records with reviewer corrections (with --corrected they match the reference by "
+              "construction)."]
     if total.missing:
         lines.append("missing: " + ", ".join(sorted(total.missing)))
     return "\n".join(lines)
@@ -190,6 +197,11 @@ def cmd_eval(args) -> None:
     if not reference:
         print("no reference yet: approve records in the review UI, then run `python -m pipeline eval snapshot`")
         return
-    current = {bid: entry(bh) for bid, bh in _records(con).items()}
+    current, fallback = current_entries(con, corrected=args.corrected)
     corrected = {bid for bid in current if store.corrections_for(con, bid)}
+    print(("final values, reviewer corrections included" if args.corrected
+           else "model output before reviewer corrections") + "\n")
     print(report(compare(reference, current, corrected)))
+    if fallback:
+        print(f"\n{fallback} records were stored before the model output was kept and are compared with their "
+              "final values; run `python -m pipeline rebuild` to fill it in.")

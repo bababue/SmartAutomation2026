@@ -74,3 +74,54 @@ def test_snapshot_keeps_earlier_approvals(tmp_path):
     reference = evaluate.load_reference(path)
     assert reference["DOC1:BH2"]["layers"] == [[0, 3, "clay"]]
     con.close()
+
+
+def test_corrected_record_still_shows_the_model_error(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from api.main import app
+    from pipeline import config
+
+    path = tmp_path / "test.sqlite"
+    monkeypatch.setattr(config, "DB_PATH", path)
+    monkeypatch.setattr(store.connect, "__defaults__", (path,))
+    con = store.connect(path)
+    src = SourceRef(file="demo.pdf", page=1)
+    bh = Borehole(borehole_id="DOC1:BH1", borehole_name="BH1", depth_m=5,
+                  layers=[Layer(top_m=0, bottom_m=2, description_original="Sand", primary="sand", source=src),
+                          Layer(top_m=2, bottom_m=5, description_original="Silt", primary="clay", source=src)],
+                  location=Location(lat=LAT, lon=LON, method=GeorefMethod.stated_coordinates, confidence=1))
+    store.save_borehole(con, bh, extracted=store.extracted_summary(bh))  # as the pipeline stores it
+
+    r = TestClient(app).post("/api/boreholes/DOC1:BH1/corrections", json={
+        "reviewer": "Anna", "kind": "layer", "payload": {"orig_top": 2, "orig_bottom": 5, "primary": "silt"}})
+    assert r.status_code == 200, r.text
+    store.record_review(con, "DOC1:BH1", ReviewStatus.approved, "Anna", None)
+    evaluate.snapshot(con, tmp_path / "reference.json")
+    reference = evaluate.load_reference(tmp_path / "reference.json")
+    assert reference["DOC1:BH1"]["layers"][1] == [2, 5, "silt"]
+
+    model, fallback = evaluate.current_entries(con)
+    assert fallback == 0 and model["DOC1:BH1"]["layers"][1] == [2, 5, "clay"]  # survived the API save
+    assert evaluate.compare(reference, model)["DOC1"].lithology_same == 1  # the model's mistake shows
+    final, _ = evaluate.current_entries(con, corrected=True)
+    assert evaluate.compare(reference, final)["DOC1"].lithology_same == 2
+    con.close()
+
+
+def test_database_without_extracted_column_is_migrated(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.sqlite"
+    old = sqlite3.connect(path)
+    # The schema as it was before the column existed
+    old.executescript(store.SCHEMA.replace(
+        "data TEXT,\n    extracted TEXT  -- model output before reviewer corrections (layers, position), for evaluation",
+        "data TEXT"))
+    assert "extracted" not in {r[1] for r in old.execute("PRAGMA table_info(boreholes)")}
+    old.execute("INSERT INTO boreholes (id, doc_id, review_status, data) VALUES ('A:B', 'A', 'approved', '{}')")
+    old.commit()
+    old.close()
+    con = store.connect(path)
+    assert con.execute("SELECT id, extracted FROM boreholes").fetchone()[:] == ("A:B", None)
+    con.close()

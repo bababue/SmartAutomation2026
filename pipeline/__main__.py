@@ -7,7 +7,8 @@
     python -m pipeline rebuild                # re-assemble from cached extractions (no API calls)
     python -m pipeline rebuild --doc SEA01 --max-pages 6   # same page limit as the run
     python -m pipeline eval snapshot          # approved records become the evaluation reference
-    python -m pipeline eval                   # extraction quality against that reference
+    python -m pipeline eval                   # model output (before corrections) against that reference
+    python -m pipeline eval --corrected       # final values, reviewer corrections included
 """
 
 from __future__ import annotations
@@ -199,6 +200,7 @@ def _store(con, docs, rendered, classes, extractions) -> None:
         for doc_id in done for p in rendered[doc_id]
     ]
     boreholes = assemble(results)
+    extracted = {bh.borehole_id: store.extracted_summary(bh) for bh in boreholes}  # before fixes, for `eval`
     for bh in boreholes:  # reviewer fixes survive re-extraction
         corrections.apply(bh, store.corrections_for(con, bh.borehole_id))
     with con:  # replace complete documents atomically; human decisions carry over if content is unchanged
@@ -206,7 +208,8 @@ def _store(con, docs, rendered, classes, extractions) -> None:
         for doc_id in done:
             previous.update(store.delete_document_boreholes(con, doc_id))
         for bh in boreholes:
-            store.save_borehole(con, bh, commit=False, previous=previous.get(bh.borehole_id))
+            store.save_borehole(con, bh, commit=False, previous=previous.get(bh.borehole_id),
+                                extracted=extracted[bh.borehole_id])
     located = sum(1 for b in boreholes if b.location.lat is not None)
     auto = sum(1 for b in boreholes if b.review_status.value == "auto_approved")
     print(f"Stored {len(boreholes)} boreholes ({located} georeferenced) from {len(done)} documents in {config.DB_PATH}")
@@ -249,6 +252,7 @@ def main() -> None:
             p.add_argument("--max-pages", type=int, help="only the first N pages of each document")
     p = sub.add_parser("eval", help="extraction quality against human-checked records")
     p.add_argument("action", nargs="?", choices=["compare", "snapshot"], default="compare")
+    p.add_argument("--corrected", action="store_true", help="compare final values instead of the model output")
     p.set_defaults(fn=evaluate.cmd_eval)
     args = parser.parse_args()
     args.fn(args)

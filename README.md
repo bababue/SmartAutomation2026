@@ -227,7 +227,8 @@ Measures extraction quality against records a human has checked.
 
 ```bash
 .venv/bin/python -m pipeline eval snapshot   # approved records (incl. corrected ones) become the reference
-.venv/bin/python -m pipeline eval            # compare the current database with the reference
+.venv/bin/python -m pipeline eval            # compare the model output (before corrections) with the reference
+.venv/bin/python -m pipeline eval --corrected   # compare the final values, reviewer corrections included
 ```
 
 `snapshot` writes `data/eval/reference.json` (git-ignored, confidential like all of `data/`). It adds to and
@@ -246,9 +247,11 @@ EPSG code.
 | `no pos` / `crs≠` | records that lost their position / have a different EPSG code |
 | `corr` | compared records with reviewer corrections |
 
-Reviewer corrections are re-applied after every run, so corrected records match the reference by construction;
-the `corr` column shows how many of the compared records that affects. Typical use: snapshot after a review
-session, change prompts or code, `rebuild`/`run`, then `eval`.
+Every run keeps the model output before reviewer corrections (layers and position, column `boreholes.extracted`).
+`eval` compares that by default, so a record a reviewer fixed still counts the model's mistake. With
+`--corrected` it compares the final values instead; corrected records then match the reference by construction.
+Records stored before this column existed are compared with their final values until the next `rebuild`.
+Typical use: snapshot after a review session, change prompts or code, `rebuild`/`run`, then `eval`.
 
 ## Configuration
 
