@@ -116,6 +116,7 @@ button, input, select { font: inherit; color: inherit; }
 .result-place { grid-column: 1 / -1; color: var(--graphite); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .core-strip { grid-column: 1 / -1; display: block; margin-top: 5px; border: 1px solid rgba(29, 37, 40, 0.45); border-radius: 1px; }
 .core-strip-empty { height: 14px; background: repeating-linear-gradient(45deg, #eef0ee 0 4px, #fff 4px 8px); }
+.result-file { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .result-flags { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 4px; }
 .result-flags:empty { display: none; }
 .flag { font-size: 12px; padding: 0 6px; border-radius: 2px; background: #f1f2ef; color: var(--graphite); }

@@ -35,7 +35,8 @@ DB = Annotated[sqlite3.Connection, Depends(db)]
 
 LIGHT_COLUMNS = (
     "id, name, project, location_name, country, lat, lon, depth, elevation, investigation_type, "
-    "confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues, lithologies, strip"
+    "confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues, lithologies, strip, "
+    + "(SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file"
 )
 
 STATUS_GROUPS = {
@@ -100,7 +101,8 @@ def review_queue(con: DB):
     """Everything waiting for a human, weakest first (also records without a position)."""
     rows = con.execute(
         "SELECT id, name, project, location_name, country, score, confidence, loc_confidence, loc_method, "
-        "n_layers, data FROM boreholes WHERE review_status = 'pending_review' ORDER BY score ASC, name"
+        "n_layers, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file, "
+        "data FROM boreholes WHERE review_status = 'pending_review' ORDER BY score ASC, name"
     ).fetchall()
     return [
         {**{k: r[k] for k in r.keys() if k != "data"}, "reasons": json.loads(r["data"]).get("score_reasons", [])}

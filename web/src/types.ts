@@ -127,6 +127,7 @@ export interface QueueItem {
   loc_confidence: number | null
   loc_method: string | null
   n_layers: number
+  source_file: string | null
   reasons: string[]
 }
 
@@ -148,6 +149,7 @@ export interface BoreholeSummary {
   strip: [number, number, Lithology][] | null
   score: number | null
   review_status: ReviewStatus
+  source_file: string | null
 }
 
 export interface Feature {

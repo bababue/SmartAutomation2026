@@ -1,5 +1,6 @@
 import type { Feature } from '../types'
 import { STATUS_LABEL, scoreText } from '../review'
+import { SHOW_SOURCE_FILE } from '../dev'
 import { CoreStrip } from './Profile'
 
 interface Props {
@@ -36,6 +37,7 @@ export function ResultList({ features, selectedId, onSelect, loading }: Props) {
             <span className="result-name">{p.name}</span>
             <span className="result-depth">{fmtDepth(p.depth)}</span>
             <span className="result-place">{p.location_name ?? p.project ?? 'Unnamed site'}{p.country ? `, ${p.country}` : ''}</span>
+            {SHOW_SOURCE_FILE && p.source_file && <span className="result-place result-file">{p.source_file}</span>}
             <CoreStrip strip={p.strip} depth={p.depth} />
             <span className="result-flags">
               <span className={`flag flag-${p.review_status}`} title={`Release score ${scoreText(p.score)}`}>

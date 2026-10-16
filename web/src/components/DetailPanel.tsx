@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Detail, Layer } from '../types'
+import { SHOW_SOURCE_FILE } from '../dev'
 import { lithStyle, patternId } from '../lithology'
 import { Profile } from './Profile'
 import { ReviewBox } from './ReviewBox'
@@ -46,6 +47,13 @@ export function DetailPanel({ detail, onClose, onReviewChange }: Props) {
     if (i >= 0) setPageIndex(i)
   }, [hovered, bh.layers, pages])
 
+  // 'report.pdf p. 1, 2' per source file
+  const sourceFiles = useMemo(() => {
+    const byFile = new Map<string, number[]>()
+    bh.sources.forEach((s) => byFile.set(s.file, [...(byFile.get(s.file) ?? []), ...(s.page != null ? [s.page] : [])]))
+    return [...byFile].map(([file, ps]) => (ps.length ? `${file} p. ${[...new Set(ps)].sort((a, b) => a - b).join(', ')}` : file)).join('; ')
+  }, [bh.sources])
+
   const tests = useMemo(() => {
     const rows: { depth: number; text: string }[] = []
     bh.spt.forEach((s) => rows.push({ depth: s.depth_m, text: `SPT ${s.refusal ? 'refusal' : `N = ${s.n_value ?? '–'}`}${s.raw ? ` (${s.raw})` : ''}` }))
@@ -60,6 +68,7 @@ export function DetailPanel({ detail, onClose, onReviewChange }: Props) {
         <div>
           <h2>{bh.borehole_name}</h2>
           <p className="detail-sub">{[bh.project_name, bh.location_name].filter(Boolean).join(', ') || 'No project name on the log'}</p>
+          {SHOW_SOURCE_FILE && sourceFiles && <p className="detail-sub result-file">{sourceFiles}</p>}
         </div>
         <div className="detail-actions">
           <button className="btn btn-icon" onClick={onClose} aria-label="Close details">✕</button>
