@@ -3,6 +3,8 @@
 Black Forest Hackathon 2026 – Smart Automation Edition (16–18 Oct 2026, Offenburg)
 Challenge by **Herrenknecht AG**: *Automated extraction and standardisation of drilling data for a global geodatabase.*
 
+Jump to [Getting started](#getting-started) to run it yourself.
+
 ## Goal
 
 Automatically extract borehole profiles from PDFs, scans and images, convert them into a standardised format, georeference them and store them in a central database that can be searched via an interactive world map.
@@ -77,55 +79,186 @@ the UI outlines it on the original page when a reviewer hovers the value.
 | `pipeline/` | Ingest → classify → extract (Claude) → georeference → assemble → SQLite |
 | `api/` | FastAPI: search, map data, borehole detail, source page images, CSV export |
 | `web/` | React + Vite + MapLibre UI: world map, result list with core strips, two-column profile next to the source page |
-| `tests/` | Georeferencing tests built from public landmarks in the notations found in the data |
+| `tests/` | Georeferencing (public landmarks in the notations found in the data), scoring, review workflow, API |
 | `fixtures/` | Synthetic demo boreholes (no challenge data) for UI work without an API key |
 | `temp/`, `data/` | Challenge dataset, rendered pages, cache and database – **confidential, git-ignored** |
 
-## Setup
+## Getting started
+
+### 1. Prerequisites
+
+| Tool | Version | Notes |
+|---|---|---|
+| Python | 3.12 or newer (tested with 3.14) | pipeline and API |
+| Node.js | 22 or newer (tested with 26) | web UI (Vite 8, React 19, MapLibre 6) |
+| Git | any | work on the branch `marvin` |
+| Claude access | Anthropic API key **or** Claude Code CLI with a subscription | only needed to process documents |
+
+No Docker, database server or GIS stack needed: storage is a single SQLite file, coordinate
+transformations use pyproj. Plan for ~0.5 GB of disk space for rendered pages.
+
+### 2. Install
 
 ```bash
+git clone <repository-url> SmartAutomation2026
+cd SmartAutomation2026
+git checkout marvin
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 npm --prefix web install
 ```
 
-Put the Anthropic API key into `.env` (git-ignored):
+### 3. Try the UI without data or credentials
 
-```bash
-echo "ANTHROPIC_API_KEY=..." > .env
-```
-
-## Run
-
-```bash
-.venv/bin/python -m pipeline estimate            # render all pages, show page count and cost estimate
-.venv/bin/python -m pipeline run --doc AUS01     # process one document end to end
-.venv/bin/python -m pipeline run --all --yes     # process everything
-.venv/bin/python -m pipeline rebuild             # re-run assembly/georeferencing from cached LLM output (free)
-                                                  # (pass the same --doc/--max-pages as the run)
-.venv/bin/uvicorn api.main:app --port 8000       # API (serves web/dist if built)
-npm --prefix web run dev                          # UI on http://localhost:5173
-```
-
-Testing with a Claude subscription instead of an API key: the pipeline can drive the local Claude Code
-CLI (`claude -p`, logged in with your subscription). Slower and subject to the subscription's usage limits:
-
-```bash
-LLM_BACKEND=claude-code .venv/bin/python -m pipeline run --doc profile01
-```
-
-The CLI uses its default login. For another subscription, point it to a separate profile directory
-(`CLAUDE_CONFIG_DIR=~/.claude-other`) or to a token file (`CLAUDE_CLI_TOKEN_FILE=~/path/to/token`),
-either in `.env` or on the command line. Results already in `data/cache/` are reused.
-
-Without any credentials, try the UI with synthetic data:
+Synthetic boreholes at public places (no challenge data) in a separate database:
 
 ```bash
 DB_PATH=data/demo.sqlite .venv/bin/python -m fixtures.demo_data
-DB_PATH=data/demo.sqlite .venv/bin/uvicorn api.main:app --port 8000
+DB_PATH=data/demo.sqlite .venv/bin/uvicorn api.main:app --port 8000   # terminal 1
+npm --prefix web run dev                                               # terminal 2
 ```
 
-Tests: `.venv/bin/python -m pytest`
+Open http://localhost:5173. The header shows "Synthetic demo data" while the API serves this database;
+demo records have no source pages.
+
+### 4. Add the challenge data
+
+The dataset comes from Herrenknecht (password-protected download, confidential). Unpack it so that the
+documents end up here – the folder is git-ignored:
+
+```
+temp/HKBoreholeChallenge_Data_BFH2026/
+├── BoreholeData/        ← PDFs, JPG/PNG, DOCX (the pipeline reads this folder)
+└── Standards_Formats/   ← target format (BoreholeDataFormat.xlsx), DIN 4023
+```
+
+A different location works too: set `DATASET_DIR` (see Configuration).
+
+### 5. Choose how the pipeline talks to Claude
+
+**Option A – Anthropic API key (recommended).** Create a key in the Claude Console (platform.claude.com →
+API Keys; it starts with `sk-ant-api03-`) and put it into `.env`, which is git-ignored:
+
+```bash
+printf 'ANTHROPIC_API_KEY=%s\n' "sk-ant-api03-..." > .env
+```
+
+Tokens starting with `sk-ant-oat` (from `claude setup-token` / a Claude subscription) are **not** API keys
+and are rejected with `401 invalid x-api-key`.
+
+**Option B – Claude subscription via Claude Code (for testing).** If the `claude` CLI is installed and
+logged in, the pipeline can call it in print mode instead of the API. Slower, subject to the subscription's
+usage limits:
+
+```bash
+echo "LLM_BACKEND=claude-code" >> .env
+```
+
+To use another subscription than the CLI's default login, add `CLAUDE_CONFIG_DIR=~/.claude-other`
+(a profile directory logged in with that account) or `CLAUDE_CLI_TOKEN_FILE=~/path/to/token`.
+
+### 6. Process documents
+
+```bash
+.venv/bin/python -m pipeline ingest                    # render all pages, list document ids (no API calls)
+.venv/bin/python -m pipeline estimate                  # page count and rough API cost
+.venv/bin/python -m pipeline run --doc profile01       # smoke test: one page
+.venv/bin/python -m pipeline run --doc MEA03-jpg --doc AUS01 --max-pages 6
+.venv/bin/python -m pipeline run --all --yes           # everything (~1,000 pages)
+```
+
+- `--doc` takes a document id (relative path without extension, folders joined by `__`, e.g.
+  `SEA03-png__Report01`) or a folder prefix (`MEA03-jpg` = all images in that folder). Repeatable.
+- `--max-pages N` treats the first N pages of each document as the whole document (cheap demo runs).
+- Runs above ~$5 estimated cost ask for `--yes`.
+- Every LLM answer is cached per page in `data/cache/`. Interrupted runs resume; repeated runs are free.
+- `rebuild` re-runs assembly, georeferencing and scoring from the cache only – use it after code changes
+  (pass the same `--doc` / `--max-pages` as the run):
+
+```bash
+.venv/bin/python -m pipeline rebuild --doc MEA03-jpg --doc AUS01 --max-pages 6
+```
+
+At the end of a run the pipeline prints how many boreholes were stored, how many were released
+automatically and how many wait for review.
+
+### 7. Start the app
+
+Development (hot reload), two terminals:
+
+```bash
+.venv/bin/uvicorn api.main:app --port 8000
+npm --prefix web run dev                     # http://localhost:5173 (proxies /api to port 8000)
+```
+
+Single server (e.g. for the demo): build the UI once, the API then serves it as well:
+
+```bash
+npm --prefix web run build
+.venv/bin/uvicorn api.main:app --port 8000   # http://localhost:8000
+```
+
+Restart the API after pipeline code changes; the UI picks up new data on reload.
+
+### 8. Use the app
+
+- **Map**: clusters by location; colour = release state (green released, ochre waiting for review, red rejected),
+  ring = approximate position (estimated from the place name). Hover for name and score; click to open.
+- **Search and filters**: full text over names, projects, places and layer descriptions; release state,
+  position quality, lithology.
+- **Detail**: two-column profile (stratigraphy, DIN 4023 lithology), layers, tests, record data and the
+  original page; hover a layer or the coordinates to outline where they were read.
+- **Review queue**: everything below the threshold or with blocking findings, weakest first. Enter your name
+  once, then approve or reject; from the queue the next waiting record opens automatically. Keys: `A` approve,
+  `R` reject, `←`/`→` previous/next in the queue, `Esc` close.
+- **Section**: "+ Section" on boreholes shows them side by side along a line, at ground level where known.
+- **Export**: "Export released (CSV)" – one row per layer, released records only.
+
+### 9. Tests
+
+```bash
+.venv/bin/python -m pytest -q
+npm --prefix web run build      # includes the TypeScript check
+```
+
+## Configuration
+
+Environment variables, read from the shell or from `.env`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | – | API key for `LLM_BACKEND=api` |
+| `LLM_BACKEND` | `api` | `api` (Anthropic API) or `claude-code` (local `claude -p`) |
+| `CLAUDE_CLI` | `claude` | path to the Claude Code CLI |
+| `CLAUDE_CONFIG_DIR` | CLI default | profile directory for another subscription (CLI backend) |
+| `CLAUDE_CLI_TOKEN_FILE` | – | token file for another subscription (CLI backend) |
+| `CLASSIFY_MODEL` / `CLASSIFY_EFFORT` | `claude-opus-5-5` / `low` | page classification |
+| `EXTRACT_MODEL` / `EXTRACT_EFFORT` | `claude-opus-5-5` / `medium` | log extraction |
+| `MAX_WORKERS` | `6` (API), `3` (CLI) | parallel LLM calls |
+| `AUTO_APPROVE_THRESHOLD` | `0.9` | release score for automatic release |
+| `DATASET_DIR` | `temp/HKBoreholeChallenge_Data_BFH2026/BoreholeData` | input documents |
+| `DATA_DIR` | `data` | rendered pages, cache, database |
+| `DB_PATH` | `data/boreholes.sqlite` | database (`data/demo.sqlite` for synthetic data) |
+| `EXTRACT_LONG_EDGE` / `THUMB_LONG_EDGE` | `2000` / `900` | rendering size in pixels |
+
+Changing models, effort or prompts (`PROMPT_VERSION` in `pipeline/config.py`) invalidates the cache for the
+affected stage – the next run calls the LLM again.
+
+Generated data, all git-ignored and confidential: `data/pages/` (rendered pages), `data/cache/` (LLM answers),
+`data/boreholes.sqlite` (database incl. review decisions). Deleting the database and running `rebuild`
+restores the records from the cache, but **review decisions are lost**.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `401 invalid x-api-key` | The key is not an API key (e.g. `sk-ant-oat...` from a subscription). Use a Console key or `LLM_BACKEND=claude-code`. |
+| `No Anthropic credentials` | No `.env` in the project root, or the variable is missing. Check with `ls -la .env`. |
+| Map stays empty, console says "Worker failed to load" | Old UI build. Run `npm --prefix web run build` (port 8000) or restart `npm --prefix web run dev`. |
+| "No source page stored for this record" for every record | The API serves the demo database. Restart it without `DB_PATH=data/demo.sqlite`. |
+| `address already in use` on 8000 / 5173 | Another server runs there: `lsof -nP -iTCP:8000 -sTCP:LISTEN`, stop it or use another port. |
+| A document is skipped with "kept previous results for incomplete documents" | Some pages failed (rate limit, timeout). Run the same command again; finished pages come from the cache. |
+| Records do not change after a code change | Run `pipeline rebuild` with the same `--doc`/`--max-pages`, then reload the UI. |
 
 ## Data security
 
