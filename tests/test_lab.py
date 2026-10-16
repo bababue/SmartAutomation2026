@@ -45,3 +45,11 @@ def test_single_hole_document_takes_rows_without_name():
     a = hole("TP1")
     linked, unmatched = link_lab_results([a], [lab_page(row(None, None, "ucs", "40", "MPa", top=1.0))] * 2)
     assert (linked, unmatched) == (2, 0) and len(a.lab_results) == 1  # same value read twice: kept once
+
+
+def test_value_on_log_and_lab_sheet_is_kept_once():
+    from schema.borehole import LabResult
+    a = hole("BH17")
+    a.lab_results = [LabResult(parameter="ucs", value=28.9, value_raw="28.9 MPa", top_m=2.1)]  # from the log page
+    link_lab_results([a], [lab_page(row("BH17", "019/13", "ucs", "28.9", "MPa", top=2.1))])
+    assert len(a.lab_results) == 1 and a.lab_results[0].sample_name == "019/13"

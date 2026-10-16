@@ -590,6 +590,10 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
     return list(kept.values())
 
 
+def _same_value(a: float, b: float) -> bool:
+    return abs(a - b) <= 1e-9 + 5e-4 * max(abs(a), abs(b))
+
+
 def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[int, int]:
     """Attach the rows of lab sheets to the holes of the same document: by hole name, else by a sample
     name that only one hole has, else to the only hole of the document. Returns (linked, unmatched)."""
@@ -640,8 +644,12 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
             result = LabResult(parameter=row.parameter, parameter_raw=row.parameter_raw, value=value,
                                value_raw=f"{row.value_raw} {row.unit_raw or ''}".strip(), top_m=top, bottom_m=bottom,
                                sample_name=row.sample_name, source=SourceRef(file=r.source_file, page=r.page))
-            key = (result.parameter, round(result.value, 9), result.top_m, result.sample_name)
-            if key not in {(x.parameter, round(x.value, 9), x.top_m, x.sample_name) for x in bh.lab_results}:
+            # The same test is often on the log and on the lab sheet (only the sheet has the sample id).
+            same = next((x for x in bh.lab_results if x.parameter == result.parameter
+                         and _same_value(x.value, result.value) and x.top_m == result.top_m), None)
+            if same is None:
                 bh.lab_results.append(result)
+            elif same.sample_name is None:
+                same.sample_name = result.sample_name
             linked += 1
     return linked, unmatched

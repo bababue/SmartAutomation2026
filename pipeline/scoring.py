@@ -76,13 +76,18 @@ def covers_full_depth(bh: Borehole, tol: float = 0.05) -> bool:
     return all(abs(a.bottom_m - b.top_m) <= tol for a, b in zip(layers, layers[1:]))
 
 
+INTERVAL = re.compile(r"\d+(?:[.,]\d+)?\s*(?:m\s*)?[-–~]\s*\d+(?:[.,]\d+)?\s*m?\b")
+
+
 def prints_depths(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> bool:
     """The text layer holds about as many depth-like decimals (within the hole) as there are boundaries:
     then a mismatch is a contradiction, not a log that only draws its boundaries."""
     pages = {(layer.source.file, layer.source.page) for layer in bh.layers if layer.source}
     deepest = max((layer.bottom_m for layer in bh.layers), default=0) + 1
-    numbers = [float(n.replace(",", ".")) for key in pages for n in re.findall(r"(?<![\d.,])\d+[.,]\d{1,2}(?![\d.,])",
-                                                                             page_texts.get(key, ""))]
+    # Intervals ('1.15-1.31m: joint', 'UCS 2.10-2.22m') describe defects and tests, not layer boundaries.
+    texts = [INTERVAL.sub(" ", page_texts.get(key, "")) for key in pages]
+    numbers = [float(n.replace(",", ".")) for text in texts
+               for n in re.findall(r"(?<![\d.,])\d+[.,]\d{1,2}(?![\d.,])", text)]
     depth_like = sum(1 for v in numbers if 0 < v <= deepest)
     return depth_like >= 0.5 * max(1, len(bh.layers))
 

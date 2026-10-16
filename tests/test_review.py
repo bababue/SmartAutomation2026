@@ -451,3 +451,11 @@ def test_boreholes_and_test_pits_with_the_same_number_stay_apart():
     assert set(by_id) == {"r:2", "r:TESTPIT2", "r:3"}
     assert [l.bottom_m for l in by_id["r:2"].layers] == [0.3, 6.0]  # not merged with the test pit
     assert by_id["r:3"].investigation_type.value == "test_pit"
+
+
+def test_defect_intervals_are_not_printed_boundaries():
+    from pipeline.scoring import prints_depths
+    bh = make()
+    text = "x" * 300 + " 1.15-1.31m: joint 2.27-2.47m: joint UCS 2.10-2.22m 28.9 MPa SPT at 7.5m"
+    assert not prints_depths(bh, {("demo.pdf", 1): text})
+    assert prints_depths(bh, {("demo.pdf", 1): "x" * 300 + " 1.30 4.70 9.20"})
