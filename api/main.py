@@ -14,6 +14,8 @@ from typing import Annotated, Literal
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from datetime import date as date_type
+
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from pyproj import CRS
 from pyproj.exceptions import CRSError
@@ -173,6 +175,10 @@ class LayerFix(BaseModel):
     bottom: float | None = None
     primary: Lithology | None = None
     delete: bool = False
+    description_original: str | None = Field(None, max_length=4000)
+    stratigraphic_code: str | None = Field(None, max_length=80)
+    stratigraphic_name: str | None = Field(None, max_length=200)
+    geologic_age: str | None = Field(None, max_length=200)
 
     @model_validator(mode="after")
     def _check(self):
@@ -180,16 +186,60 @@ class LayerFix(BaseModel):
             raise ValueError("give both top and bottom")
         if self.top is not None and not 0 <= self.top < self.bottom:
             raise ValueError("top must be at least 0 and above bottom")
-        if not self.delete and self.top is None and self.primary is None:
+        texts = (self.description_original, self.stratigraphic_code, self.stratigraphic_name, self.geologic_age)
+        if not self.delete and self.top is None and self.primary is None and all(t is None for t in texts):
             raise ValueError("nothing to change")
         return self
 
 
-FIXES = {"crs": CrsFix, "position": PositionFix, "layer": LayerFix}
+class LayerAddFix(BaseModel):
+    top: float = Field(ge=0)
+    bottom: float
+    primary: Lithology
+    description_original: str | None = Field(None, max_length=4000)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.bottom <= self.top:
+            raise ValueError("bottom must be below top")
+        return self
+
+
+class FieldFix(BaseModel):
+    field: Literal[tuple(corrections.FIELDS)]  # type: ignore[valid-type]
+    value: str | float | None
+
+    @model_validator(mode="after")
+    def _check(self):
+        kind = corrections.FIELDS[self.field]
+        if self.value is None or self.value == "":
+            self.value = None
+        elif kind is float:
+            self.value = float(self.value)
+        elif kind is date_type:
+            self.value = date_type.fromisoformat(str(self.value)).isoformat()
+        else:
+            self.value = str(self.value).strip()[:300]
+        return self
+
+
+class GroundwaterFix(BaseModel):
+    depth_m: float | None = Field(None, ge=0)
+    dry: bool = False
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.depth_m is None and not self.dry:
+            raise ValueError("give a depth or mark the hole as dry")
+        return self
+
+
+FIXES = {"crs": CrsFix, "position": PositionFix, "layer": LayerFix, "layer_add": LayerAddFix, "field": FieldFix,
+         "groundwater": GroundwaterFix}
 
 
 class Correction(BaseModel):
-    kind: Literal["crs", "position", "layer"]
+    kind: Literal["crs", "position", "layer", "layer_add", "field", "groundwater"]
     scope: Literal["borehole", "document"] = "borehole"
     payload: dict
     reviewer: str = Field(min_length=1, max_length=80)
@@ -201,7 +251,7 @@ def correct(borehole_id: str, body: Correction, con: DB):
     """Store a reviewer correction and apply it now; later runs re-apply it. A coordinate system can be
     set for all holes of the document at once (scope 'document')."""
     try:
-        payload = FIXES[body.kind].model_validate(body.payload).model_dump(mode="json", exclude_none=True)
+        payload = FIXES[body.kind].model_validate(body.payload).model_dump(mode="json", exclude_none=body.kind != "field")
     except ValidationError as exc:
         raise HTTPException(422, f"invalid {body.kind} correction: {exc.errors()[0]['msg']}")
     if body.kind == "crs":

@@ -103,3 +103,30 @@ def test_invalid_corrections_are_rejected(client):
     assert post(client, "demo__a:BH1", kind="layer", payload={"orig_top": 0, "orig_bottom": 1.2, "top": 2, "bottom": 1}).status_code == 422
     assert post(client, "demo__a:BH1", kind="layer", payload={"orig_top": 7, "orig_bottom": 8, "delete": True}).status_code == 422
     assert client.get("/api/boreholes/demo__a:BH1/detail").json()["corrections"] == []
+
+
+def test_fill_in_missing_data(client):
+    bid = "demo__a:BH1"
+    assert post(client, bid, kind="field", payload={"field": "surface_elevation_m", "value": "35,7".replace(",", ".")}).status_code == 200
+    assert post(client, bid, kind="field", payload={"field": "start_date", "value": "2014-08-05"}).status_code == 200
+    r = post(client, bid, kind="layer_add", payload={"top": 4.0, "bottom": 4.5, "primary": "silt",
+                                                      "description_original": "SILT, grey"})
+    assert r.status_code == 200, r.text
+    bh = r.json()["borehole"]
+    assert bh["surface_elevation_m"] == 35.7 and bh["start_date"] == "2014-08-05"
+    assert [(l["top_m"], l["primary"]) for l in bh["layers"]][2] == (4.0, "silt")
+    assert not any(i.startswith("gap") for i in bh["issues"])  # the added layer closes the gap
+    r = post(client, bid, kind="layer", payload={"orig_top": 4.5, "orig_bottom": 9.0, "stratigraphic_code": "qh",
+                                                  "description_original": "CLAY, stiff"})
+    layer = r.json()["borehole"]["layers"][3]
+    assert layer["stratigraphic_code"] == "qh" and layer["description_original"] == "CLAY, stiff"
+    r = post(client, bid, kind="groundwater", payload={"depth_m": 2.4})
+    assert [g["depth_m"] for g in r.json()["borehole"]["groundwater"]] == [2.4]
+    assert post(client, bid, kind="field", payload={"field": "lat", "value": 1}).status_code == 422
+    assert post(client, bid, kind="groundwater", payload={}).status_code == 422
+
+    # All of it survives a re-run of the uncorrected record.
+    con = store.connect()
+    rerun = record(bid)
+    assert all(corrections.apply(rerun, store.corrections_for(con, bid)))
+    assert rerun.surface_elevation_m == 35.7 and len(rerun.layers) == 4 and rerun.groundwater[0].depth_m == 2.4

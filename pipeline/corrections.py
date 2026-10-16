@@ -5,7 +5,11 @@ dropped silently: it becomes a blocking finding and the record returns to the re
 Kinds (payloads):
 - crs:      {"epsg": 28355}                        – read the printed coordinates in this CRS
 - position: {"lat": .., "lon": .., "accuracy_m": ..} – set the position by hand
-- layer:    {"orig_top": .., "orig_bottom": .., "top": .., "bottom": .., "primary": .., "delete": false}
+- layer:    {"orig_top": .., "orig_bottom": .., "top": .., "bottom": .., "primary": .., "delete": false,
+             "description_original": .., "stratigraphic_code": .., "stratigraphic_name": .., "geologic_age": ..}
+- layer_add: {"top": .., "bottom": .., "primary": .., "description_original": ..} – a layer the extraction missed
+- field:    {"field": "surface_elevation_m", "value": 35.7}   – a header value (see FIELDS)
+- groundwater: {"depth_m": 4.5} or {"dry": true}              – a groundwater observation
 """
 
 from __future__ import annotations
@@ -13,7 +17,9 @@ from __future__ import annotations
 import json
 import re
 
-from schema.borehole import Borehole, GeorefMethod, Lithology
+from datetime import date
+
+from schema.borehole import Borehole, GeorefMethod, GroundwaterObservation, Layer, Lithology
 
 from . import config
 from .georef import _apply, resolve_with
@@ -29,7 +35,21 @@ GEOREF_ISSUES = (
 GEOREF_UNREADABLE = re.compile(r"^unreadable:(?!.*\b(?:elevation|level)\b).*\b(?:coordinat\w*|crs|datum|grid|zone|easting|northing)\b", re.I)
 
 
+# Header fields a reviewer may set, with their type.
+FIELDS: dict[str, type] = {
+    "borehole_name": str, "project_name": str, "location_name": str, "surface_elevation_m": float,
+    "elevation_datum": str, "depth_m": float, "start_date": date, "end_date": date,
+}
+LAYER_TEXT = ("description_original", "stratigraphic_code", "stratigraphic_name", "geologic_age")
+
+
 def describe(kind: str, payload: dict) -> str:
+    if kind == "field":
+        return f"{payload['field'].replace('_', ' ')} = {payload['value']}"
+    if kind == "layer_add":
+        return f"layer {payload['top']:g}–{payload['bottom']:g} m added ({payload['primary']})"
+    if kind == "groundwater":
+        return "groundwater: dry" if payload.get("dry") else f"groundwater at {payload['depth_m']:g} m"
     if kind == "crs":
         return f"coordinate system EPSG:{payload['epsg']}"
     if kind == "position":
@@ -38,7 +58,7 @@ def describe(kind: str, payload: dict) -> str:
     if payload.get("delete"):
         return f"{span} deleted"
     changes = [f"{payload['top']:g}–{payload['bottom']:g} m" if "top" in payload else None,
-               payload.get("primary")]
+               payload.get("primary"), *(f"{k.replace('_', ' ')}" for k in LAYER_TEXT if k in payload)]
     return f"{span} → " + ", ".join(c for c in changes if c)
 
 
@@ -78,6 +98,39 @@ def _layer(bh: Borehole, p: dict) -> bool:
         layer.top_m, layer.bottom_m = float(p["top"]), float(p["bottom"])
     if "primary" in p:
         layer.primary = Lithology(p["primary"])
+    for key in LAYER_TEXT:
+        if key in p:
+            setattr(layer, key, p[key] or (None if key != "description_original" else layer.description_original))
+    return True
+
+
+def _layer_add(bh: Borehole, p: dict) -> bool:
+    top, bottom = float(p["top"]), float(p["bottom"])
+    if any(abs(l.top_m - top) < 0.01 and abs(l.bottom_m - bottom) < 0.01 for l in bh.layers):
+        return True  # the extraction has it now
+    bh.layers.append(Layer(top_m=top, bottom_m=bottom, primary=Lithology(p["primary"]),
+                           description_original=p.get("description_original") or "added by reviewer"))
+    bh.layers.sort(key=lambda layer: layer.top_m)
+    return True
+
+
+def _field(bh: Borehole, p: dict) -> bool:
+    kind = FIELDS.get(p["field"])
+    if kind is None:
+        return False
+    value = p["value"]
+    if value is not None and kind is date:
+        value = date.fromisoformat(str(value))
+    elif value is not None:
+        value = kind(value)
+    setattr(bh, p["field"], value)
+    return True
+
+
+def _groundwater(bh: Borehole, p: dict) -> bool:
+    depth = p.get("depth_m")
+    if not any(g.depth_m == depth and bool(g.dry) == bool(p.get("dry")) for g in bh.groundwater):
+        bh.groundwater.append(GroundwaterObservation(depth_m=depth, dry=p.get("dry"), raw="added by reviewer"))
     return True
 
 
@@ -96,6 +149,12 @@ def apply(bh: Borehole, items: list[dict]) -> list[bool]:
             ok = _crs(bh, int(p["epsg"]))
         elif kind == "position":
             ok = _position(bh, float(p["lat"]), float(p["lon"]), p.get("accuracy_m"))
+        elif kind == "layer_add":
+            ok = _layer_add(bh, p)
+        elif kind == "field":
+            ok = _field(bh, p)
+        elif kind == "groundwater":
+            ok = _groundwater(bh, p)
         else:
             ok = _layer(bh, p)
         results.append(ok)
