@@ -188,3 +188,12 @@ def test_nad_datums_in_utm_hints():
     r = georeference(f"E {e:.2f} N {n:.2f}", "NAD83 / UTM zone 17N", "CA", 43.65, -79.38, 5)
     assert r.location.crs_epsg == 26917
     assert haversine_km(r.location.lat, r.location.lon, 43.6426, -79.3871) < 0.01
+
+
+def test_coarse_place_does_not_reject_printed_coordinates():
+    # Only the country is known (centroid ~300 km away, precision 600 km): keep the printed position.
+    lat, lon = -33.8568, 151.2153
+    e, n = fwd(28356, lat, lon)
+    result = georeference(f"E: {e:.3f}, N: {n:.3f}", "56H MGA94", "AU", lat + 2.5, lon - 1.5, 600.0)
+    assert result.location.method.value == "stated_coordinates"
+    assert haversine_km(result.location.lat, result.location.lon, lat, lon) < 0.05

@@ -183,8 +183,9 @@ def cmd_run(args) -> None:
     _store(con, docs, rendered, classes, extractions, labs)
 
 
-def _store(con, docs, rendered, classes, extractions, labs=None) -> None:
-    """Lab sheets are optional: a failed lab page does not hold back the document's logs."""
+def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool = False) -> None:
+    """Lab sheets are optional: a failed lab page does not hold back the document's logs.
+    dry_run: assemble and report, but write nothing."""
     labs = labs or {}
     source_file = {d.doc_id: d.path for d in docs}
 
@@ -210,6 +211,9 @@ def _store(con, docs, rendered, classes, extractions, labs=None) -> None:
     extracted = {bh.borehole_id: store.extracted_summary(bh) for bh in boreholes}  # before fixes, for `eval`
     for bh in boreholes:  # reviewer fixes survive re-extraction
         corrections.apply(bh, store.corrections_for(con, bh.borehole_id))
+    if dry_run:
+        _report(boreholes, len(done))
+        return
     with con:  # replace complete documents atomically; human decisions carry over if content is unchanged
         previous: dict[str, dict] = {}
         for doc_id in done:
@@ -222,6 +226,17 @@ def _store(con, docs, rendered, classes, extractions, labs=None) -> None:
     print(f"Stored {len(boreholes)} boreholes ({located} georeferenced) from {len(done)} documents in {config.DB_PATH}")
     print(f"  released automatically: {auto}, waiting for review: {len(boreholes) - auto} "
           f"(threshold {round(config.AUTO_APPROVE_THRESHOLD * 100)})")
+
+
+def _report(boreholes, n_docs: int) -> None:
+    """One line per record: what a run would store (for checking results while another run writes)."""
+    for bh in sorted(boreholes, key=lambda b: b.borehole_id):
+        findings = [i for i in bh.issues if not i.startswith("unreadable")]
+        print(f"  {bh.borehole_id:<28} {bh.review_status.value:<15} score {round((bh.score or 0) * 100):>3}  "
+              f"{len(bh.layers):>2} layers  {len(bh.lab_results):>3} lab  | {'; '.join(findings[:3])[:150]}")
+    auto = sum(1 for b in boreholes if b.review_status.value == "auto_approved")
+    print(f"Dry run: {len(boreholes)} boreholes from {n_docs} documents, {auto} would be released automatically; "
+          "nothing written")
 
 
 def cmd_rebuild(args) -> None:
@@ -245,7 +260,7 @@ def cmd_rebuild(args) -> None:
             if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"
             and (x := llm.cached_lab_results(p)) is not None}
     print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")
-    _store(con, docs, rendered, classes, extractions, labs)
+    _store(con, docs, rendered, classes, extractions, labs, dry_run=args.dry_run)
 
 
 def main() -> None:
@@ -260,6 +275,8 @@ def main() -> None:
             p.add_argument("--yes", action="store_true", help="skip the cost confirmation")
         if name in ("run", "rebuild"):
             p.add_argument("--max-pages", type=int, help="only the first N pages of each document")
+        if name == "rebuild":
+            p.add_argument("--dry-run", action="store_true", help="assemble and report, write nothing")
     p = sub.add_parser("eval", help="extraction quality against human-checked records")
     p.add_argument("action", nargs="?", choices=["compare", "snapshot"], default="compare")
     p.add_argument("--corrected", action="store_true", help="compare final values instead of the model output")

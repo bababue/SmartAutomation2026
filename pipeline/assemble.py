@@ -352,8 +352,11 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
         crs_raw = doc_crs[0]
     country = _first(x.country for x in xs)
     location_name = _first(clean_location_text(x.location_text) for x in xs)
-    place = next(((x.place_lat, x.place_lon, x.place_precision_km or 10.0) for x in xs
-                  if x.place_lat is not None and x.place_lon is not None), None) or doc_place
+    # The model's estimate of the named site differs per sheet (often just the country centroid on one
+    # sheet and the town on the next): use the most precise one of this hole or of the document.
+    own = [(x.place_lat, x.place_lon, x.place_precision_km or 10.0) for x in xs
+           if x.place_lat is not None and x.place_lon is not None]
+    place = min(own + ([doc_place] if doc_place else []), key=lambda p: p[2], default=None)
     geo = georeference(coords_raw, crs_raw, country, *(place or (None, None, None)),
                        place_name=location_name)
     location = geo.location
@@ -454,8 +457,11 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
                     places.append((log.place_lat, log.place_lon, log.place_precision_km or 10.0))
         doc_place = None
         if places:
-            doc_place = (statistics.median(p[0] for p in places), statistics.median(p[1] for p in places),
-                         statistics.median(p[2] for p in places))
+            # Median of the more precise estimates only, so a few country-level guesses don't drag it away.
+            best = min(p[2] for p in places)
+            precise = [p for p in places if p[2] <= max(3 * best, 10.0)]
+            doc_place = (statistics.median(p[0] for p in precise), statistics.median(p[1] for p in precise),
+                         statistics.median(p[2] for p in precise))
         doc_records: list[Borehole] = []
         for logs in groups.values():
             if any(log.layers for log, _ in logs):

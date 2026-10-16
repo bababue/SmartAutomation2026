@@ -422,7 +422,8 @@ def georeference(
 
         cands.sort(key=rank)
         best = cands[0]
-        if best.distance_km is not None and best.distance_km <= 200:
+        # A coarse place (e.g. only the country) cannot reject printed coordinates 300 km from its centre.
+        if best.distance_km is not None and best.distance_km <= max(200.0, 2 * precision):
             _apply(loc, best, GeorefMethod.stated_coordinates)
             explicit = best.hinted or (best.epsg == GEOGRAPHIC and "guessed" not in best.note)
             loc.confidence = _confidence(best.distance_km, precision, explicit)
