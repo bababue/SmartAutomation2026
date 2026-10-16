@@ -3,12 +3,15 @@ import type { Detail, Layer, SourceRef } from '../types'
 import { SHOW_SOURCE_FILE } from '../dev'
 import { lithStyle, patternId } from '../lithology'
 import { Profile } from './Profile'
-import { ReviewBox } from './ReviewBox'
+import { ReviewBox, type QueueNav } from './ReviewBox'
 
 interface Props {
   detail: Detail
   onClose: () => void
   onReviewChange: (update: Pick<Detail, 'borehole' | 'review_log'>) => void
+  nav?: QueueNav | null
+  inSection?: boolean
+  onToggleSection?: () => void
 }
 
 const fmt = (v: number | null | undefined, digits = 2) =>
@@ -31,7 +34,7 @@ function Level({ value, label }: { value: number | null; label: string }) {
   )
 }
 
-export function DetailPanel({ detail, onClose, onReviewChange }: Props) {
+export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, onToggleSection }: Props) {
   const bh = detail.borehole
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
@@ -73,7 +76,19 @@ export function DetailPanel({ detail, onClose, onReviewChange }: Props) {
           {SHOW_SOURCE_FILE && sourceFiles && <p className="detail-sub result-file">{sourceFiles}</p>}
         </div>
         <div className="detail-actions">
-          <button className="btn btn-icon" onClick={onClose} aria-label="Close details">✕</button>
+          {nav && (
+            <div className="queue-nav" aria-label="Review queue position">
+              <button className="btn btn-icon" onClick={nav.prev ?? undefined} disabled={!nav.prev} aria-label="Previous in queue" title="Previous (←)">‹</button>
+              <span className="muted">{nav.position} of {nav.total} waiting</span>
+              <button className="btn btn-icon" onClick={nav.next ?? undefined} disabled={!nav.next} aria-label="Next in queue" title="Next (→)">›</button>
+            </div>
+          )}
+          {onToggleSection && (
+            <button className={`btn${inSection ? ' btn-on' : ''}`} onClick={onToggleSection} aria-pressed={inSection}>
+              {inSection ? 'In section' : 'Add to section'}
+            </button>
+          )}
+          <button className="btn btn-icon" onClick={onClose} aria-label="Close details" title="Close (Esc)">✕</button>
         </div>
       </header>
       <div className="detail-levels">
@@ -88,7 +103,7 @@ export function DetailPanel({ detail, onClose, onReviewChange }: Props) {
         </section>
 
         <section className="detail-data">
-          <ReviewBox detail={detail} onChange={onReviewChange} />
+          <ReviewBox detail={detail} onChange={onReviewChange} nav={nav} />
           {bh.issues.length > 0 && (
             <div className="checks">
               <h3>Plausibility findings</h3>

@@ -5,6 +5,8 @@ import { DetailPanel } from './components/DetailPanel'
 import { MapView } from './components/MapView'
 import { ResultList } from './components/ResultList'
 import { ReviewQueue } from './components/ReviewQueue'
+import { SectionView, orderAlongLine } from './components/SectionView'
+import type { QueueNav } from './components/ReviewBox'
 import type { Detail, FeatureCollection, Filters, QueueItem, Stats, StatusFilter } from './types'
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
@@ -22,6 +24,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<Detail | null>(null)
   const [refresh, setRefresh] = useState(0) // bump after a review decision
+  const [sectionIds, setSectionIds] = useState<string[]>([])
 
   useEffect(() => {
     const t = setTimeout(() => setFilters((f) => ({ ...f, q: query })), 250)
@@ -77,6 +80,46 @@ export default function App() {
   }, [])
 
   const pending = stats?.status.pending_review ?? queue.length
+
+  // Position in the review queue, for "approve and next" and arrow-key navigation.
+  const nav: QueueNav | null = useMemo(() => {
+    const i = queue.findIndex((q) => q.id === selectedId)
+    if (i < 0) return null
+    const prevId = queue[i - 1]?.id, nextId = queue[i + 1]?.id
+    return {
+      position: i + 1,
+      total: queue.length,
+      prev: prevId ? () => setSelectedId(prevId) : null,
+      next: nextId ? () => setSelectedId(nextId) : null,
+      // The decided record leaves the queue; continue with its neighbour.
+      advance: () => setSelectedId(nextId ?? prevId ?? null),
+    }
+  }, [queue, selectedId])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+      if (e.key === 'Escape') setSelectedId(null)
+      if (e.key === 'ArrowRight' && nav?.next) { e.preventDefault(); nav.next() }
+      if (e.key === 'ArrowLeft' && nav?.prev) { e.preventDefault(); nav.prev() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [nav])
+
+  const toggleSection = useCallback(
+    (id: string) => setSectionIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])),
+    [],
+  )
+  const sectionFeatures = useMemo(
+    () => sectionIds.map((id) => data.features.find((f) => f.properties.id === id)).filter((f): f is NonNullable<typeof f> => !!f),
+    [sectionIds, data],
+  )
+  const sectionLine = useMemo(
+    () => orderAlongLine(sectionFeatures).map((f) => f.geometry.coordinates),
+    [sectionFeatures],
+  )
 
   return (
     <div className="app">
@@ -149,24 +192,41 @@ export default function App() {
           <a href="/api/export.csv" className="link" title="Released records only">Export released (CSV)</a>
         </div>
         {error && <p className="error" role="alert">{error}</p>}
-        <ResultList features={data.features} selectedId={selectedId} onSelect={setSelectedId} loading={loading} />
+        <ResultList features={data.features} selectedId={selectedId} onSelect={setSelectedId} loading={loading} sectionIds={sectionIds} onToggleSection={toggleSection} />
       </aside>
 
-      <main className="map-wrap">
-        <MapView data={data} selectedId={selectedId} focus={focus} onSelect={setSelectedId} />
+      <main className={`map-wrap${sectionFeatures.length ? ' map-wrap-section' : ''}`}>
+        <MapView data={data} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} />
         <div className="legend" aria-label="Map legend">
           <span><i className="dot dot-high" /> released</span>
           <span><i className="dot dot-medium" /> waiting for review</span>
           <span><i className="dot dot-low" /> rejected</span>
           <span><i className="dot dot-ring" /> approximate position</span>
         </div>
+        {sectionFeatures.length > 0 && (
+          <SectionView
+            features={sectionFeatures}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onRemove={toggleSection}
+            onClear={() => setSectionIds([])}
+          />
+        )}
         {view === 'review' && (
           <ReviewQueue items={queue} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9} onSelect={setSelectedId} />
         )}
       </main>
 
       {detail && (
-        <DetailPanel key={detail.borehole.borehole_id} detail={detail} onClose={() => setSelectedId(null)} onReviewChange={onReviewChange} />
+        <DetailPanel
+          key={detail.borehole.borehole_id}
+          detail={detail}
+          onClose={() => setSelectedId(null)}
+          onReviewChange={onReviewChange}
+          nav={nav}
+          inSection={sectionIds.includes(detail.borehole.borehole_id)}
+          onToggleSection={() => toggleSection(detail.borehole.borehole_id)}
+        />
       )}
     </div>
   )

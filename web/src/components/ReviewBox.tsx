@@ -1,15 +1,28 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { postReview } from '../api'
 import { STATUS_LABEL, fmtDateTime, loadReviewer, saveReviewer, scoreText } from '../review'
 import type { Detail, ReviewStatus } from '../types'
 
+export interface QueueNav {
+  position: number // 1-based position in the review queue
+  total: number
+  prev: (() => void) | null
+  next: (() => void) | null
+  /** Called after a decision; moves on to the next waiting record. */
+  advance: () => void
+}
+
 interface Props {
   detail: Detail
   onChange: (update: Pick<Detail, 'borehole' | 'review_log'>) => void
+  nav?: QueueNav | null
 }
 
+const typing = (el: EventTarget | null) =>
+  el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+
 /** Release status, why it needs a human, and the decision controls. */
-export function ReviewBox({ detail, onChange }: Props) {
+export function ReviewBox({ detail, onChange, nav }: Props) {
   const bh = detail.borehole
   const [reviewer, setReviewer] = useState(loadReviewer)
   const [comment, setComment] = useState('')
@@ -19,6 +32,7 @@ export function ReviewBox({ detail, onChange }: Props) {
   const decided = status === 'approved' || status === 'rejected'
 
   async function decide(decision: ReviewStatus) {
+    if (busy || decision === status) return
     if (!reviewer.trim()) {
       setError('Enter your name so the decision can be traced.')
       return
@@ -29,12 +43,27 @@ export function ReviewBox({ detail, onChange }: Props) {
       saveReviewer(reviewer.trim())
       onChange(await postReview(bh.borehole_id, decision, reviewer.trim(), comment.trim() || null))
       setComment('')
+      if (nav && decision !== 'pending_review') nav.advance()
     } catch (e) {
       setError(`Decision not saved (${(e as Error).message}).`)
     } finally {
       setBusy(false)
     }
   }
+
+  // Keyboard: A approves, R rejects (not while typing in a field).
+  const decideRef = useRef(decide)
+  decideRef.current = decide
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return
+      const key = e.key.toLowerCase()
+      if (key === 'a') { e.preventDefault(); decideRef.current('approved') }
+      if (key === 'r') { e.preventDefault(); decideRef.current('rejected') }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   return (
     <section className={`review review-${status}`} aria-label="Release status">
@@ -71,10 +100,14 @@ export function ReviewBox({ detail, onChange }: Props) {
         </label>
         <div className="review-buttons">
           {status !== 'approved' && (
-            <button className="btn btn-approve" disabled={busy} onClick={() => decide('approved')}>Approve</button>
+            <button className="btn btn-approve" disabled={busy} onClick={() => decide('approved')} title="Shortcut: A">
+              {nav ? 'Approve and next' : 'Approve'}
+            </button>
           )}
           {status !== 'rejected' && (
-            <button className="btn btn-reject" disabled={busy} onClick={() => decide('rejected')}>Reject</button>
+            <button className="btn btn-reject" disabled={busy} onClick={() => decide('rejected')} title="Shortcut: R">
+              {nav ? 'Reject and next' : 'Reject'}
+            </button>
           )}
           {decided && (
             <button className="btn" disabled={busy} onClick={() => decide('pending_review')}>Reopen</button>

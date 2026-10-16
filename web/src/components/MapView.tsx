@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { GeoJSONSource, LngLatBounds, Map as MapLibre, NavigationControl, ScaleControl, setWorkerUrl, type LngLatLike, type MapLayerMouseEvent } from 'maplibre-gl'
+import { GeoJSONSource, LngLatBounds, Map as MapLibre, NavigationControl, Popup, ScaleControl, setWorkerUrl, type LngLatLike, type MapLayerMouseEvent } from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import type { FeatureCollection } from '../types'
+import { STATUS_LABEL, scoreText } from '../review'
+import type { BoreholeSummary, FeatureCollection, ReviewStatus } from '../types'
 
 // MapLibre resolves its worker next to its own module, which does not exist in the production bundle.
 // Importing it as an asset makes Vite emit it in both dev and build.
@@ -23,9 +24,53 @@ const STATUS_COLOR: ExpressionSpecification = [
 
 interface Props {
   data: FeatureCollection
+  section: [number, number][]  // line through the boreholes of the section view, in order
   selectedId: string | null
   focus: { lon: number; lat: number; accuracy_m: number | null; approximate: boolean } | null
   onSelect: (id: string) => void
+}
+
+const CLUSTER_MAX_ZOOM = 13
+
+function sectionLine(coords: [number, number][]) {
+  return {
+    type: 'FeatureCollection' as const,
+    features: coords.length > 1
+      ? [{ type: 'Feature' as const, properties: {}, geometry: { type: 'LineString' as const, coordinates: coords } }]
+      : [],
+  }
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string) {
+  const node = document.createElement(tag)
+  node.className = className
+  if (text != null) node.textContent = text  // textContent: names come from documents, never as HTML
+  return node
+}
+
+function tooltipContent(p: BoreholeSummary) {
+  const root = el('div', 'tip')
+  root.append(el('strong', 'tip-name', p.name))
+  if (p.location_name) root.append(el('span', 'tip-line', p.location_name))
+  const status = p.review_status as ReviewStatus
+  root.append(el('span', `tip-line tip-${status}`, `${STATUS_LABEL[status]}, score ${scoreText(p.score)}`))
+  return root
+}
+
+function pickerList(items: BoreholeSummary[], onPick: (id: string) => void) {
+  const root = el('div', 'picker')
+  root.append(el('p', 'picker-head', `${items.length} boreholes at this position`))
+  const list = el('ul', 'picker-list')
+  items.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).forEach((p) => {
+    const li = el('li', '')
+    const button = el('button', 'picker-item', p.name)
+    button.append(el('span', 'picker-meta', ` ${STATUS_LABEL[p.review_status as ReviewStatus]}`))
+    button.addEventListener('click', () => onPick(p.id))
+    li.append(button)
+    list.append(li)
+  })
+  root.append(list)
+  return root
 }
 
 function circlePolygon(lon: number, lat: number, radiusM: number) {
@@ -39,12 +84,12 @@ function circlePolygon(lon: number, lat: number, radiusM: number) {
   return { type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [coords] } }
 }
 
-export function MapView({ data, selectedId, focus, onSelect }: Props) {
+export function MapView({ data, section, selectedId, focus, onSelect }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibre | null>(null)
   const ready = useRef(false)
-  const latest = useRef({ data, onSelect, selectedId, focus })
-  latest.current = { data, onSelect, selectedId, focus }
+  const latest = useRef({ data, onSelect, selectedId, focus, section })
+  latest.current = { data, onSelect, selectedId, focus, section }
 
   useEffect(() => {
     const m = new MapLibre({
@@ -55,12 +100,16 @@ export function MapView({ data, selectedId, focus, onSelect }: Props) {
       attributionControl: { compact: true },
     })
     map.current = m
+    const tooltip = new Popup({ closeButton: false, closeOnClick: false, offset: 10, className: 'map-tooltip' })
+    const picker = new Popup({ closeButton: true, offset: 14, className: 'map-picker', maxWidth: '280px' })
     m.addControl(new NavigationControl({ showCompass: false }), 'bottom-right')
     m.addControl(new ScaleControl({ maxWidth: 120 }), 'bottom-left')
 
     m.on('load', () => {
-      m.addSource('boreholes', { type: 'geojson', data: latest.current.data, cluster: true, clusterRadius: 42, clusterMaxZoom: 13 })
+      m.addSource('boreholes', { type: 'geojson', data: latest.current.data, cluster: true, clusterRadius: 42, clusterMaxZoom: CLUSTER_MAX_ZOOM })
       m.addSource('uncertainty', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      m.addSource('section', { type: 'geojson', data: sectionLine(latest.current.section) })
+      m.addLayer({ id: 'section-line', type: 'line', source: 'section', paint: { 'line-color': '#1D2528', 'line-width': 2, 'line-dasharray': [2, 1.5] } })
       m.addLayer({ id: 'uncertainty-fill', type: 'fill', source: 'uncertainty', paint: { 'fill-color': ACCENT, 'fill-opacity': 0.08 } })
       m.addLayer({ id: 'uncertainty-line', type: 'line', source: 'uncertainty', paint: { 'line-color': ACCENT, 'line-width': 1.2, 'line-dasharray': [3, 2] } })
       m.addLayer({
@@ -97,16 +146,36 @@ export function MapView({ data, selectedId, focus, onSelect }: Props) {
         const feature = e.features?.[0]
         if (!feature) return
         const source = m.getSource('boreholes') as GeoJSONSource
+        const center = (feature.geometry as { coordinates: [number, number] }).coordinates
         const zoom = await source.getClusterExpansionZoom(feature.properties.cluster_id)
-        m.easeTo({ center: (feature.geometry as { coordinates: [number, number] }).coordinates as LngLatLike, zoom })
+        if (zoom <= CLUSTER_MAX_ZOOM && m.getZoom() < CLUSTER_MAX_ZOOM) {
+          m.easeTo({ center: center as LngLatLike, zoom })
+          return
+        }
+        // Holes at (almost) the same position never split up: offer a list instead.
+        const leaves = await source.getClusterLeaves(feature.properties.cluster_id, 50, 0)
+        picker.remove()
+        picker.setLngLat(center).setDOMContent(pickerList(leaves.map((l) => l.properties as BoreholeSummary), (id) => {
+          picker.remove()
+          latest.current.onSelect(id)
+        })).addTo(m)
       })
       for (const layer of ['points', 'points-approx']) {
         m.on('click', layer, (e: MapLayerMouseEvent) => {
           const id = e.features?.[0]?.properties?.id
           if (id) latest.current.onSelect(id)
         })
-        m.on('mouseenter', layer, () => (m.getCanvas().style.cursor = 'pointer'))
-        m.on('mouseleave', layer, () => (m.getCanvas().style.cursor = ''))
+        m.on('mouseenter', layer, (e: MapLayerMouseEvent) => {
+          m.getCanvas().style.cursor = 'pointer'
+          const f = e.features?.[0]
+          if (!f) return
+          tooltip.setLngLat((f.geometry as { coordinates: [number, number] }).coordinates)
+            .setDOMContent(tooltipContent(f.properties as BoreholeSummary)).addTo(m)
+        })
+        m.on('mouseleave', layer, () => {
+          m.getCanvas().style.cursor = ''
+          tooltip.remove()
+        })
       }
       m.on('mouseenter', 'clusters', () => (m.getCanvas().style.cursor = 'pointer'))
       m.on('mouseleave', 'clusters', () => (m.getCanvas().style.cursor = ''))
@@ -129,6 +198,12 @@ export function MapView({ data, selectedId, focus, onSelect }: Props) {
     if (!m || !ready.current) return
     applySelection(m, selectedId, focus)
   }, [selectedId, focus])
+
+  useEffect(() => {
+    const m = map.current
+    if (!m || !ready.current) return
+    ;(m.getSource('section') as GeoJSONSource).setData(sectionLine(section))
+  }, [section])
 
   return <div ref={container} className="map" />
 }

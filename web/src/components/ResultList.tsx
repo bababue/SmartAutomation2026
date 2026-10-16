@@ -8,11 +8,13 @@ interface Props {
   selectedId: string | null
   onSelect: (id: string) => void
   loading: boolean
+  sectionIds: string[]
+  onToggleSection: (id: string) => void
 }
 
 const fmtDepth = (d: number | null) => (d == null ? '–' : `${d.toLocaleString('en', { maximumFractionDigits: 1 })} m`)
 
-export function ResultList({ features, selectedId, onSelect, loading }: Props) {
+export function ResultList({ features, selectedId, onSelect, loading, sectionIds, onToggleSection }: Props) {
   if (!loading && !features.length) {
     return (
       <div className="empty">
@@ -28,7 +30,7 @@ export function ResultList({ features, selectedId, onSelect, loading }: Props) {
   return (
     <ul className="results" aria-busy={loading}>
       {sorted.map(({ properties: p }) => (
-        <li key={p.id}>
+        <li key={p.id} className="result-item">
           <button
             className={`result${p.id === selectedId ? ' result-selected' : ''}`}
             onClick={() => onSelect(p.id)}
@@ -45,6 +47,15 @@ export function ResultList({ features, selectedId, onSelect, loading }: Props) {
               </span>
               {p.loc_method === 'geocoded_place' && <span className="flag flag-warn" title="Position estimated from the place name">approx. position</span>}
             </span>
+          </button>
+          <button
+            className={`section-toggle${sectionIds.includes(p.id) ? ' section-toggle-on' : ''}`}
+            onClick={() => onToggleSection(p.id)}
+            aria-pressed={sectionIds.includes(p.id)}
+            aria-label={`${sectionIds.includes(p.id) ? 'Remove' : 'Add'} ${p.name} ${sectionIds.includes(p.id) ? 'from' : 'to'} the section`}
+            title={sectionIds.includes(p.id) ? 'In the section view' : 'Add to the section view'}
+          >
+            {sectionIds.includes(p.id) ? 'In section' : '+ Section'}
           </button>
         </li>
       ))}
