@@ -167,12 +167,29 @@ export interface FeatureCollection {
   features: Feature[]
 }
 
+export type CorrectionKind = 'crs' | 'position' | 'layer'
+
+export interface CorrectionRecord {
+  id: number
+  scope: 'borehole' | 'document'
+  target: string
+  kind: CorrectionKind
+  payload: Record<string, number | string | boolean>
+  reviewer: string
+  comment: string | null
+  at: string
+}
+
 export interface Detail {
   borehole: Borehole
   source_pages: { file: string; page: number; url: string }[]
   review_log: ReviewEvent[]
+  corrections: CorrectionRecord[]
   threshold: number
 }
+
+/** What a review decision or a correction changes in the open record. */
+export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log'> & Partial<Pick<Detail, 'corrections'>>
 
 export interface Stats {
   boreholes: number

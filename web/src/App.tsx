@@ -7,7 +7,7 @@ import { ResultList } from './components/ResultList'
 import { ReviewQueue } from './components/ReviewQueue'
 import { SectionView, orderAlongLine } from './components/SectionView'
 import type { QueueNav } from './components/ReviewBox'
-import type { Detail, FeatureCollection, Filters, QueueItem, Stats, StatusFilter } from './types'
+import type { Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, Stats, StatusFilter } from './types'
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
 type View = 'map' | 'review'
@@ -74,7 +74,7 @@ export default function App() {
   const toggleLith = (key: string) =>
     setFilters((f) => ({ ...f, lithology: f.lithology.includes(key) ? f.lithology.filter((l) => l !== key) : [...f.lithology, key] }))
 
-  const onReviewChange = useCallback((update: Pick<Detail, 'borehole' | 'review_log'>) => {
+  const onReviewChange = useCallback((update: DetailUpdate) => {
     setDetail((d) => (d && d.borehole.borehole_id === update.borehole.borehole_id ? { ...d, ...update } : d))
     setRefresh((n) => n + 1)
   }, [])

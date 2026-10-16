@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { postReview } from '../api'
 import { STATUS_LABEL, fmtDateTime, loadReviewer, saveReviewer, scoreText } from '../review'
-import type { Detail, ReviewStatus } from '../types'
+import type { Detail, DetailUpdate, ReviewStatus } from '../types'
 
 export interface QueueNav {
   position: number // 1-based position in the review queue
@@ -14,12 +14,12 @@ export interface QueueNav {
 
 interface Props {
   detail: Detail
-  onChange: (update: Pick<Detail, 'borehole' | 'review_log'>) => void
+  onChange: (update: DetailUpdate) => void
   nav?: QueueNav | null
 }
 
 const typing = (el: EventTarget | null) =>
-  el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+  el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
 
 /** Release status, why it needs a human, and the decision controls. */
 export function ReviewBox({ detail, onChange, nav }: Props) {
@@ -92,7 +92,7 @@ export function ReviewBox({ detail, onChange, nav }: Props) {
       <div className="review-form">
         <label>
           Your name
-          <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} autoComplete="name" />
+          <input value={reviewer} onChange={(e) => { setReviewer(e.target.value); saveReviewer(e.target.value.trim()) }} autoComplete="name" />
         </label>
         <label className="review-form-comment">
           Comment (optional)

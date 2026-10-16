@@ -25,7 +25,9 @@ def record(bid: str, east: float = E) -> Borehole:
                           method=GeorefMethod.stated_coordinates, confidence=0.8),
         sources=[src],
     )
-    bh.issues = bh.validate_log() + ["coordinate system inferred, not stated: EPSG:32756"]
+    bh.issues = bh.validate_log() + ["coordinate system inferred, not stated: EPSG:32756",
+                                     "unreadable: Coordinate reference system not printed",
+                                     "unreadable: Elevation datum not printed"]
     score(bh, {}, 0)
     return bh
 
@@ -56,6 +58,8 @@ def test_crs_for_whole_document(client):
     issues = r.json()["borehole"]["issues"]
     assert not any(i.startswith("coordinate system inferred") for i in issues)
     assert any(i.startswith("corrected by Anna") for i in issues)
+    assert "unreadable: Coordinate reference system not printed" not in issues  # settled by the reviewer
+    assert "unreadable: Elevation datum not printed" in issues  # not about the position
     other = client.get("/api/boreholes/other:BH3/detail").json()["borehole"]["location"]
     assert other["crs_epsg"] == 32756
 
@@ -67,12 +71,20 @@ def test_layer_fix_closes_gap_and_survives_rerun(client):
     bh = r.json()["borehole"]
     assert not any(i.startswith("gap") for i in bh["issues"])
     assert bh["layers"][1]["bottom_m"] == 4.5 and bh["layers"][1]["primary"] == "fine_sand"
+    assert "coordinate system inferred, not stated: EPSG:32756" in bh["issues"]  # unrelated findings stay
 
     # A re-run assembles the uncorrected record again; the stored correction is re-applied.
     con = store.connect()
     rerun = record("demo__a:BH1")
     corrections.apply(rerun, store.corrections_for(con, rerun.borehole_id))
     assert rerun.layers[1].bottom_m == 4.5 and not any(i.startswith("gap") for i in rerun.issues)
+
+
+def test_earlier_correction_notes_stay(client):
+    post(client, "demo__a:BH1", kind="layer", payload={"orig_top": 4.5, "orig_bottom": 9.0, "primary": "clay"})
+    r = post(client, "demo__a:BH1", kind="crs", payload={"epsg": 28356})
+    notes = [i for i in r.json()["borehole"]["issues"] if i.startswith("corrected by")]
+    assert len(notes) == 2
 
 
 def test_stale_correction_blocks_release(client):

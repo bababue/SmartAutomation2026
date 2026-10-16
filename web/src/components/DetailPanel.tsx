@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Detail, Layer, SourceRef } from '../types'
+import type { Detail, DetailUpdate, Layer, SourceRef } from '../types'
 import { SHOW_SOURCE_FILE } from '../dev'
 import { lithStyle, patternId } from '../lithology'
+import { CorrectionList, LayerEditor, PositionCorrection } from './Corrections'
 import { Profile } from './Profile'
 import { ReviewBox, type QueueNav } from './ReviewBox'
 
 interface Props {
   detail: Detail
   onClose: () => void
-  onReviewChange: (update: Pick<Detail, 'borehole' | 'review_log'>) => void
+  onReviewChange: (update: DetailUpdate) => void
   nav?: QueueNav | null
   inSection?: boolean
   onToggleSection?: () => void
@@ -39,6 +40,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
   const [coordsHovered, setCoordsHovered] = useState(false)
+  const [editing, setEditing] = useState<number | null>(null)
   const [pageIndex, setPageIndex] = useState(0)
   const pages = detail.source_pages
   const page = pages[Math.min(pageIndex, pages.length - 1)]  // the panel is keyed by id; clamp anyway
@@ -110,6 +112,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
               <ul>{bh.issues.map((i) => <li key={i}>{i}</li>)}</ul>
             </div>
           )}
+          <CorrectionList items={detail.corrections ?? []} />
 
           <h3>Record</h3>
           <dl className="record">
@@ -122,6 +125,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
               {loc.lat != null ? `${fmt(loc.lat, 6)}, ${fmt(loc.lon, 6)}` : '–'}
               {loc.crs_epsg ? <span className="muted"> via EPSG:{loc.crs_epsg}</span> : null}
               {loc.crs_candidates.length > 1 && <span className="muted"> (also possible: {loc.crs_candidates.slice(1).join(', ')})</span>}
+              <PositionCorrection boreholeId={bh.borehole_id} hasCoords={!!loc.coords_raw} currentEpsg={loc.crs_epsg} onChange={onReviewChange} />
             </dd>
             <dt>Ground level</dt><dd>{bh.surface_elevation_raw ?? fmt(bh.surface_elevation_m)}{bh.elevation_datum ? ` ${bh.elevation_datum}` : ''}</dd>
             <dt>Final depth</dt><dd>{fmt(bh.depth_m)} m{bh.inclination_deg != null && bh.inclination_deg !== 90 && Math.abs(bh.inclination_deg) !== 90 ? `, inclined ${bh.inclination_deg}°` : ''}</dd>
@@ -135,10 +139,12 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
           <h3>Layers</h3>
           <table className="layers">
             <thead>
-              <tr><th>From</th><th>To</th><th>Lithology</th><th>Description</th><th>Stratigraphy</th></tr>
+              <tr><th>From</th><th>To</th><th>Lithology</th><th>Description</th><th>Stratigraphy</th><th><span className="sr-only">Edit</span></th></tr>
             </thead>
             <tbody>
-              {bh.layers.map((l: Layer, i) => (
+              {bh.layers.map((l: Layer, i) => editing === i ? (
+                <LayerEditor key={`edit-${i}`} boreholeId={bh.borehole_id} layer={l} onChange={onReviewChange} onDone={() => setEditing(null)} />
+              ) : (
                 <tr key={i} className={hovered === i ? 'row-active' : undefined} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}>
                   <td className="num">{fmt(l.top_m)}</td>
                   <td className="num">{fmt(l.bottom_m)}</td>
@@ -151,6 +157,10 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
                     {l.description_en && <span className="original">{l.description_original}</span>}
                   </td>
                   <td>{[l.stratigraphic_code, l.stratigraphic_name, l.geologic_age].filter(Boolean).join(', ') || '–'}</td>
+                  <td>
+                    <button className="btn btn-small btn-edit" onClick={() => setEditing(i)} disabled={editing != null}
+                      aria-label={`Correct layer ${fmt(l.top_m)}–${fmt(l.bottom_m)} m`} title="Correct this layer">Edit</button>
+                  </td>
                 </tr>
               ))}
             </tbody>

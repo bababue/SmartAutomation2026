@@ -11,6 +11,7 @@ Kinds (payloads):
 from __future__ import annotations
 
 import json
+import re
 
 from schema.borehole import Borehole, GeorefMethod, Lithology
 
@@ -24,6 +25,8 @@ GEOREF_ISSUES = (
     "coordinate system taken from", "coordinates ", "printed coordinates", "position ", "no place to cross-check",
     "not georeferenced", "invalid WGS84",
 )
+# Items the model could not read about the coordinates (not about levels), settled by the same fix.
+GEOREF_UNREADABLE = re.compile(r"^unreadable:(?!.*\b(?:elevation|level)\b).*\b(?:coordinat\w*|crs|datum|grid|zone|easting|northing)\b", re.I)
 
 
 def describe(kind: str, payload: dict) -> str:
@@ -84,7 +87,8 @@ def apply(bh: Borehole, items: list[dict]) -> list[bool]:
     if not items:
         return []
     results = []
-    before = bh.validate_log()
+    existing = list(bh.issues)
+    before = bh.validate_log()  # note: also overwrites bh.issues
     notes, georef_fixed = [], False
     for c in items:
         kind, p = c["kind"], c["payload"]
@@ -99,9 +103,9 @@ def apply(bh: Borehole, items: list[dict]) -> list[bool]:
         who = c.get("reviewer") or "a reviewer"
         notes.append(f"corrected by {who}: {describe(kind, p)}" if ok
                      else f"stale correction by {who}: {describe(kind, p)} no longer fits the extraction")
-    kept = [i for i in bh.issues if i not in before and not i.startswith(("corrected by", "stale correction"))]
+    kept = [i for i in existing if i not in before]
     if georef_fixed:
-        kept = [i for i in kept if not i.startswith(GEOREF_ISSUES)]
+        kept = [i for i in kept if not i.startswith(GEOREF_ISSUES) and not GEOREF_UNREADABLE.search(i)]
     bh.issues = list(dict.fromkeys(bh.validate_log() + kept + notes))
     rescore(bh)
     return results
