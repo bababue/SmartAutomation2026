@@ -15,6 +15,9 @@ DATASET_DIR = Path(os.getenv("DATASET_DIR", ROOT / "temp/HKBoreholeChallenge_Dat
 DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
 PAGES_DIR = DATA_DIR / "pages"  # rendered page images, served to the UI
 CACHE_DIR = DATA_DIR / "cache"  # LLM responses, keyed by input hash
+# PDF exports of DOCX files (e.g. saved from Word), same relative path as in the dataset. DOCX logs are
+# often laid out from several image strips in table cells; only a rendered page shows them together.
+CONVERTED_DIR = DATA_DIR / "converted"
 DB_PATH = Path(os.getenv("DB_PATH", DATA_DIR / "boreholes.sqlite"))
 
 # Models: Claude is approved for the challenge data. Classification runs on a small

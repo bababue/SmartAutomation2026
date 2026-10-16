@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -84,15 +85,34 @@ def _docx_images(path: Path) -> list[tuple[bytes, str]]:
     return images
 
 
+def converted_pdf(doc: SourceDoc) -> Path | None:
+    """PDF export of a DOCX under CONVERTED_DIR, if someone saved one."""
+    if doc.kind != "docx":
+        return None
+    path = config.CONVERTED_DIR / Path(doc.path).with_suffix(".pdf")
+    return path if path.exists() else None
+
+
 def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool = False) -> list[PageImage]:
     out_dir = config.PAGES_DIR / doc.doc_id
     manifest = out_dir / "manifest.json"
-    if manifest.exists() and not force:
+    src = dataset_dir / doc.path
+    converted = converted_pdf(doc)
+    source = str(converted or src)  # rendered from; a new PDF export of a DOCX triggers a re-render
+    marker = out_dir / "source.txt"
+    same_source = marker.read_text() == source if marker.exists() else converted is None
+    if manifest.exists() and same_source and not force:
         return [PageImage(**p) for p in json.loads(manifest.read_text())]
     out_dir.mkdir(parents=True, exist_ok=True)
-    src = dataset_dir / doc.path
+    for old in out_dir.glob("*.jpg"):
+        old.unlink()  # page count may change
 
-    if doc.kind == "docx":
+    if converted:
+        d = pymupdf.open(converted)
+        pdf_pages = [(p, p.get_text()) for p in d]
+    elif doc.kind == "docx":
+        print(f"  ! {doc.path}: no PDF export in {config.CONVERTED_DIR}; using embedded images only, which can split "
+              "logs laid out from several images", file=sys.stderr)
         sources = [pymupdf.open(stream=blob, filetype=ext) for blob, ext in _docx_images(src)]
         pdf_pages = [(d[0], "") for d in sources]
     else:
@@ -117,4 +137,5 @@ def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool =
             )
         )
     manifest.write_text(json.dumps([asdict(p) for p in pages], ensure_ascii=False))
+    marker.write_text(source)
     return pages

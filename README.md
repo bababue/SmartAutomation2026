@@ -29,6 +29,10 @@ input files ──► page classification ──► extraction (vision LLM, stru
 ```
 
 1. **Ingest** – PDF (text, scanned, vector-only), JPG/PNG, DOCX. Every page is rendered to an image; text layers are used only as a hint because many are scrambled or bad OCR.
+   DOCX logs are often laid out from several image strips in table cells, so a DOCX needs a PDF export
+   (e.g. *Save as PDF* in Word) at `data/converted/<same relative path>.pdf`; without it only the embedded
+   images are used and the run prints a warning. Do not put the export into the dataset folder (it would be
+   ingested twice).
 2. **Page classification** – find log pages (incl. continuation sheets), coordinate tables and lab result sheets; large reports contain only a few.
 3. **Extraction** – a vision LLM fills a slim extraction schema (observations, original strings, page references). IDs, CRS resolution, WGS84 coordinates, confidence and review state are set by our own code, never by the model.
 4. **Normalisation** – units to metres/SI, lithology to DIN 4023 keys, descriptions translated to English (original kept).

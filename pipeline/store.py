@@ -72,6 +72,7 @@ def reset(con: sqlite3.Connection) -> None:
 
 def save_document(con: sqlite3.Connection, doc_id: str, path: str, kind: str, pages: list[dict]) -> None:
     con.execute("INSERT OR REPLACE INTO documents VALUES (?, ?, ?, ?)", (doc_id, path, kind, len(pages)))
+    con.execute("DELETE FROM pages WHERE doc_id = ?", (doc_id,))  # a re-render can have fewer pages
     con.executemany(
         "INSERT OR REPLACE INTO pages VALUES (:doc_id, :page, :kind, :language, :logs, :image, :thumb, :width, :height)",
         pages,
