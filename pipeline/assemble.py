@@ -245,8 +245,43 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
             continue
         if layers and abs(layers[-1].top_m - top) < 0.01 and abs(layers[-1].bottom_m - bottom) < 0.01:
             continue  # same layer read twice (overlapping sheets)
+        prev = layers[-1] if layers else None
+        if (prev and not _same_page(src, prev.source) and abs(prev.bottom_m - bottom) < 0.01
+                and prev.top_m < top < prev.bottom_m and prev.primary == layer.primary):
+            # The earlier sheet gave the unit's full range, the next one repeats it from its sheet top.
+            if notes is not None:
+                notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats {prev.top_m:g}–{prev.bottom_m:g} m")
+            continue
+        if (prev and not _same_page(src, prev.source) and abs(prev.top_m - top) < 0.01
+                and bottom < prev.bottom_m - 0.01):
+            # The earlier sheet ran its last unit past its own end; the next sheet shows where it really ends.
+            if notes is not None:
+                notes.append(f"layer {prev.top_m:g}–{prev.bottom_m:g} m ends at {bottom:g} m per page {src.page}")
+            layers[-1] = layer
+            continue
         layers.append(layer)
     return layers
+
+
+def fill_core_loss(bh: Borehole, tol: float = 0.05) -> list[str]:
+    """A gap inside one core run with less than full recovery, no longer than the unrecovered length,
+    is core loss: fill it with a no_recovery layer and say so."""
+    notes = []
+    layers = sorted(bh.layers, key=lambda layer: layer.top_m)
+    for a, b in zip(layers, layers[1:]):
+        gap = b.top_m - a.bottom_m
+        if gap <= tol:
+            continue
+        run = next((c for c in bh.core_runs if c.top_m - tol <= a.bottom_m and b.top_m <= c.bottom_m + tol), None)
+        tcr = run.total_core_recovery_pct if run else None
+        if tcr is None or tcr >= 100 or gap > (1 - tcr / 100) * (run.bottom_m - run.top_m) + tol:
+            continue
+        bh.layers.append(Layer(top_m=a.bottom_m, bottom_m=b.top_m, description_original="core loss (inferred)",
+                               primary=Lithology.no_recovery, source=a.source))
+        notes.append(f"core loss inferred: {a.bottom_m:g}–{b.top_m:g} m in core run {run.top_m:g}–{run.bottom_m:g} m "
+                     f"(TCR {tcr:g} %)")
+    bh.layers.sort(key=lambda layer: layer.top_m)
+    return notes
 
 
 # Explicit coordinate system statements in free text (report prose, notes, legends). Weak hints such as a
@@ -254,7 +289,7 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
 CRS_STATEMENT = re.compile(
     r"(epsg\s*:?\s*\d{4,5}|mga\s?(?:94|2020)[^\n]{0,24}|zone\s?\d{1,2}\s?[a-z]?\s?mga\s?(?:94|2020)|"
     r"utm[^\n]{0,16}?\d{1,2}\s?[a-z]?\b|osgb\s?36|british national grid|mt\.?\s?eden[^\n]{0,10}|nztm|"
-    r"etrs\s?89[^\n]{0,20}|lv95|ch1903\+?|rd\s?new|lambert.?93|kgd\s?2002[^\n]{0,20}|(?:east|central|west)\s?belt|"
+    r"etrs\s?89[^\n]{0,20}|lv95|ch1903\+?|s34[sj]|s45b|system\s?34[^\n]{0,12}|rd\s?new|lambert.?93|kgd\s?2002[^\n]{0,20}|(?:east|central|west)\s?belt|"
     r"[동중서]부\s?원점|동해\s?원점|posgar[^\n]{0,16}|sirgas[^\n]{0,24})",
     re.I,
 )
@@ -417,6 +452,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
                      if (v := _lab_value(lab.parameter, lab.value_raw, lab.unit_raw)) is not None],
         sources=[src for _, src in logs],
     )
+    layer_notes += fill_core_loss(bh)
     issues = bh.validate_log() + layer_notes + geo.issues + unit_findings(xs)
     unreadable = [u for x in xs for u in x.unreadable]
     issues += [f"unreadable: {u}" for u in unreadable[:5]]

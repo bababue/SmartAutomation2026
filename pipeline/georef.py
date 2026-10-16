@@ -45,6 +45,10 @@ CRS_HINTS: list[tuple[str, list[int]]] = [
     (r"posgar", [5343, 5344, 5345, 5346, 5347, 5348, 5349]),
     (r"sirgas", [31981, 31982, 31983, 31984, 31985]),
     (r"lv95|ch1903\+", [2056]),
+    # Danish System 34 / 45 (local grids; the 'reconstruction east-orientated' CRSs have E/N axes)
+    (r"\bs34s\b|system ?34 ?sj(?:ae|æ)lland", [10250]),
+    (r"\bs34j\b|system ?34 ?jylland", [10160]),
+    (r"\bs45b\b|system ?45 ?bornholm", [10254]),
     (r"rd ?new|amersfoort", [28992]),
     (r"lambert.?93", [2154]),
 ]
@@ -55,7 +59,7 @@ COUNTRY_CRS: dict[str, list[int]] = {
     "NZ": [2193, 2105],
     "AU": [28348, 28349, 28350, 28351, 28352, 28353, 28354, 28355, 28356],
     "KR": [5185, 5186, 5187, 5188, 5174, 5176, 2097],
-    "DK": [25832, 25833],
+    "DK": [25832, 25833, 10250, 10160, 10254],
     "DE": [25832, 25833, 31466, 31467, 31468, 31469],
     "NO": [25832, 25833],
     "ES": [25829, 25830, 25831],

@@ -412,7 +412,7 @@ class Borehole(BaseModel):
     reviewed_at: datetime | None = None
     review_comment: str | None = None
 
-    def validate_log(self, tol: float = 0.02) -> list[str]:
+    def validate_log(self, tol: float = 0.02, minor: float = 0.10) -> list[str]:
         """Plausibility checks; returns findings instead of raising so data is still stored.
 
         Run explicitly after normalisation and georeferencing. Layers are checked in depth
@@ -430,10 +430,15 @@ class Borehole(BaseModel):
         else:
             covered = layers[0].bottom_m
             for layer in layers[1:]:
+                # Up to `minor` metres: core loss between runs or rounding of piece depths in core logs;
+                # shown, but not treated as a misread.
                 if layer.top_m - covered > tol:
-                    issues.append(f"gap {covered}–{layer.top_m} m")
+                    kind = "minor discontinuity" if layer.top_m - covered <= minor else "gap"
+                    issues.append(f"{kind} {covered}–{layer.top_m} m" + (" (not covered)" if kind != "gap" else ""))
                 elif covered - layer.top_m > tol:
-                    issues.append(f"overlap {layer.top_m}–{min(covered, layer.bottom_m)} m")
+                    end = min(covered, layer.bottom_m)
+                    kind = "minor discontinuity" if end - layer.top_m <= minor else "overlap"
+                    issues.append(f"{kind} {layer.top_m}–{end} m" + (" (covered twice)" if kind != "overlap" else ""))
                 covered = max(covered, layer.bottom_m)
             if layers[0].top_m > tol:
                 issues.append(f"log starts at {layers[0].top_m} m, not at surface")
@@ -445,8 +450,10 @@ class Borehole(BaseModel):
             interval = f"core run {run.top_m:g}–{run.bottom_m:g} m"
             values = {"TCR": run.total_core_recovery_pct, "SCR": run.solid_core_recovery_pct, "RQD": run.rqd_pct}
             for name, value in values.items():
-                if value is not None and not 0 <= value <= 100:
-                    issues.append(f"{interval}: {name} {value:g}% outside 0–100%")
+                # TCR above 100 % is core gain (swelling, depth errors of the run); plausible up to ~120 %.
+                upper = 120 if name == "TCR" else 100
+                if value is not None and not 0 <= value <= upper:
+                    issues.append(f"{interval}: {name} {value:g}% outside 0–{upper}%")
             tcr = run.total_core_recovery_pct
             for name in ("SCR", "RQD"):
                 if tcr is not None and values[name] is not None and values[name] > tcr + 0.5:

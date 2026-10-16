@@ -198,7 +198,12 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
         )
 
     done = [doc_id for doc_id in rendered if complete(doc_id)]
+    if dry_run:  # nothing is written, so show what is there so far
+        done = [doc_id for doc_id in rendered if all((p.doc_id, p.page) in classes for p in rendered[doc_id])]
     skipped = sorted(set(rendered) - set(done))
+    partial = sorted(d for d in done if not complete(d))
+    if partial:
+        print(f"  dry run includes documents still being extracted: {', '.join(partial)}")
     if skipped:
         print(f"  ! kept previous results for incomplete documents: {', '.join(skipped)}", file=sys.stderr)
     results = [

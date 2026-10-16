@@ -335,12 +335,14 @@ def test_core_runs_and_samples_are_checked():
 
     bh = make()  # final depth 9 m
     bh.core_runs = [CoreRun(top_m=3, bottom_m=4.5, total_core_recovery_pct=60, solid_core_recovery_pct=50, rqd_pct=80),
-                    CoreRun(top_m=4.5, bottom_m=6, total_core_recovery_pct=120)]
+                    CoreRun(top_m=4.5, bottom_m=6, total_core_recovery_pct=135),
+                    CoreRun(top_m=6, bottom_m=7.5, total_core_recovery_pct=108)]  # core gain: plausible
     bh.samples = [Sample(name="S1", top_m=2), Sample(name="UD4", top_m=9.0, bottom_m=9.5)]
     bh.spt = [SPT(depth_m=10.5, raw="12-15-20")]
     issues = bh.validate_log()
     assert "core run 3–4.5 m: RQD 80% above TCR 60%" in issues
-    assert "core run 4.5–6 m: TCR 120% outside 0–100%" in issues
+    assert "core run 4.5–6 m: TCR 135% outside 0–120%" in issues
+    assert not any(i.startswith("core run 6–7.5 m") for i in issues)
     assert "sample UD4 at 9.5 m below final depth 9 m" in issues
     assert "SPT at 10.5 m below final depth 9 m" in issues
     assert not any("S1" in i or "SCR" in i for i in issues)
@@ -358,3 +360,61 @@ def test_final_depth_is_the_deepest_stated_over_all_sheets():
             (sheet("2 of 2", 10.5, [(8, 10.5)]), SourceRef(file="f", page=2))]
     bh, _ = build_borehole("d", "f", logs, {}, None)
     assert bh.depth_m == 10.5 and not any(i.startswith("layers end at") for i in bh.issues)
+
+
+def test_unit_repeated_from_next_sheet_top_is_kept_once():
+    sheets = _sheets([_xlayer(0, 5.75, "a"), _xlayer(5.75, 6.6, "SAND, medium - coarse")],
+                     [_xlayer(6.0, 6.6, "SAND, medium - coarse"), _xlayer(6.6, 9.0, "clay", "clay")])
+    notes: list[str] = []
+    layers = _layers(sheets, final_depth=9, notes=notes)
+    assert [(l.top_m, l.bottom_m) for l in layers] == [(0, 5.75), (5.75, 6.6), (6.6, 9.0)]
+    assert len(notes) == 1
+
+
+def test_small_discontinuities_do_not_block():
+    bh = make()
+    bh.layers[1].bottom_m = 4.45  # 5 cm not covered (core loss)
+    bh.issues = bh.validate_log()
+    assert any(i.startswith("minor discontinuity 4.45–4.5") for i in bh.issues)
+    assert not any(i.startswith("gap") for i in bh.issues)
+    bh.layers[1].bottom_m = 4.2  # 30 cm: a real gap
+    assert any(i.startswith("gap 4.2–4.5") for i in bh.validate_log())
+
+
+def test_next_sheet_shows_where_the_unit_ends():
+    sheets = _sheets([_xlayer(0, 5.52, "sand"), _xlayer(5.52, 6.6, "LIMESTONE", "limestone")],
+                     [_xlayer(5.52, 6.0, "LIMESTONE, muddy", "limestone"), _xlayer(6.0, 6.21, "FLINT", "unknown")])
+    layers = _layers(sheets, final_depth=6.21)
+    assert [(l.top_m, l.bottom_m) for l in layers] == [(0, 5.52), (5.52, 6.0), (6.0, 6.21)]
+
+
+def test_core_loss_fills_only_gaps_the_recovery_explains():
+    from pipeline.assemble import fill_core_loss
+    from schema.borehole import CoreRun
+    bh = make()
+    bh.layers[1].bottom_m = 4.2  # 0.3 m gap in a 1.5 m run with 80 % recovery (0.3 m lost)
+    bh.core_runs = [CoreRun(top_m=3.5, bottom_m=5.0, total_core_recovery_pct=80)]
+    notes = fill_core_loss(bh)
+    assert len(notes) == 1 and not any(i.startswith("gap") for i in bh.validate_log())
+    assert [l.primary.value for l in bh.layers] == ["fill", "sand", "no_recovery", "clay"]
+
+    bh = make()
+    bh.layers[1].bottom_m = 3.8  # 0.7 m gap is more than the 0.3 m lost: stays a gap
+    bh.core_runs = [CoreRun(top_m=3.5, bottom_m=5.0, total_core_recovery_pct=80)]
+    assert fill_core_loss(bh) == [] and any(i.startswith("gap") for i in bh.validate_log())
+
+
+def test_core_piece_offsets_are_not_checked_against_the_text_layer():
+    src = SourceRef(file="demo.pdf", page=1)
+    pieces = [Layer(top_m=t, bottom_m=b, description_original=f"{round((t - 6) * 100)} - {round((b - 6) * 100)} cm, LIMESTONE",
+                    primary="limestone", source=src) for t, b in [(6.0, 6.21), (6.21, 6.5), (6.5, 6.93), (6.93, 7.4)]]
+    bh = make(layers=pieces)
+    text = "Core log " + "x" * 300 + " 0 - 21 cm 21 - 50 cm 50 - 93 cm 93 - 140 cm"
+    assert text_agreement(bh, {("demo.pdf", 1): text}) is None  # nothing it could confirm
+
+
+def test_log_without_printed_depths_is_not_penalised():
+    bh = make()
+    text = "Borehole log " + "x" * 300 + " Undr. shear strength 100 200 300 400 Job 1241009 Date 2012"
+    score(bh, {("demo.pdf", 1): text}, unreadable=0)
+    assert bh.confidence >= 0.85 and any("not printed" in r for r in bh.score_reasons)

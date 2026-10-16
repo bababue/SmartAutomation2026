@@ -35,6 +35,11 @@ def _variants(v: float) -> set[str]:
     return out
 
 
+# Core logs describe pieces by offsets within the run ('0 - 21 cm, FLINT ...'); their absolute depths are
+# computed, never printed, so the text layer cannot confirm them.
+RELATIVE_PIECE = re.compile(r"^\s*\d+(?:[.,]\d+)?\s*[-–]\s*\d+(?:[.,]\d+)?\s*cm\b", re.I)
+
+
 def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> float | None:
     """Share of extracted layer boundaries that occur literally in the source page's text layer.
     None when the source has no usable text layer (scans, images, outlined vector PDFs)."""
@@ -42,7 +47,7 @@ def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) 
     for layer in bh.layers:
         src = layer.source
         text = page_texts.get((src.file, src.page)) if src else None
-        if not text or len(text) < 200:
+        if not text or len(text) < 200 or RELATIVE_PIECE.match(layer.description_original):
             continue
         numbers = set(re.findall(r"\d+(?:[.,]\d+)?", text))
         for boundary in (layer.top_m, layer.bottom_m):
@@ -52,6 +57,9 @@ def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) 
             found += bool(_variants(boundary) & numbers)
     return found / total if total >= 3 else None
 
+
+# Below this share of matching boundaries the text layer simply does not print them.
+NOT_PRINTED = 0.3
 
 # Without positive evidence the extraction stays below the release threshold.
 UNCONFIRMED_CAP = 0.85
@@ -68,6 +76,17 @@ def covers_full_depth(bh: Borehole, tol: float = 0.05) -> bool:
     return all(abs(a.bottom_m - b.top_m) <= tol for a, b in zip(layers, layers[1:]))
 
 
+def prints_depths(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> bool:
+    """The text layer holds about as many depth-like decimals (within the hole) as there are boundaries:
+    then a mismatch is a contradiction, not a log that only draws its boundaries."""
+    pages = {(layer.source.file, layer.source.page) for layer in bh.layers if layer.source}
+    deepest = max((layer.bottom_m for layer in bh.layers), default=0) + 1
+    numbers = [float(n.replace(",", ".")) for key in pages for n in re.findall(r"(?<![\d.,])\d+[.,]\d{1,2}(?![\d.,])",
+                                                                             page_texts.get(key, ""))]
+    depth_like = sum(1 for v in numbers if 0 < v <= deepest)
+    return depth_like >= 0.5 * max(1, len(bh.layers))
+
+
 def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadable: int) -> None:
     reasons: list[str] = []
     extraction = 1.0
@@ -82,7 +101,12 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
         extraction -= min(0.2, 0.05 * unreadable)
         reasons.append(f"{unreadable} item(s) reported as unreadable")
     agreement = text_agreement(bh, page_texts)
-    if agreement is not None:
+    if agreement is not None and agreement < NOT_PRINTED and not prints_depths(bh, page_texts):
+        # Almost nothing matches: the log draws boundaries against a depth scale instead of printing them.
+        # Neither confirmation nor contradiction.
+        reasons.append("Layer depths are not printed as numbers in the PDF text layer (read from the depth scale)")
+        agreement = None
+    elif agreement is not None:
         if agreement < 0.8:
             extraction -= (0.8 - agreement) * 0.6
         reasons.append(f"{round(agreement * 100)} % of layer depths confirmed by the PDF text layer")

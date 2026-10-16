@@ -197,3 +197,12 @@ def test_coarse_place_does_not_reject_printed_coordinates():
     result = georeference(f"E: {e:.3f}, N: {n:.3f}", "56H MGA94", "AU", lat + 2.5, lon - 1.5, 600.0)
     assert result.location.method.value == "stated_coordinates"
     assert haversine_km(result.location.lat, result.location.lon, lat, lon) < 0.05
+
+
+def test_danish_system_34():
+    # Copenhagen landmark in S34S (EPSG:10250), printed as on Danish logs: '-E: ... (m) N: ... (m) S34S'
+    lat, lon = 55.6761, 12.5683
+    e, n = fwd(10250, lat, lon)
+    result = georeference(f"-E: {-e:.0f} (m) N: {n:.0f} (m) S34S", None, "DK", lat + 0.02, lon - 0.03, 5.0)
+    assert result.location.crs_epsg == 10250, result.issues
+    assert haversine_km(result.location.lat, result.location.lon, lat, lon) < 0.05
