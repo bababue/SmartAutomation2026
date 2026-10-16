@@ -211,3 +211,12 @@ def test_position_outlier_is_flagged():
     flag_position_outliers(holes)
     assert [b.location.confidence for b in holes] == [0.95, 0.95, 0.95, 0.5]
     assert any("km from the other holes" in i for i in holes[3].issues)
+
+
+def test_groundwater_repeated_on_every_sheet_is_kept_once():
+    from pipeline.assemble import _unique_groundwater
+    from schema.borehole import GroundwaterObservation
+    src = [SourceRef(file="f", page=i) for i in (1, 2, 3)]
+    obs = [GroundwaterObservation(depth_m=4.5, kind="standing", raw="GL(-) 4.5 M", source=s) for s in src]
+    obs.append(GroundwaterObservation(depth_m=6.0, kind="struck", raw="6.0", source=src[2]))
+    assert [(g.depth_m, g.source.page) for g in _unique_groundwater(obs)] == [(4.5, 1), (6.0, 3)]

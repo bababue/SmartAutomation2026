@@ -241,6 +241,14 @@ def flag_position_outliers(boreholes: list[Borehole]) -> None:
             b.location.confidence = min(b.location.confidence or 0.0, 0.5)
 
 
+def _unique_groundwater(observations) -> list[GroundwaterObservation]:
+    """Header fields are repeated on every sheet; keep one entry per distinct observation."""
+    seen: dict[tuple, GroundwaterObservation] = {}
+    for g in observations:
+        seen.setdefault((g.depth_m, g.kind, g.reference, g.dry, g.observed_on), g)
+    return list(seen.values())
+
+
 def _first(values):
     return next((v for v in values if v not in (None, "", [])), None)
 
@@ -315,9 +323,10 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
         spt=[SPT(depth_m=s.depth_m, blows=s.blows, increment_mm=s.increment_mm, n_value=s.n_value,
                  refusal=bool(s.refusal), raw=s.raw, source=src)
              for x, src in logs for s in x.spt if s.depth_m is not None],
-        groundwater=[GroundwaterObservation(depth_m=g.depth_m, kind=g.kind, observed_on=_date(g.date), dry=g.dry,
-                                           reference=g.reference, raw=g.raw, source=src)
-                     for x, src in logs for g in x.groundwater],
+        groundwater=_unique_groundwater(
+            GroundwaterObservation(depth_m=g.depth_m, kind=g.kind, observed_on=_date(g.date), dry=g.dry,
+                                   reference=g.reference, raw=g.raw, source=src)
+            for x, src in logs for g in x.groundwater),
         lab_results=[LabResult(parameter=lab.parameter, parameter_raw=lab.parameter_raw, value=v,
                                value_raw=f"{lab.value_raw} {lab.unit_raw or ''}".strip(), top_m=lab.top_m,
                                bottom_m=lab.bottom_m, sample_name=lab.sample_name, source=src)
