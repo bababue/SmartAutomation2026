@@ -257,3 +257,26 @@ def test_location_text_without_source_notes():
                  "Coastal Walk (Path 3)", "Lot 5 (Area A/B)", "Landfill (East)"]:
         assert clean_location_text(name) == name
     assert clean_location_text(None) is None
+
+
+def test_partial_log_is_not_released_even_with_a_good_position():
+    src = SourceRef(file="demo.pdf", page=2)
+    bh = make(layers=[Layer(top_m=5, bottom_m=7, description_original="Sand", primary="sand", source=src),
+                      Layer(top_m=7, bottom_m=10, description_original="Clay", primary="clay", source=src)])
+    bh.depth_m = 10
+    bh.issues = bh.validate_log()
+    score(bh, {}, unreadable=0)
+    assert bh.review_status == ReviewStatus.pending_review
+
+
+def test_release_needs_positive_evidence():
+    bh = make()
+    bh.depth_m = None  # no stated final depth and no text layer: nothing confirms the depths
+    bh.issues = bh.validate_log()
+    score(bh, {}, unreadable=0)
+    assert bh.confidence <= 0.85 and bh.review_status == ReviewStatus.pending_review
+    assert any("confirms" in r for r in bh.score_reasons)
+
+    text = "Borehole log " + "x" * 300 + " 1.20 4.50 9.00"  # text layer confirms the boundaries
+    score(bh, {("demo.pdf", 1): text}, unreadable=0)
+    assert bh.review_status == ReviewStatus.auto_approved

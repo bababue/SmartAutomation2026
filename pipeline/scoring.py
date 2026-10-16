@@ -19,7 +19,7 @@ from . import config
 
 # Findings that always need a human, whatever the score: anything that suggests a misread.
 BLOCKING = ("no layers extracted", "CRS ambiguous", "invalid interval", "non-finite depth", "invalid WGS84",
-            "gap", "overlap", "layers end at", "stale correction")
+            "gap", "overlap", "layers end at", "stale correction", "log starts at", "depths printed in feet")
 
 # Georeferencing doubts that explain a position confidence below the release threshold.
 GEOREF_DOUBTS = ("coordinate system inferred", "coordinate axes inferred", "coordinate notation or datum ambiguous")
@@ -51,6 +51,21 @@ def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) 
     return found / total if total >= 3 else None
 
 
+# Without positive evidence the extraction stays below the release threshold.
+UNCONFIRMED_CAP = 0.85
+
+
+def covers_full_depth(bh: Borehole, tol: float = 0.05) -> bool:
+    """The layers run from the surface to a stated final depth (or length) without a gap or overlap."""
+    final = bh.depth_m or bh.length_m
+    if not bh.layers or final is None:
+        return False
+    layers = sorted(bh.layers, key=lambda layer: layer.top_m)
+    if layers[0].top_m > tol or abs(max(layer.bottom_m for layer in layers) - final) > tol:
+        return False
+    return all(abs(a.bottom_m - b.top_m) <= tol for a, b in zip(layers, layers[1:]))
+
+
 def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadable: int) -> None:
     reasons: list[str] = []
     extraction = 1.0
@@ -69,6 +84,12 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
         if agreement < 0.8:
             extraction -= (0.8 - agreement) * 0.6
         reasons.append(f"{round(agreement * 100)} % of layer depths confirmed by the PDF text layer")
+    # Plausible is not the same as correct: release automatically only with positive evidence.
+    if bh.layers and not (agreement is not None and agreement >= 0.8) and not covers_full_depth(bh):
+        if extraction > UNCONFIRMED_CAP:
+            extraction = UNCONFIRMED_CAP
+            reasons.append("Nothing confirms the layer depths independently (no matching PDF text layer, and the log "
+                           "does not run from 0 m to a stated final depth)")
     bh.confidence = round(max(0.0, min(1.0, extraction)), 2)
 
     loc = bh.location
