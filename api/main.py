@@ -53,6 +53,10 @@ def _fts_query(q: str) -> str:
     return " AND ".join(f'"{t}"*' for t in tokens)
 
 
+def _like_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _feature(r: sqlite3.Row) -> dict:
     props = {k: r[k] for k in r.keys() if k not in ("lat", "lon")}
     props["strip"] = json.loads(r["strip"]) if r["strip"] else None
@@ -72,8 +76,12 @@ def list_boreholes(
 ):
     where, params = ["lat IS NOT NULL"], []
     if q and (fq := _fts_query(q)):
-        where.append("id IN (SELECT id FROM boreholes_fts WHERE boreholes_fts MATCH ?)")
-        params.append(fq)
+        # Text match, or every search word appears in the source document's file path (e.g. 'AUS01').
+        tokens = re.findall(r"\w+", q, flags=re.UNICODE)
+        path_match = " AND ".join("path LIKE ? ESCAPE '\\'" for _ in tokens)
+        where.append("(id IN (SELECT id FROM boreholes_fts WHERE boreholes_fts MATCH ?) "
+                     f"OR doc_id IN (SELECT doc_id FROM documents WHERE {path_match}))")
+        params += [fq, *(f"%{_like_escape(t)}%" for t in tokens)]
     if bbox:
         min_lon, min_lat, max_lon, max_lat = (float(v) for v in bbox.split(","))
         where.append("rid IN (SELECT rid FROM boreholes_rtree WHERE min_lat >= ? AND max_lat <= ? AND min_lon >= ? AND max_lon <= ?)")
@@ -273,19 +281,28 @@ def export_csv(con: DB, status: Literal["all", "released"] = "released"):
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([
-        "BoreholeID", "BoreholeName", "ProjectName", "LocationName", "Latitude_WGS84", "Longitude_WGS84",
+        "BoreholeID", "BoreholeName", "SourceFile", "SourcePages", "ProjectName", "LocationName",
+        "Latitude_WGS84", "Longitude_WGS84",
         "OriginalCoordinates", "OriginalCRS", "SurfaceElevation_m", "ElevationDatum", "BoreholeDepth_m",
         "LayerTop_m", "LayerBottom_m", "Lithology", "Description", "StratigraphicName", "StratigraphicCode",
         "GeologicAge", "Colour", "ReviewStatus", "ReviewedBy", "Score",
     ])
     where = "" if status == "all" else "WHERE review_status IN ('auto_approved', 'approved')"
-    for row in con.execute(f"SELECT data FROM boreholes {where}"):
+    rows = con.execute(
+        f"SELECT data, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file "
+        f"FROM boreholes {where}"
+    )
+    for row in rows:
         bh = Borehole.model_validate_json(row["data"])
         loc = bh.location
         original_crs = f"EPSG:{loc.crs_epsg}" if loc.crs_epsg else loc.crs_raw
+        source_file = row["source_file"]
+        pages = {s.page for s in bh.sources if s.page is not None and (source_file is None or s.file == source_file)}
+        source_pages = ";".join(str(p) for p in sorted(pages)) or None
         for layer in bh.layers or [None]:
             w.writerow([
-                bh.borehole_id, bh.borehole_name, bh.project_name, bh.location_name, loc.lat, loc.lon,
+                bh.borehole_id, bh.borehole_name, source_file, source_pages, bh.project_name, bh.location_name,
+                loc.lat, loc.lon,
                 loc.coords_raw, original_crs, bh.surface_elevation_m, bh.elevation_datum, bh.depth_m,
                 *((layer.top_m, layer.bottom_m, layer.primary.value, layer.description_en or layer.description_original,
                    layer.stratigraphic_name, layer.stratigraphic_code, layer.geologic_age, layer.color)

@@ -253,6 +253,21 @@ def _first(values):
     return next((v for v in values if v not in (None, "", [])), None)
 
 
+# Model artefacts in a location text: "(from text file path ...)", "(see file name ...)", "(reports/x.pdf)".
+_SOURCE_NOTE = re.compile(
+    r"\s*\((?:[^()]*\bfile(?:name)?\b[^()]*|[^()]*\.(?:pdf|png|jpe?g|tiff?|txt|docx?|xlsx?)\b[^()]*)\)",
+    re.IGNORECASE,
+)
+
+
+def clean_location_text(text: str | None) -> str | None:
+    """A printed place name without notes about where the model read it; None if nothing is left."""
+    if not text:
+        return None
+    cleaned = " ".join(_SOURCE_NOTE.sub("", text).split()).strip(" ,;-")
+    return cleaned or None
+
+
 def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceRef]],
                    coord_rows: dict[str, XCoordinateRow], doc_place: tuple[float, float, float] | None,
                    doc_crs: tuple[str, int] | None = None) -> tuple[Borehole, int]:
@@ -273,10 +288,11 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     if from_document:
         crs_raw = doc_crs[0]
     country = _first(x.country for x in xs)
+    location_name = _first(clean_location_text(x.location_text) for x in xs)
     place = next(((x.place_lat, x.place_lon, x.place_precision_km or 10.0) for x in xs
                   if x.place_lat is not None and x.place_lon is not None), None) or doc_place
     geo = georeference(coords_raw, crs_raw, country, *(place or (None, None, None)),
-                       place_name=_first(x.location_text for x in xs))
+                       place_name=location_name)
     location = geo.location
     if location.method == GeorefMethod.stated_coordinates and method == GeorefMethod.linked_table:
         location.method = method
@@ -297,7 +313,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
         borehole_name=name,
         investigation_type=InvestigationType(itype) if itype in ("borehole", "test_pit") else (
             InvestigationType.other if itype else None),
-        location_name=_first(x.location_text for x in xs),
+        location_name=location_name,
         project_id=_first(x.project_id for x in xs),
         project_name=_first(x.project_name for x in xs),
         client=_first(x.client for x in xs),

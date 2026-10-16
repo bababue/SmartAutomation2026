@@ -220,3 +220,18 @@ def test_groundwater_repeated_on_every_sheet_is_kept_once():
     obs = [GroundwaterObservation(depth_m=4.5, kind="standing", raw="GL(-) 4.5 M", source=s) for s in src]
     obs.append(GroundwaterObservation(depth_m=6.0, kind="struck", raw="6.0", source=src[2]))
     assert [(g.depth_m, g.source.page) for g in _unique_groundwater(obs)] == [(4.5, 1), (6.0, 3)]
+
+
+def test_location_text_without_source_notes():
+    from pipeline.assemble import clean_location_text
+
+    assert clean_location_text("Hyde Park, Sydney (from text file path)") == "Hyde Park, Sydney"
+    assert clean_location_text("Marienplatz (from text file path reports/site/log 3.txt)") == "Marienplatz"
+    assert clean_location_text("Harbour Bridge (reports/bridge.pdf)") == "Harbour Bridge"
+    assert clean_location_text("Opera House (opera_logs.PDF), Sydney") == "Opera House, Sydney"
+    assert clean_location_text("(see file name)") is None
+    # Ordinary place names stay as printed
+    for name in ["Hyde Park (North)", "Frankfurt (Main)", "Station Rd / Main St", "St. Paul's (Site B)",
+                 "Coastal Walk (Path 3)", "Lot 5 (Area A/B)", "Landfill (East)"]:
+        assert clean_location_text(name) == name
+    assert clean_location_text(None) is None
