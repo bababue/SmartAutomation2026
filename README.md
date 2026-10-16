@@ -97,7 +97,14 @@ echo "ANTHROPIC_API_KEY=..." > .env
 npm --prefix web run dev                          # UI on http://localhost:5173
 ```
 
-Without a key, try the UI with synthetic data:
+Testing with a Claude subscription instead of an API key: the pipeline can drive the local Claude Code
+CLI (`claude -p`, logged in with your subscription). Slower and subject to the subscription's usage limits:
+
+```bash
+LLM_BACKEND=claude-code .venv/bin/python -m pipeline run --doc profile01
+```
+
+Without any credentials, try the UI with synthetic data:
 
 ```bash
 DB_PATH=data/demo.sqlite .venv/bin/python -m fixtures.demo_data

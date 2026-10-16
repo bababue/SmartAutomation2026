@@ -23,7 +23,12 @@ CLASSIFY_MODEL = os.getenv("CLASSIFY_MODEL", "claude-opus-5-5")
 CLASSIFY_EFFORT = os.getenv("CLASSIFY_EFFORT", "low")
 EXTRACT_MODEL = os.getenv("EXTRACT_MODEL", "claude-opus-5-5")
 EXTRACT_EFFORT = os.getenv("EXTRACT_EFFORT", "medium")
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", "6"))
+# "api": Anthropic API with ANTHROPIC_API_KEY. "claude-code": run the local Claude Code CLI
+# (`claude -p`) with its own login, e.g. for testing with a Claude subscription. Slower, and
+# subject to the subscription's usage limits.
+LLM_BACKEND = os.getenv("LLM_BACKEND", "api")
+CLAUDE_CLI = os.getenv("CLAUDE_CLI", "claude")
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "3" if LLM_BACKEND == "claude-code" else "6"))
 
 # Rendering: long edge in pixels. Logs are dense, so extraction uses a large image.
 EXTRACT_LONG_EDGE = int(os.getenv("EXTRACT_LONG_EDGE", "2000"))
@@ -34,4 +39,4 @@ THUMB_LONG_EDGE = int(os.getenv("THUMB_LONG_EDGE", "900"))
 AUTO_APPROVE_THRESHOLD = float(os.getenv("AUTO_APPROVE_THRESHOLD", "0.9"))
 
 # Bump when prompts or extraction models change so cached responses are not reused.
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"

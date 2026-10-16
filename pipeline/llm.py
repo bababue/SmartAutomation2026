@@ -13,6 +13,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 from typing import TypeVar
 
@@ -56,7 +58,11 @@ Rules:
 - Depths are metres below ground surface along the hole. Convert feet to metres and say so in `notes`.
   If the log only shows elevations (levels), convert to depth using the ground level and say so in `notes`.
 - Layers: one entry per described stratum with its top and bottom depth. On continuation sheets only \
-include what is visible on this page. Keep `description_original` verbatim in the original language and \
+include what is visible on this page. If the last layer continues onto the next sheet, set its bottom_m to the \
+deepest depth shown on this sheet's depth scale and write "continues on next sheet" into `notes`.
+- Check every layer boundary against the depth scale and the drawn boundary line, not only the printed digits. \
+Small or faint digits are easily misread (1.60 vs 1.80, 3.5 vs 8.5). If the printed value and the scale position \
+disagree, use the value that matches the scale and list the boundary in `unreadable`. Keep `description_original` verbatim in the original language and \
 add `description_en`.
 - Lithology: map the main constituent to the closest DIN 4023 class (`primary`), e.g. made ground, \
 asphalt, concrete, rubble → fill; caliche, calcarenite → limestone; granite → plutonic_rock; basalt → \
@@ -130,10 +136,7 @@ def _call_structured(model: str, effort: str, system: str, content: list[dict], 
 
 
 def _json_text(response) -> str:
-    text = "".join(b.text for b in response.content if b.type == "text").strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-    return text
+    return _strip_fences("".join(b.text for b in response.content if b.type == "text"))
 
 
 def _call_json(model: str, effort: str, system: str, content: list[dict], out: type[T], max_tokens: int) -> T:
@@ -175,6 +178,60 @@ def _call_json(model: str, effort: str, system: str, content: list[dict], out: t
     raise AssertionError("unreachable")
 
 
+def _call_claude_code(model: str, system: str, image: Path, text: str, out: type[T]) -> T:
+    """Same task through the local Claude Code CLI in print mode. The page image is read with the
+    Read tool (the only tool allowed); the result is validated against the Pydantic model."""
+    schema = json.dumps(out.model_json_schema(), ensure_ascii=False)
+    prompt = (
+        f"Read the page image at {image.resolve()} and process it as instructed.\n\n{text}\n\n"
+        "Return the result as structured output. Use null where a value is not printed."
+    )
+    cmd = [
+        config.CLAUDE_CLI, "-p", prompt,
+        "--output-format", "json",
+        "--model", model,
+        "--system-prompt", system,
+        "--json-schema", schema,
+        "--tools", "Read",
+        "--allowedTools", "Read",
+        "--add-dir", str(config.PAGES_DIR.resolve()),
+        "--setting-sources", "local",  # no user plugins, hooks or memory in the worker
+        "--strict-mcp-config",
+        "--no-session-persistence",
+    ]
+    last_error = ""
+    for _ in range(2):
+        run_cmd = cmd if not last_error else cmd[:2] + [cmd[2] + f"\n\nA previous answer failed validation:\n{last_error}"] + cmd[3:]
+        proc = subprocess.run(run_cmd, capture_output=True, text=True, timeout=900, cwd=config.ROOT, env=_cli_env())
+        try:
+            result = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {(proc.stderr or proc.stdout)[:500]}")
+        if result.get("is_error"):
+            raise RuntimeError(f"claude CLI error: {str(result.get('result'))[:500]}")
+        data = result.get("structured_output")
+        try:
+            if data is not None:
+                return out.model_validate(data)
+            return out.model_validate_json(_strip_fences(result.get("result") or ""))
+        except ValidationError as exc:
+            last_error = str(exc)[:3000]
+    raise RuntimeError(f"claude CLI output did not validate: {last_error[:500]}")
+
+
+def _cli_env() -> dict[str, str]:
+    """Environment for the CLI: without API credentials, so it uses its own login."""
+    drop = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+    return {k: v for k, v in os.environ.items() if k not in drop}
+
+
+def _strip_fences(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+    return text
+
+
 def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
     path = _cache_path(stage, page)
     if path.exists():
@@ -206,30 +263,23 @@ def cached_extraction(page: PageImage, kind: str) -> PageExtraction | None:
 
 def classify_page(page: PageImage) -> PageClassification:
     thumb = config.PAGES_DIR / page.thumb
-    content = [_image_block(thumb), {"type": "text", "text": f"Text layer (may be empty or scrambled):\n{page.text[:1500]}"}]
-    return _cached(
-        "classify",
-        page,
-        _classify_key(page),
-        PageClassification,
-        lambda: _call_structured(config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT, CLASSIFY_SYSTEM, content,
-                                 PageClassification, 2000),
-    )
+    hint = f"Text layer (may be empty or scrambled):\n{page.text[:1500]}"
+    if config.LLM_BACKEND == "claude-code":
+        produce = lambda: _call_claude_code(config.CLASSIFY_MODEL, CLASSIFY_SYSTEM, thumb, hint, PageClassification)
+    else:
+        content = [_image_block(thumb), {"type": "text", "text": hint}]
+        produce = lambda: _call_structured(config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT, CLASSIFY_SYSTEM, content,
+                                           PageClassification, 2000)
+    return _cached("classify", page, _classify_key(page), PageClassification, produce)
 
 
 def extract_page(page: PageImage, kind: str) -> PageExtraction:
     image = config.PAGES_DIR / page.image
-    content = [
-        _image_block(image),
-        {
-            "type": "text",
-            "text": f"Page type (from a quick pre-check): {kind}\n\nText layer (may be empty or scrambled):\n{page.text[:8000]}",
-        },
-    ]
-    return _cached(
-        "extract",
-        page,
-        _extract_key(page, kind),
-        PageExtraction,
-        lambda: _call_json(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, EXTRACT_SYSTEM, content, PageExtraction, 32000),
-    )
+    hint = f"Page type (from a quick pre-check): {kind}\n\nText layer (may be empty or scrambled):\n{page.text[:8000]}"
+    if config.LLM_BACKEND == "claude-code":
+        produce = lambda: _call_claude_code(config.EXTRACT_MODEL, EXTRACT_SYSTEM, image, hint, PageExtraction)
+    else:
+        content = [_image_block(image), {"type": "text", "text": hint}]
+        produce = lambda: _call_json(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, EXTRACT_SYSTEM, content,
+                                     PageExtraction, 32000)
+    return _cached("extract", page, _extract_key(page, kind), PageExtraction, produce)

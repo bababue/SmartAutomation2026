@@ -87,15 +87,16 @@ def cmd_estimate(args) -> None:
 def cmd_run(args) -> None:
     if not args.doc and not args.all:
         sys.exit("choose documents with --doc NAME (repeatable) or --all")
-    if not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
-        sys.exit("No Anthropic credentials: put ANTHROPIC_API_KEY=... into .env (git-ignored).")
+    if config.LLM_BACKEND == "api" and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
+        sys.exit("No Anthropic credentials: put ANTHROPIC_API_KEY=... into .env (git-ignored), "
+                 "or set LLM_BACKEND=claude-code to use the local Claude Code login.")
     con = store.connect()
     docs = _select(args)
-    print(f"Ingest {len(docs)} documents")
+    print(f"Ingest {len(docs)} documents (LLM backend: {config.LLM_BACKEND})")
     rendered = _ingest(docs, con)
+    if args.max_pages:  # treat the first N pages as the whole document for this run
+        rendered = {doc_id: ps[: args.max_pages] for doc_id, ps in rendered.items()}
     pages = [p for ps in rendered.values() for p in ps]
-    if args.max_pages:
-        pages = [p for p in pages if p.page <= args.max_pages]
     est = len(pages) * COST_CLASSIFY + len(pages) * 0.4 * COST_EXTRACT
     if est > 5 and not args.yes:
         sys.exit(f"{len(pages)} pages, estimated ≈ ${est:.0f}. Re-run with --yes to proceed.")
