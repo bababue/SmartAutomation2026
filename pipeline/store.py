@@ -48,6 +48,10 @@ def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
     con = sqlite3.connect(path, check_same_thread=False, timeout=30)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")  # readers (API) never block the pipeline writer
+    columns = {r["name"] for r in con.execute("PRAGMA table_info(boreholes)")}
+    if columns and "review_status" not in columns:
+        # Database from before the review workflow: derived tables, rebuildable via `pipeline rebuild`.
+        con.executescript("DROP TABLE boreholes; DROP TABLE IF EXISTS boreholes_rtree; DROP TABLE IF EXISTS boreholes_fts;")
     con.executescript(SCHEMA)
     return con
 
