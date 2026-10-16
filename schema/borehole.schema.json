@@ -1,0 +1,1414 @@
+{
+  "$defs": {
+    "CoreRun": {
+      "properties": {
+        "top_m": {
+          "title": "Top M",
+          "type": "number"
+        },
+        "bottom_m": {
+          "title": "Bottom M",
+          "type": "number"
+        },
+        "core": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Core"
+        },
+        "total_core_recovery_pct": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "TCR [%]",
+          "title": "Total Core Recovery Pct"
+        },
+        "solid_core_recovery_pct": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SCR [%]",
+          "title": "Solid Core Recovery Pct"
+        },
+        "rqd_pct": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "RQD [%]",
+          "title": "Rqd Pct"
+        },
+        "fracture_frequency_per_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fracture Frequency Per M"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "top_m",
+        "bottom_m"
+      ],
+      "title": "CoreRun",
+      "type": "object"
+    },
+    "GeorefMethod": {
+      "enum": [
+        "stated_coordinates",
+        "linked_table",
+        "geocoded_place",
+        "manual"
+      ],
+      "title": "GeorefMethod",
+      "type": "string"
+    },
+    "GroundwaterObservation": {
+      "properties": {
+        "depth_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Groundwaterlevel below ground surface",
+          "title": "Depth M"
+        },
+        "kind": {
+          "default": "unknown",
+          "enum": [
+            "struck",
+            "standing",
+            "stable",
+            "unknown"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "observed_on": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed On"
+        },
+        "dry": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "True if the log states 'no water' / 'NO'",
+          "title": "Dry"
+        },
+        "raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "GroundwaterObservation",
+      "type": "object"
+    },
+    "InvestigationType": {
+      "enum": [
+        "borehole",
+        "test_pit",
+        "other"
+      ],
+      "title": "InvestigationType",
+      "type": "string"
+    },
+    "LabParameter": {
+      "description": "Test results on samples — from BoreholeDataFormat.xlsx, target unit in the comment.",
+      "enum": [
+        "water_content",
+        "consistency",
+        "unit_weight",
+        "dry_unit_weight",
+        "ucs",
+        "tensile_strength",
+        "point_load_index",
+        "cai",
+        "rmr",
+        "q",
+        "gsi",
+        "friction_angle",
+        "cohesion",
+        "undrained_shear_strength",
+        "fines",
+        "sand",
+        "gravel",
+        "liquid_limit",
+        "plastic_limit",
+        "plasticity_index",
+        "consistency_index",
+        "hydraulic_conductivity",
+        "e_modulus",
+        "poissons_ratio",
+        "other"
+      ],
+      "title": "LabParameter",
+      "type": "string"
+    },
+    "LabResult": {
+      "properties": {
+        "parameter": {
+          "$ref": "#/$defs/LabParameter"
+        },
+        "parameter_raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Column header as written, e.g. 'Cu (kg/cm2)'",
+          "title": "Parameter Raw"
+        },
+        "value": {
+          "description": "Converted to the target unit in LAB_UNITS",
+          "title": "Value",
+          "type": "number"
+        },
+        "value_raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Value + unit as written, e.g. '0,35 kg/cm2'",
+          "title": "Value Raw"
+        },
+        "top_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Top M"
+        },
+        "bottom_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bottom M"
+        },
+        "sample_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Name"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "parameter",
+        "value"
+      ],
+      "title": "LabResult",
+      "type": "object"
+    },
+    "Layer": {
+      "properties": {
+        "top_m": {
+          "title": "Top M",
+          "type": "number"
+        },
+        "bottom_m": {
+          "title": "Bottom M",
+          "type": "number"
+        },
+        "description_original": {
+          "description": "Description verbatim, original language",
+          "title": "Description Original",
+          "type": "string"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ISO 639-1 code of the original description",
+          "title": "Language"
+        },
+        "description_en": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "English translation of the description",
+          "title": "Description En"
+        },
+        "primary": {
+          "$ref": "#/$defs/Lithology",
+          "description": "Main constituent, drives the DIN 4023 pattern"
+        },
+        "secondary": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SecondaryComponent"
+          },
+          "title": "Secondary",
+          "type": "array"
+        },
+        "uscs": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Soil classification symbol as stated (USCS/AS/BS), e.g. 'CL', 'SM'",
+          "title": "Uscs"
+        },
+        "stratigraphic_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Formation / unit name, e.g. 'Ortenau Formation'",
+          "title": "Stratigraphic Name"
+        },
+        "stratigraphic_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Formation abbreviation as on the log, e.g. 'qORT', 'qhy'",
+          "title": "Stratigraphic Code"
+        },
+        "stratigraphic_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Colour used for the unit on the log, hex if determinable",
+          "title": "Stratigraphic Color"
+        },
+        "engineering_unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "EngineeringSoilUnit / geotechnical unit",
+          "title": "Engineering Unit"
+        },
+        "geologic_age": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Age as written, e.g. 'Quaternary', 'Lower Miocene'",
+          "title": "Geologic Age"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Material colour as described, e.g. 'greyish brown'",
+          "title": "Color"
+        },
+        "pattern_raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Graphic log symbol as shown on the source, if not DIN 4023",
+          "title": "Pattern Raw"
+        },
+        "consistency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Cohesive soils, e.g. 'stiff', 'weich'",
+          "title": "Consistency"
+        },
+        "relative_density": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Granular soils, e.g. 'medium dense'",
+          "title": "Relative Density"
+        },
+        "weathering": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rock weathering grade, e.g. 'slightly weathered', 'W2'",
+          "title": "Weathering"
+        },
+        "rock_strength": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rock Strength"
+        },
+        "moisture": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Moisture"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "top_m",
+        "bottom_m",
+        "description_original",
+        "primary"
+      ],
+      "title": "Layer",
+      "type": "object"
+    },
+    "Lithology": {
+      "enum": [
+        "gravel",
+        "coarse_gravel",
+        "medium_gravel",
+        "fine_gravel",
+        "sand",
+        "coarse_sand",
+        "medium_sand",
+        "fine_sand",
+        "silt",
+        "clay",
+        "peat_humus",
+        "cobbles",
+        "boulders",
+        "volcanic_ash",
+        "topsoil",
+        "fill",
+        "slope_loam",
+        "scree",
+        "boulder_clay",
+        "till_marl",
+        "loess",
+        "loess_loam",
+        "marsh_clay",
+        "meadow_lime",
+        "varved_clay",
+        "gyttja",
+        "lignite",
+        "conglomerate",
+        "breccia",
+        "sandstone",
+        "siltstone",
+        "claystone",
+        "marlstone",
+        "limestone",
+        "dolomite",
+        "anhydrite",
+        "gypsum",
+        "salt_rock",
+        "tuff",
+        "hard_coal",
+        "quartzite",
+        "volcanic_rock",
+        "plutonic_rock",
+        "massive_metamorphic",
+        "foliated_metamorphic",
+        "chalk",
+        "calc_tufa",
+        "no_recovery",
+        "unknown"
+      ],
+      "title": "Lithology",
+      "type": "string"
+    },
+    "Location": {
+      "properties": {
+        "coords_raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Coordinate text exactly as written incl. labels, e.g. 'N: 31,12,345 E: 45,03,210'. Labels are ambiguous across countries (X is northing in Korea, easting elsewhere), so keep them.",
+          "title": "Coords Raw"
+        },
+        "crs_raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "CRS as written, e.g. '55H MGA94', 'OSGB36', 'Mt Eden 2000'",
+          "title": "Crs Raw"
+        },
+        "easting": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Parsed easting (or longitude for geographic CRS) in source CRS",
+          "title": "Easting"
+        },
+        "northing": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Parsed northing (or latitude for geographic CRS) in source CRS",
+          "title": "Northing"
+        },
+        "crs_epsg": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Resolved EPSG code of the source CRS",
+          "title": "Crs Epsg"
+        },
+        "crs_proj": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PROJ string for local grids without an EPSG code",
+          "title": "Crs Proj"
+        },
+        "crs_candidates": {
+          "default": [],
+          "description": "All CRS tried (EPSG codes / PROJ strings) when the choice was ambiguous",
+          "items": {
+            "type": "string"
+          },
+          "title": "Crs Candidates",
+          "type": "array"
+        },
+        "is_planned": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "True if only proposed/planned coordinates are available",
+          "title": "Is Planned"
+        },
+        "lat": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "WGS84 latitude",
+          "title": "Lat"
+        },
+        "lon": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "WGS84 longitude",
+          "title": "Lon"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeorefMethod"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "accuracy_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Estimated horizontal uncertainty in metres",
+          "title": "Accuracy M"
+        },
+        "place_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Place used for geocoding / plausibility check",
+          "title": "Place Name"
+        },
+        "country": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ISO 3166-1 alpha-2",
+          "title": "Country"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "Location",
+      "type": "object"
+    },
+    "Qualifier": {
+      "description": "Proportion of a secondary component, following DIN EN ISO 14688 terminology.",
+      "enum": [
+        "trace",
+        "slightly",
+        "moderately",
+        "very"
+      ],
+      "title": "Qualifier",
+      "type": "string"
+    },
+    "SPT": {
+      "properties": {
+        "depth_m": {
+          "description": "Test depth (top of seating drive)",
+          "title": "Depth M",
+          "type": "number"
+        },
+        "blows": {
+          "default": [],
+          "description": "Blow counts per increment as written, e.g. [4, 5, 5]",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Blows",
+          "type": "array"
+        },
+        "increment_mm": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Length of one increment, usually 150 (sometimes 75)",
+          "title": "Increment Mm"
+        },
+        "n_value": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "N as stated; else blows over the last 300 mm",
+          "title": "N Value"
+        },
+        "refusal": {
+          "default": false,
+          "description": "True for 'R', '50/10', 'N=R' etc.",
+          "title": "Refusal",
+          "type": "boolean"
+        },
+        "raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exactly as written, e.g. '50/10', 'N=R', '6,8,10 = 18'",
+          "title": "Raw"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "depth_m"
+      ],
+      "title": "SPT",
+      "type": "object"
+    },
+    "Sample": {
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SampleName as written, e.g. 'S1', 'UD4'",
+          "title": "Name"
+        },
+        "top_m": {
+          "description": "SampleDepth (top)",
+          "title": "Top M",
+          "type": "number"
+        },
+        "bottom_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bottom M"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SampleType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type_raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type Raw"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "top_m"
+      ],
+      "title": "Sample",
+      "type": "object"
+    },
+    "SampleType": {
+      "enum": [
+        "disturbed",
+        "undisturbed",
+        "split_spoon",
+        "core",
+        "water",
+        "environmental",
+        "other"
+      ],
+      "title": "SampleType",
+      "type": "string"
+    },
+    "SecondaryComponent": {
+      "properties": {
+        "lithology": {
+          "$ref": "#/$defs/Lithology"
+        },
+        "qualifier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Qualifier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "lithology"
+      ],
+      "title": "SecondaryComponent",
+      "type": "object"
+    },
+    "SourceRef": {
+      "properties": {
+        "file": {
+          "description": "File name relative to the dataset root",
+          "title": "File",
+          "type": "string"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "1-based page number (None for single images)",
+          "title": "Page"
+        },
+        "bbox": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Region on the page (x0, y0, x1, y1) in PDF points, if known",
+          "title": "Bbox"
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "title": "SourceRef",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "borehole_id": {
+      "description": "Stable internal ID, e.g. '<file-stem>:<borehole_name>'",
+      "title": "Borehole Id",
+      "type": "string"
+    },
+    "borehole_name": {
+      "description": "Name as written on the log, e.g. 'BH-1', 'BH-07'",
+      "title": "Borehole Name",
+      "type": "string"
+    },
+    "investigation_type": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InvestigationType"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "location_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Location Name"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "project_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Name"
+    },
+    "client": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Client"
+    },
+    "contractor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Contractor"
+    },
+    "start_date": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Start Date"
+    },
+    "end_date": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "End Date"
+    },
+    "location": {
+      "$ref": "#/$defs/Location",
+      "default": {
+        "coords_raw": null,
+        "crs_raw": null,
+        "easting": null,
+        "northing": null,
+        "crs_epsg": null,
+        "crs_proj": null,
+        "crs_candidates": [],
+        "is_planned": null,
+        "lat": null,
+        "lon": null,
+        "method": null,
+        "accuracy_m": null,
+        "place_name": null,
+        "country": null,
+        "confidence": null,
+        "source": null
+      }
+    },
+    "surface_elevation_m": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Ground level [m above datum], positive up; may be negative (e.g. Caspian coast)",
+      "title": "Surface Elevation M"
+    },
+    "surface_elevation_raw": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "As written; some reports use inverted signs ('negative = above datum')",
+      "title": "Surface Elevation Raw"
+    },
+    "elevation_datum": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "As written, e.g. 'mASL', 'AHD', 'OD', 'DVR90', 'RL'",
+      "title": "Elevation Datum"
+    },
+    "depth_m": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "BoreholeDepth: final vertical depth",
+      "title": "Depth M"
+    },
+    "length_m": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "BoreholeLength: length along the hole",
+      "title": "Length M"
+    },
+    "inclination_deg": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "From horizontal; 90 = vertical",
+      "title": "Inclination Deg"
+    },
+    "drilling_method": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Drilling Method"
+    },
+    "notes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Notes"
+    },
+    "layers": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Layer"
+      },
+      "title": "Layers",
+      "type": "array"
+    },
+    "core_runs": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CoreRun"
+      },
+      "title": "Core Runs",
+      "type": "array"
+    },
+    "samples": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Sample"
+      },
+      "title": "Samples",
+      "type": "array"
+    },
+    "spt": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SPT"
+      },
+      "title": "Spt",
+      "type": "array"
+    },
+    "groundwater": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/GroundwaterObservation"
+      },
+      "title": "Groundwater",
+      "type": "array"
+    },
+    "lab_results": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/LabResult"
+      },
+      "title": "Lab Results",
+      "type": "array"
+    },
+    "sources": {
+      "default": [],
+      "description": "All pages this borehole was assembled from",
+      "items": {
+        "$ref": "#/$defs/SourceRef"
+      },
+      "title": "Sources",
+      "type": "array"
+    },
+    "confidence": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Overall extraction confidence",
+      "title": "Confidence"
+    },
+    "issues": {
+      "default": [],
+      "description": "Validation findings, filled by validate()",
+      "items": {
+        "type": "string"
+      },
+      "title": "Issues",
+      "type": "array"
+    },
+    "reviewed": {
+      "default": false,
+      "description": "Checked by a human in the review UI",
+      "title": "Reviewed",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "borehole_id",
+    "borehole_name"
+  ],
+  "title": "Borehole",
+  "type": "object"
+}

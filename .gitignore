@@ -1,0 +1,19 @@
+# Confidential challenge data & local scratch files (must never be committed)
+temp/
+
+# macOS
+.DS_Store
+
+# Python
+.venv/
+__pycache__/
+
+# Secrets
+.env
+
+# Pipeline output (contains confidential extracted data)
+data/
+
+# Node
+node_modules/
+dist/
