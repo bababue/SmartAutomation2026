@@ -189,7 +189,12 @@ export default function App() {
         </div>
         <div className="result-head">
           <span>{loading ? 'Loading…' : `${data.features.length.toLocaleString('en')} shown`}</span>
-          <a href="/api/export.csv" className="link" title="Released records only">Export released (CSV)</a>
+          <span className="export-links">
+            Export released:{' '}
+            <a href="/api/export.xlsx" className="link" title="Released records in Herrenknecht's BoreholeDataFormat">Excel</a>
+            {' · '}
+            <a href="/api/export.csv" className="link" title="Released records, one row per layer">CSV</a>
+          </span>
         </div>
         {error && <p className="error" role="alert">{error}</p>}
         <ResultList features={data.features} selectedId={selectedId} onSelect={setSelectedId} loading={loading} sectionIds={sectionIds} onToggleSection={toggleSection} />

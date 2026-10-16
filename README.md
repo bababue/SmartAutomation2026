@@ -55,7 +55,9 @@ depths that literally appear in that text.
 - Reviewers approve, reject or reopen with name and optional comment; every decision is logged.
 - Re-runs keep human decisions as long as the reviewed content is unchanged; if the data changes, the
   record returns to the queue with a note.
-- The CSV export contains released records only by default.
+- Exports contain released records only by default: `/api/export.xlsx` follows Herrenknecht's
+  BoreholeDataFormat (sheets Metadata, Logdata, Samples, CoreRuns, SPT, Groundwater, TestResults; column
+  names and units of the format), `/api/export.csv` has one row per layer. `?status=all` includes the queue.
 
 ## Large documents
 

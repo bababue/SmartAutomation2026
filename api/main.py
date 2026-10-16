@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, store
+from pipeline import config, corrections, export, store
 from schema.borehole import DIN4023_LABEL_DE, Borehole, Lithology, ReviewStatus
 
 app = FastAPI(title="Borehole Atlas API")
@@ -311,6 +311,22 @@ def export_csv(con: DB, status: Literal["all", "released"] = "released"):
             ])
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=boreholes.csv"})
+
+
+@app.get("/api/export.xlsx")
+def export_xlsx(con: DB, status: Literal["all", "released"] = "released"):
+    """Workbook in Herrenknecht's BoreholeDataFormat (metadata, log data, samples, core runs, SPT,
+    groundwater, test results). Released records only by default, like the CSV."""
+    where = "" if status == "all" else "WHERE review_status IN ('auto_approved', 'approved')"
+    rows = con.execute(
+        f"SELECT data, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file "
+        f"FROM boreholes {where} ORDER BY id"
+    ).fetchall()
+    content = export.workbook([(Borehole.model_validate_json(r["data"]), r["source_file"]) for r in rows])
+    return StreamingResponse(
+        iter([content]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=boreholes.xlsx"},
+    )
 
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
