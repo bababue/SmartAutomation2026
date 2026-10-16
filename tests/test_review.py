@@ -280,3 +280,19 @@ def test_release_needs_positive_evidence():
     text = "Borehole log " + "x" * 300 + " 1.20 4.50 9.00"  # text layer confirms the boundaries
     score(bh, {("demo.pdf", 1): text}, unreadable=0)
     assert bh.review_status == ReviewStatus.auto_approved
+
+
+def test_feet_logs_need_a_person():
+    from pipeline.assemble import unit_findings
+    from pipeline.extraction_models import XLog
+    def log(unit):
+        return XLog.model_validate({**{k: None for k in XLog.model_fields}, "name": "BH1", "depth_unit_raw": unit,
+                                    "layers": [], "spt": [], "core_runs": [], "samples": [], "groundwater": [],
+                                    "lab_results": [], "unreadable": []})
+    assert unit_findings([log("m"), log(None)]) == []
+    found = unit_findings([log("Depth (ft)")])
+    assert found and found[0].startswith("depths printed in feet")
+    bh = make()
+    bh.issues = bh.validate_log() + found
+    score(bh, {}, unreadable=0)
+    assert bh.review_status == ReviewStatus.pending_review

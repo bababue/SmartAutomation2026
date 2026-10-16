@@ -266,6 +266,15 @@ def _unique_groundwater(observations) -> list[GroundwaterObservation]:
     return list(seen.values())
 
 
+FEET = re.compile(r"\b(?:ft|feet|foot)\b|^\s*'\s*$", re.I)
+
+
+def unit_findings(xs: list[XLog]) -> list[str]:
+    """The model converts feet to metres itself; a person checks that conversion once."""
+    units = {x.depth_unit_raw.strip() for x in xs if x.depth_unit_raw and FEET.search(x.depth_unit_raw)}
+    return [f"depths printed in feet ({', '.join(sorted(units))}); check the conversion to metres"] if units else []
+
+
 def _first(values):
     return next((v for v in values if v not in (None, "", [])), None)
 
@@ -367,7 +376,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
                      if (v := _lab_value(lab.parameter, lab.value_raw, lab.unit_raw)) is not None],
         sources=[src for _, src in logs],
     )
-    issues = bh.validate_log() + layer_notes + geo.issues
+    issues = bh.validate_log() + layer_notes + geo.issues + unit_findings(xs)
     unreadable = [u for x in xs for u in x.unreadable]
     issues += [f"unreadable: {u}" for u in unreadable[:5]]
     bh.issues = list(dict.fromkeys(issues))
