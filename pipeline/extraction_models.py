@@ -178,3 +178,21 @@ class XCoordinateRow(BaseModel):
 class PageExtraction(BaseModel):
     logs: list[XLog]
     coordinate_rows: list[XCoordinateRow] = Field(description="Rows of coordinate summary tables on this page")
+
+
+class XLabRow(BaseModel):
+    """One test result on a lab sheet (several parameters of one sample are several rows)."""
+
+    hole_name: str | None = Field(description="Borehole / pit name as printed for this row or in the sheet header")
+    sample_name: str | None = Field(description="Sample id as printed, e.g. 'U3', 'S-12', 'C4'")
+    top_m: float | None = Field(description="Sample top depth in metres (convert feet)")
+    bottom_m: float | None = Field(description="Sample bottom depth in metres; null if only one depth is given")
+    parameter: LabParameter
+    parameter_raw: str = Field(description="Column header or test name as printed, incl. the unit")
+    value_raw: str = Field(description="Value exactly as printed incl. qualifiers like '<' or ranges")
+    unit_raw: str | None = Field(description="Unit as printed, e.g. 'MPa', 'kg/cm2', '%', 'cm/s'")
+
+
+class PageLabResults(BaseModel):
+    rows: list[XLabRow]
+    unreadable: list[str] = Field(description="What you could not read reliably on this page")

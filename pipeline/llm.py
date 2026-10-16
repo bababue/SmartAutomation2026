@@ -22,7 +22,7 @@ import anthropic
 from pydantic import BaseModel, ValidationError
 
 from . import config
-from .extraction_models import PageClassification, PageExtraction
+from .extraction_models import PageClassification, PageExtraction, PageLabResults
 from .ingest import PageImage
 
 T = TypeVar("T", bound=BaseModel)
@@ -92,6 +92,26 @@ continue a log across a sheet break: a unit that started on the previous sheet g
 the previous sheet, use it for `primary` and say so in `notes`; if the hole name on this sheet is illegible \
 or overwritten and the sheet clearly continues the previous one, use the previous name and list it in \
 `unreadable`. Everything else comes from this page only.
+- A text layer extracted from the PDF may be provided. It can be scrambled or wrong; the image is authoritative."""
+
+
+LAB_SYSTEM = """You transcribe laboratory test result sheets from geotechnical site investigations (any \
+language, scans, tables) into structured data. Accuracy matters more than completeness: never invent values. \
+If something is not printed or not readable, use null and list it in `unreadable`.
+
+Rules:
+- One row per test value: a sample with UCS, water content and unit weight gives three rows.
+- `hole_name`: the borehole / pit of the sample exactly as printed (column, row label or sheet header).
+- `sample_name` and depths as printed; depths in metres below ground (convert feet). A single depth goes \
+into `top_m`.
+- `parameter`: the closest class (UCS/unconfined compressive strength → ucs, Brazilian/indirect tensile → \
+tensile_strength, point load Is(50) → point_load_index, Cerchar → cai, permeability → hydraulic_conductivity, \
+LL/PL/PI → liquid_limit/plastic_limit/plasticity_index, natural moisture → water_content, bulk/dry density or \
+unit weight → unit_weight/dry_unit_weight, cohesion/friction angle from shear tests, Cu/Su → \
+undrained_shear_strength, % passing 0.063/0.075 mm → fines); anything else → other.
+- `value_raw` exactly as printed (keep '<', '>', ranges, decimal commas); `unit_raw` as printed in the header \
+or cell. Do not convert values.
+- Skip empty cells, summary statistics (mean, min, max) and test method descriptions.
 - A text layer extracted from the PDF may be provided. It can be scrambled or wrong; the image is authoritative."""
 
 
@@ -291,6 +311,28 @@ def _from_cache(stage: str, page: PageImage, key: str, out: type[T]) -> T | None
         return None
     cached = json.loads(path.read_text())
     return out.model_validate(cached["result"]) if cached.get("key") == key else None
+
+
+def _lab_key(page: PageImage) -> str:
+    image = config.PAGES_DIR / page.image
+    return _cache_key(config.LAB_PROMPT_VERSION, config.EXTRACT_MODEL, config.EXTRACT_EFFORT, image.read_bytes(),
+                      page.text[:8000])
+
+
+def cached_lab_results(page: PageImage) -> PageLabResults | None:
+    return _from_cache("lab", page, _lab_key(page), PageLabResults)
+
+
+def extract_lab_results(page: PageImage) -> PageLabResults:
+    image = config.PAGES_DIR / page.image
+    hint = f"Text layer (may be empty or scrambled):\n{page.text[:8000]}"
+    if config.LLM_BACKEND == "claude-code":
+        produce = lambda: _call_claude_code(config.EXTRACT_MODEL, LAB_SYSTEM, image, hint, PageLabResults)
+    else:
+        content = [_image_block(image), {"type": "text", "text": hint}]
+        produce = lambda: _call_json(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, LAB_SYSTEM, content,
+                                     PageLabResults, 32000)
+    return _cached("lab", page, _lab_key(page), PageLabResults, produce)
 
 
 def cached_classification(page: PageImage) -> PageClassification | None:

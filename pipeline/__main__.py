@@ -176,10 +176,16 @@ def cmd_run(args) -> None:
     todo = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
     print(f"Extract {len(todo)} log/coordinate pages")
     extractions = _extract(todo, classes)
-    _store(con, docs, rendered, classes, extractions)
+    lab_pages = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"]
+    if lab_pages:
+        print(f"Extract {len(lab_pages)} lab result pages")
+    labs = _parallel(llm.extract_lab_results, lab_pages, "lab results")
+    _store(con, docs, rendered, classes, extractions, labs)
 
 
-def _store(con, docs, rendered, classes, extractions) -> None:
+def _store(con, docs, rendered, classes, extractions, labs=None) -> None:
+    """Lab sheets are optional: a failed lab page does not hold back the document's logs."""
+    labs = labs or {}
     source_file = {d.doc_id: d.path for d in docs}
 
     def complete(doc_id: str) -> bool:
@@ -196,7 +202,8 @@ def _store(con, docs, rendered, classes, extractions) -> None:
         print(f"  ! kept previous results for incomplete documents: {', '.join(skipped)}", file=sys.stderr)
     results = [
         PageResult(p.doc_id, source_file[p.doc_id], p.page, classes[(p.doc_id, p.page)].kind.value,
-                   extractions.get((p.doc_id, p.page)), p.text, classes[(p.doc_id, p.page)].crs_text)
+                   extractions.get((p.doc_id, p.page)), p.text, classes[(p.doc_id, p.page)].crs_text,
+                   labs.get((p.doc_id, p.page)))
         for doc_id in done for p in rendered[doc_id]
     ]
     boreholes = assemble(results)
@@ -234,8 +241,11 @@ def cmd_rebuild(args) -> None:
             if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
     for chain in _chains(todo, classes):  # same chains and context as the run, so the cache keys match
         extractions.update(_walk(chain, classes, llm.cached_extraction)[0])
+    labs = {(p.doc_id, p.page): x for ps in rendered.values() for p in ps
+            if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"
+            and (x := llm.cached_lab_results(p)) is not None}
     print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")
-    _store(con, docs, rendered, classes, extractions)
+    _store(con, docs, rendered, classes, extractions, labs)
 
 
 def main() -> None:

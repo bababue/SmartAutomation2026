@@ -32,7 +32,7 @@ from schema.borehole import (
     SourceRef,
 )
 
-from .extraction_models import PageExtraction, XCoordinateRow, XLog
+from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLog
 from .georef import crs_from_hint, georeference, haversine_km
 from .scoring import score
 
@@ -48,6 +48,7 @@ class PageResult:
     extraction: PageExtraction | None
     text: str = ""
     crs_text: str | None = None  # coordinate system statement from the page classification
+    labs: PageLabResults | None = None  # rows of a lab result sheet
 
 
 def _name_key(name: str, separate_numbers: bool) -> str:
@@ -109,6 +110,8 @@ _LAB_FACTORS: list[tuple[set[LabParameter], str, float]] = [
     ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^kg/?cm2|kgf/cm", 98.0665),
     ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^mpa$", 1000.0),
     ({LabParameter.unit_weight, LabParameter.dry_unit_weight}, r"^t/?m3|tn/?m3|g/?cm3|mg/m3", 9.80665),
+    ({LabParameter.hydraulic_conductivity}, r"^cm/s", 0.01),
+    ({LabParameter.hydraulic_conductivity}, r"^m/d(ay)?$", 1 / 86400),
 ]
 
 
@@ -430,7 +433,10 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
                 except Exception as exc:  # one broken record must not stop the whole run
                     print(f"  ! could not assemble {doc_id}:{logs[0][0].name}: {type(exc).__name__}: {exc}")
         _unique_ids(doc_records)
-    for records in built.values():
+    for group, records in built.items():
+        linked, unmatched = link_lab_results([bh for bh, _, _ in records], by_group[group])
+        if unmatched:
+            print(f"  {group}: {linked} lab results linked, {unmatched} without a matching hole")
         flag_position_outliers([bh for bh, _, _ in records])
         for bh, unreadable, page_texts in records:
             score(bh, page_texts, unreadable)
@@ -457,3 +463,47 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
         richer.sources = list({(s.file, s.page): s for s in richer.sources + poorer.sources}.values())
         kept[key] = richer
     return list(kept.values())
+
+
+def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[int, int]:
+    """Attach the rows of lab sheets to the holes of the same document: by hole name, else by a sample
+    name that only one hole has, else to the only hole of the document. Returns (linked, unmatched)."""
+    by_name: dict[str, Borehole] = {}
+    for bh in records:
+        by_name.setdefault(norm_name(bh.borehole_name), bh)
+    by_sample: dict[str, list[tuple[Borehole, object]]] = defaultdict(list)
+    for bh in records:
+        for sample in bh.samples:
+            if sample.name:
+                by_sample[norm_name(sample.name)].append((bh, sample))
+    linked = unmatched = 0
+    for r in pages:
+        if r.labs is None:
+            continue
+        for row in r.labs.rows:
+            value = _lab_value(row.parameter, row.value_raw, row.unit_raw)
+            if value is None:
+                continue  # no number (e.g. 'NP', '-')
+            bh = by_name.get(norm_name(row.hole_name)) if row.hole_name else None
+            sample = None
+            if row.sample_name:
+                hits = by_sample.get(norm_name(row.sample_name), [])
+                if bh is not None:
+                    sample = next((s for b, s in hits if b is bh), None)
+                elif len(hits) == 1:
+                    bh, sample = hits[0]
+            if bh is None and len(records) == 1 and not row.hole_name:
+                bh = records[0]
+            if bh is None:
+                unmatched += 1
+                continue
+            top = row.top_m if row.top_m is not None else (sample.top_m if sample else None)
+            bottom = row.bottom_m if row.bottom_m is not None else (sample.bottom_m if sample and row.top_m is None else None)
+            result = LabResult(parameter=row.parameter, parameter_raw=row.parameter_raw, value=value,
+                               value_raw=f"{row.value_raw} {row.unit_raw or ''}".strip(), top_m=top, bottom_m=bottom,
+                               sample_name=row.sample_name, source=SourceRef(file=r.source_file, page=r.page))
+            key = (result.parameter, round(result.value, 9), result.top_m, result.sample_name)
+            if key not in {(x.parameter, round(x.value, 9), x.top_m, x.sample_name) for x in bh.lab_results}:
+                bh.lab_results.append(result)
+            linked += 1
+    return linked, unmatched
