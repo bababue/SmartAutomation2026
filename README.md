@@ -221,6 +221,35 @@ Restart the API after pipeline code changes; the UI picks up new data on reload.
 npm --prefix web run build      # includes the TypeScript check
 ```
 
+## Evaluation
+
+Measures extraction quality against records a human has checked.
+
+```bash
+.venv/bin/python -m pipeline eval snapshot   # approved records (incl. corrected ones) become the reference
+.venv/bin/python -m pipeline eval            # compare the current database with the reference
+```
+
+`snapshot` writes `data/eval/reference.json` (git-ignored, confidential like all of `data/`). It adds to and
+updates the existing reference, so a record approved earlier stays in it even if a later run changes it and
+sends it back to review. Per record it keeps the layers (top, bottom, primary lithology), the position and the
+EPSG code.
+
+`eval` prints, per document and overall:
+
+| Column | Meaning |
+|---|---|
+| `holes` / `miss` / `extra` | reference records, of those not found by ID, records of the same documents not in the reference (often just not reviewed yet) |
+| `bounds` | share of reference layer boundaries with a current boundary within 0.1 m |
+| `lith` | same primary lithology on layers whose top and bottom both match |
+| `med m` / `max m` | median and maximum position error in metres |
+| `no pos` / `crs≠` | records that lost their position / have a different EPSG code |
+| `corr` | compared records with reviewer corrections |
+
+Reviewer corrections are re-applied after every run, so corrected records match the reference by construction;
+the `corr` column shows how many of the compared records that affects. Typical use: snapshot after a review
+session, change prompts or code, `rebuild`/`run`, then `eval`.
+
 ## Configuration
 
 Environment variables, read from the shell or from `.env`:

@@ -6,6 +6,8 @@
     python -m pipeline run --all --yes        # everything
     python -m pipeline rebuild                # re-assemble from cached extractions (no API calls)
     python -m pipeline rebuild --doc SEA01 --max-pages 6   # same page limit as the run
+    python -m pipeline eval snapshot          # approved records become the evaluation reference
+    python -m pipeline eval                   # extraction quality against that reference
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import config, corrections, ingest, llm, store
+from . import config, corrections, evaluate, ingest, llm, store
 from .assemble import LOG_KINDS, PageResult, assemble, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
@@ -245,6 +247,9 @@ def main() -> None:
             p.add_argument("--yes", action="store_true", help="skip the cost confirmation")
         if name in ("run", "rebuild"):
             p.add_argument("--max-pages", type=int, help="only the first N pages of each document")
+    p = sub.add_parser("eval", help="extraction quality against human-checked records")
+    p.add_argument("action", nargs="?", choices=["compare", "snapshot"], default="compare")
+    p.set_defaults(fn=evaluate.cmd_eval)
     args = parser.parse_args()
     args.fn(args)
 
