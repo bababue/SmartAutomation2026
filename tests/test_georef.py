@@ -137,3 +137,54 @@ def test_decimal_minutes_vs_seconds_is_flagged():
     assert haversine_km(result.location.lat, result.location.lon, lat, lon) < 0.05
     assert result.location.confidence < 0.9
     assert any(i.startswith("coordinate notation or datum ambiguous") for i in result.issues)
+
+
+# Hemisphere letters, degree signs and minutes/seconds (public landmarks)
+GEO_TEXT = [
+    ("33.8568 S, 151.2153 E", (-33.8568, 151.2153)),  # Sydney Opera House
+    ("S 33.8568 E 151.2153", (-33.8568, 151.2153)),
+    ("33,8568 S; 151,2153 E", (-33.8568, 151.2153)),  # decimal comma
+    ("48° 51′ 30″ N, 2° 17′ 40″ E", (48.858333, 2.294444)),  # Eiffel Tower
+    ("48°51'30\"N 2°17'40\"E", (48.858333, 2.294444)),
+    ("N 48°51.5' E 2°17.6667'", (48.858333, 2.294444)),  # degrees and decimal minutes
+    ("40°41′21″N 74°02′40″W", (40.689167, -74.044444)),  # Statue of Liberty
+    ("W 74.0444 N 40.6892", (40.6892, -74.0444)),
+    ("Lat: 48 Lon: 7", (48.0, 7.0)),
+]
+
+
+@pytest.mark.parametrize("text,truth", GEO_TEXT)
+def test_hemispheres_and_degree_signs(text, truth):
+    r = georeference(text, None, None, None, None, None)
+    assert r.location.crs_epsg == 4326
+    assert r.location.lat == pytest.approx(truth[0], abs=1e-5)
+    assert r.location.lon == pytest.approx(truth[1], abs=1e-5)
+
+
+def test_degrees_need_a_marker_and_metres_are_not_degrees():
+    from pipeline.georef import geographic_reading
+
+    assert geographic_reading("48.1 7.9") is None  # plain numbers keep the existing search
+    assert geographic_reading("E 312456.78 N 6251234.50") is None
+    assert geographic_reading("N 29,23,382 E 47,59,898") is None  # degrees + decimal minutes in commas
+    assert geographic_reading("48° 51′ 30″, 2° 17′ 40″") == pytest.approx((48.858333, 2.294444, False), abs=1e-5)
+
+
+def test_place_decides_axis_order_without_hemispheres():
+    # Sydney written longitude first, only degree signs: the named place settles it.
+    r = georeference("151.2153°, -33.8568°", None, "AU", -33.87, 151.21, 5)
+    assert (r.location.lat, r.location.lon) == pytest.approx((-33.8568, 151.2153))
+
+
+def test_nad_datums_in_utm_hints():
+    from pipeline.georef import crs_from_hint
+
+    assert crs_from_hint("NAD83 / UTM zone 17N") == [26917]
+    assert crs_from_hint("NAD 27 UTM 15") == [26715]
+    assert crs_from_hint("WGS84 UTM 17N") == [32617]
+    assert crs_from_hint("UTM 56 South") == [32756]
+    # Toronto CN Tower in NAD83 / UTM 17N
+    e, n = fwd(26917, 43.6426, -79.3871)
+    r = georeference(f"E {e:.2f} N {n:.2f}", "NAD83 / UTM zone 17N", "CA", 43.65, -79.38, 5)
+    assert r.location.crs_epsg == 26917
+    assert haversine_km(r.location.lat, r.location.lon, 43.6426, -79.3871) < 0.01

@@ -107,7 +107,12 @@ def crs_from_hint(crs_raw: str | None) -> list[int]:
         if "south" in text or re.search(r"\b\d{1,2} ?s\b", text):
             south = True
         if 1 <= zone <= 60:
-            out.append((32700 if south else 32600) + zone)
+            if not south and re.search(r"nad ?83", text) and zone <= 23:
+                out.append(26900 + zone)  # NAD83 / UTM zone N
+            elif not south and re.search(r"nad ?27", text) and 3 <= zone <= 22:
+                out.append(26700 + zone)  # NAD27 / UTM zone N
+            else:
+                out.append((32700 if south else 32600) + zone)
     for pattern, epsgs in CRS_HINTS:
         if epsgs and re.search(pattern, text):
             out.extend(epsgs)
@@ -208,6 +213,57 @@ def parse_tokens(coords_raw: str) -> list[Token]:
     return tokens
 
 
+# One geographic coordinate as printed: 'S 33.9249', '33.9249 S', '48° 30′ 00″ N', 'Lat: -33,92'. Degrees take
+# at most three digits and stand alone, so projected metres ('E 312456.78') never match.
+GEO_COMPONENT = re.compile(
+    r"(?:(?P<label>latitude|longitude|lat|lon|long)\.?\s*[:=]?\s*)?"
+    r"(?:(?P<pre>[NSEW])\s*)?"
+    r"(?<![\d.,])(?P<sign>-)?(?P<deg>\d{1,3}(?:[.,]\d+)?)(?!\d|[.,]\d)\s*(?P<degsym>°|º|˚|\bdeg\b)?\s*"
+    r"(?:(?P<min>\d{1,2}(?:[.,]\d+)?)\s*(?:['′’]|\bmin\b)\s*)?"
+    r"(?:(?P<sec>\d{1,2}(?:[.,]\d+)?)\s*(?:[\"″”]|''|′′|\bsec\b)\s*)?"
+    r"(?(pre)|(?P<post>[NSEW](?![A-Za-z]))?)",  # 'S 33.9 E 151.2': the E belongs to the next value
+    re.IGNORECASE,
+)
+
+
+def _geo_value(m: re.Match) -> tuple[str | None, float] | None:
+    """(axis 'lat'/'lon'/None, signed degrees) of a matched component, None if it is not clearly geographic."""
+    hemis = {h.upper() for h in (m.group("pre"), m.group("post")) if h}
+    label = (m.group("label") or "").lower()
+    if not (hemis or label or m.group("degsym") or m.group("min")) or len(hemis) > 1:
+        return None
+    deg, minutes, seconds = (float(g.replace(",", ".")) if g else 0.0 for g in m.group("deg", "min", "sec"))
+    if (m.group("min") or m.group("sec")) and (not deg.is_integer() or minutes >= 60 or seconds >= 60):
+        return None
+    if m.group("sec") and not minutes.is_integer():
+        return None
+    value = deg + minutes / 60 + seconds / 3600
+    axis = "lat" if hemis & {"N", "S"} or label.startswith("lat") else "lon" if hemis or label else None
+    if m.group("sign") or hemis & {"S", "W"}:
+        value = -value
+    return axis, value
+
+
+def geographic_reading(coords_raw: str) -> tuple[float, float, bool] | None:
+    """(lat, lon, labelled) when the text is one latitude and one longitude written as degrees with
+    hemisphere letters, degree signs or lat/lon labels. labelled=False: order assumed latitude first."""
+    text = coords_raw.replace("−", "-").replace("–", "-")
+    parts = [v for m in GEO_COMPONENT.finditer(text) if m.group("deg") and (v := _geo_value(m))]
+    if len(parts) != 2:
+        return None
+    (axis_a, a), (axis_b, b) = parts
+    if {axis_a, axis_b} == {"lat", "lon"}:
+        lat, lon = (a, b) if axis_a == "lat" else (b, a)
+        labelled = True
+    elif axis_a is None and axis_b is None:
+        lat, lon, labelled = a, b, False
+    else:
+        return None
+    if abs(lat) > 90 or abs(lon) > 180:
+        return None
+    return lat, lon, labelled
+
+
 def _sexagesimal(token: Token) -> list[tuple[float, bool]]:
     """Degree interpretations of a token as (value, alternative): '31,12,345' → 31°12.345' and, as an
     alternative reading, 31°12'34.5"; 153012.40 → 15°30'12.40"."""
@@ -274,6 +330,16 @@ def _pairs(tokens: list[Token]) -> list[tuple[Token, Token, bool]]:
 
 
 def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place: tuple[float, float] | None) -> list[Candidate]:
+    if geo := geographic_reading(coords_raw):
+        # Written as degrees with hemispheres or degree signs: no projected or swapped readings to try.
+        lat, lon, labelled = geo
+        readings = [(lat, lon)] if labelled else [(lat, lon)] + ([(lon, lat)] if abs(lon) <= 90 else [])
+        note = "geographic" if labelled else "geographic (axes as guessed)"
+        out = [Candidate(a, b, "EPSG:4326", GEOGRAPHIC, b, a, note, False) for a, b in readings]
+        if place:
+            for c in out:
+                c.distance_km = haversine_km(c.lat, c.lon, place[0], place[1])
+        return out
     tokens = parse_tokens(coords_raw)
     hinted = crs_from_hint(crs_raw) + crs_from_hint(coords_raw)
     epsgs = list(hinted)
