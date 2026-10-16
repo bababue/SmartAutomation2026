@@ -441,6 +441,26 @@ class Borehole(BaseModel):
             final = self.length_m if self.length_m is not None else self.depth_m
             if final is not None and abs(covered - final) > 0.1:
                 issues.append(f"layers end at {covered} m, stated final depth/length {final} m")
+        for run in self.core_runs:
+            interval = f"core run {run.top_m:g}–{run.bottom_m:g} m"
+            values = {"TCR": run.total_core_recovery_pct, "SCR": run.solid_core_recovery_pct, "RQD": run.rqd_pct}
+            for name, value in values.items():
+                if value is not None and not 0 <= value <= 100:
+                    issues.append(f"{interval}: {name} {value:g}% outside 0–100%")
+            tcr = run.total_core_recovery_pct
+            for name in ("SCR", "RQD"):
+                if tcr is not None and values[name] is not None and values[name] > tcr + 0.5:
+                    issues.append(f"{interval}: {name} {values[name]:g}% above TCR {tcr:g}%")
+        # Tests and samples cannot lie below the end of the hole.
+        end = self.length_m if self.length_m is not None else self.depth_m
+        if end is None and layers:
+            end = max(layer.bottom_m for layer in layers)
+        if end is not None:
+            deepest = [(f"sample {s.name or ''}".rstrip(), s.bottom_m if s.bottom_m is not None else s.top_m)
+                       for s in self.samples] + [("SPT", t.depth_m) for t in self.spt]
+            for what, depth in deepest:
+                if depth - end > 0.1:
+                    issues.append(f"{what} at {depth:g} m below final depth {end:g} m")
         for gw in self.groundwater:
             if gw.dry and gw.depth_m is not None:
                 issues.append(f"groundwater marked dry but has level {gw.depth_m} m")

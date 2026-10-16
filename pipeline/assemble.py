@@ -153,20 +153,54 @@ def _continues(prev: Layer, nxt: Layer) -> bool:
     return bool(CONTINUED.search(nxt.description_original)) or a == b
 
 
+SHEET = re.compile(r"(\d{1,2})\s*(?:of|de|von|aus|di|sur|af|av|/)\s*(\d{1,2})", re.IGNORECASE)
+
+
+def missing_sheets(logs: list[tuple[XLog, SourceRef]]) -> list[str]:
+    """'missing sheets: 2 of 3' when the printed sheet indicators ('1 of 3', 'Hoja 3 de 3') leave a hole.
+    Only numbering that plausibly counts this hole's sheets is checked (at most as many missing as found):
+    '5 of 40' is a sheet number of the whole report."""
+    seen: set[int] = set()
+    totals: Counter[int] = Counter()
+    for log, _ in logs:
+        m = SHEET.search(log.sheet or "")
+        if m and 1 <= int(m.group(1)) <= int(m.group(2)) <= 50:
+            seen.add(int(m.group(1)))
+            totals[int(m.group(2))] += 1
+    if not totals:
+        return []
+    total = totals.most_common(1)[0][0]
+    missing = [k for k in range(1, total + 1) if k not in seen]
+    if not missing or len(missing) > len(seen):
+        return []
+    return [f"missing sheets: {', '.join(map(str, missing))} of {total}"]
+
+
 def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
             notes: list[str] | None = None) -> list[Layer]:
     flat = [(x, src) for log, src in logs for x in log.layers]
+    if notes is not None:
+        notes.extend(missing_sheets(logs))
     # Fill missing boundaries from neighbours: top ← previous bottom, bottom ← next top / final depth.
+    # Surface and final depth are assumptions, not readings: they are reported as findings.
     tops = [x.top_m for x, _ in flat]
     bottoms = [x.bottom_m for x, _ in flat]
+    inferred: list[str] = []
     for i in range(len(flat)):
         if tops[i] is None:
             tops[i] = bottoms[i - 1] if i > 0 else 0.0
+            if i == 0 and bottoms[i] is not None:
+                inferred.append("boundary inferred: top of the first layer not readable, set to 0 m")
         if bottoms[i] is None:
             if i + 1 < len(flat):
                 bottoms[i] = tops[i + 1]  # stays None if the next top is unknown too
             else:
                 bottoms[i] = final_depth  # only the last layer may close at the final depth
+                if final_depth is not None and tops[i] is not None:
+                    inferred.append(f"boundary inferred: bottom of the last layer not readable, "
+                                    f"set to the final depth {final_depth:g} m")
+    if notes is not None:
+        notes.extend(inferred)
     layers: list[Layer] = []
     for (x, src), top, bottom in zip(flat, tops, bottoms):
         if top is None or bottom is None:

@@ -65,6 +65,7 @@ def test_layers_without_bottoms_are_not_fabricated():
                       relative_density=None, weathering=None, rock_strength=None, moisture=None, bbox=None)
 
     class Log:
+        sheet = None
         layers = [x(0, None), x(None, 5), x(5, 10)]
 
     layers = _layers([(Log, SourceRef(file="f", page=1))], final_depth=10)
@@ -82,7 +83,7 @@ def _xlayer(top, bottom, description="a", primary="sand"):
 def _sheets(*pages):
     out = []
     for page, layers in enumerate(pages, start=1):
-        log = type("Log", (), {"layers": layers})
+        log = type("Log", (), {"layers": layers, "sheet": None})
         out.append((log, SourceRef(file="f", page=page)))
     return out
 
@@ -296,3 +297,50 @@ def test_feet_logs_need_a_person():
     bh.issues = bh.validate_log() + found
     score(bh, {}, unreadable=0)
     assert bh.review_status == ReviewStatus.pending_review
+
+
+def _sheet_logs(*sheets):
+    return [(type("Log", (), {"sheet": s, "layers": []}), SourceRef(file="f", page=i))
+            for i, s in enumerate(sheets, start=1)]
+
+
+def test_missing_sheets_block_release():
+    from pipeline.assemble import missing_sheets
+
+    assert missing_sheets(_sheet_logs("1 of 3", "3 of 3")) == ["missing sheets: 2 of 3"]
+    assert missing_sheets(_sheet_logs("Hoja 1 de 2")) == ["missing sheets: 2 of 2"]
+    assert missing_sheets(_sheet_logs("Sheet 1/2", "Sheet 2/2")) == []
+    assert missing_sheets(_sheet_logs(None, None)) == []
+    assert missing_sheets(_sheet_logs("5 of 40", "6 of 40")) == []  # report page numbers, not this hole's sheets
+    bh = make()
+    bh.issues.append("missing sheets: 2 of 3")
+    score(bh, {}, unreadable=0)
+    assert bh.review_status == ReviewStatus.pending_review
+
+
+def test_inferred_boundaries_are_reported():
+    class Log:
+        sheet = None
+        layers = [_xlayer(None, 2.0), _xlayer(2.0, 5.0), _xlayer(5.0, None)]
+
+    notes: list[str] = []
+    layers = _layers([(Log, SourceRef(file="f", page=1))], final_depth=8.0, notes=notes)
+    assert [(l.top_m, l.bottom_m) for l in layers] == [(0, 2), (2, 5), (5, 8)]
+    assert notes == ["boundary inferred: top of the first layer not readable, set to 0 m",
+                     "boundary inferred: bottom of the last layer not readable, set to the final depth 8 m"]
+
+
+def test_core_runs_and_samples_are_checked():
+    from schema.borehole import SPT, CoreRun, Sample
+
+    bh = make()  # final depth 9 m
+    bh.core_runs = [CoreRun(top_m=3, bottom_m=4.5, total_core_recovery_pct=60, solid_core_recovery_pct=50, rqd_pct=80),
+                    CoreRun(top_m=4.5, bottom_m=6, total_core_recovery_pct=120)]
+    bh.samples = [Sample(name="S1", top_m=2), Sample(name="UD4", top_m=9.0, bottom_m=9.5)]
+    bh.spt = [SPT(depth_m=10.5, raw="12-15-20")]
+    issues = bh.validate_log()
+    assert "core run 3–4.5 m: RQD 80% above TCR 60%" in issues
+    assert "core run 4.5–6 m: TCR 120% outside 0–100%" in issues
+    assert "sample UD4 at 9.5 m below final depth 9 m" in issues
+    assert "SPT at 10.5 m below final depth 9 m" in issues
+    assert not any("S1" in i or "SCR" in i for i in issues)
