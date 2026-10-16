@@ -46,7 +46,8 @@ CLASSIFY_SYSTEM = """You sort pages of geotechnical site investigation documents
 borehole / test pit / probe whose log or coordinates appear on it, with names exactly as printed. \
 A borehole log is a page showing depth-wise layer descriptions of one hole (often with SPT, samples, \
 core recovery). Report prose that merely mentions boreholes is "text". Summary tables listing \
-coordinates of several holes are "coordinate_table"."""
+coordinates of several holes are "coordinate_table". If the page states the coordinate system, grid, datum \
+or zone anywhere (title block, notes, legend, report text), copy that statement into `crs_text`."""
 
 EXTRACT_SYSTEM = """You transcribe geotechnical borehole and test pit logs into structured data for a \
 global subsurface database used to design tunnel boring machines. Accuracy matters more than \
@@ -78,6 +79,19 @@ named site or town in `place_lat`/`place_lon` with a realistic `place_precision_
 sanity-check the printed coordinates, so base it on the place names, not on the coordinates.
 - SPT: keep the printed notation in `raw`; blow counts per increment in `blows`.
 - Elevation: copy the printed ground level text into `elevation_raw`; `elevation_m` positive up as printed.
+- Header, title block, footnotes and legend: read them completely for the coordinate system / grid / datum / \
+zone (→ `crs_raw`, also when it is printed away from the coordinates, e.g. 'All coordinates MGA94 Zone 55'), the \
+elevation datum (→ `elevation_datum`, e.g. 'AHD', 'mOD', 'NN', 'MSL') and the groundwater reference point \
+(→ `reference` of each groundwater entry: below ground, below top of casing, other).
+- Evidence: for every layer and for the coordinates give `bbox`/`coords_bbox`, the region of the page image \
+where the value is printed (layer: its depth labels and description row), as [x0, y0, x1, y1] fractions of the \
+image width and height with the origin top left. Approximate is fine; null if you cannot locate it.
+- Previous sheet: a short summary of the previous sheet of the same document may be given. Use it only to \
+continue a log across a sheet break: a unit that started on the previous sheet gets this sheet's top depth \
+(the top of its depth scale), not the original top; if the soil or rock name of such a unit is printed only on \
+the previous sheet, use it for `primary` and say so in `notes`; if the hole name on this sheet is illegible \
+or overwritten and the sheet clearly continues the previous one, use the previous name and list it in \
+`unreadable`. Everything else comes from this page only.
 - A text layer extracted from the PDF may be provided. It can be scrambled or wrong; the image is authoritative."""
 
 
@@ -103,10 +117,30 @@ def _classify_key(page: PageImage) -> str:
                       page.text[:1500])
 
 
-def _extract_key(page: PageImage, kind: str) -> str:
+def _extract_key(page: PageImage, kind: str, context: str) -> str:
     image = config.PAGES_DIR / page.image
     return _cache_key(config.PROMPT_VERSION, config.EXTRACT_MODEL, config.EXTRACT_EFFORT, image.read_bytes(),
-                      page.text[:8000], kind)
+                      page.text[:8000], kind, context)
+
+
+def sheet_context(prev: PageExtraction | None) -> str:
+    """Compact summary of the previous sheet for continuation pages ('' if there is none). Part of the
+    cache key, so `rebuild` has to rebuild it from the same cached extraction."""
+    if prev is None or not prev.logs:
+        return ""
+    lines = []
+    for log in prev.logs:
+        head = f"- Hole '{log.name}'" + (f", sheet {log.sheet}" if log.sheet else "")
+        if log.final_depth_m is not None:
+            head += f", final depth {log.final_depth_m:g} m"
+        lines.append(head)
+        for layer in log.layers[-2:]:
+            top = "?" if layer.top_m is None else f"{layer.top_m:g}"
+            bottom = "?" if layer.bottom_m is None else f"{layer.bottom_m:g}"
+            text = " ".join(layer.description_original.split())[:160]
+            strat = ", ".join(filter(None, [layer.stratigraphic_code, layer.stratigraphic_name]))
+            lines.append(f"  last layers: {top}-{bottom} m, {layer.primary.value}: {text}" + (f" [{strat}]" if strat else ""))
+    return "\n".join(lines)
 
 
 def _check_stop(response) -> None:
@@ -263,8 +297,8 @@ def cached_classification(page: PageImage) -> PageClassification | None:
     return _from_cache("classify", page, _classify_key(page), PageClassification)
 
 
-def cached_extraction(page: PageImage, kind: str) -> PageExtraction | None:
-    return _from_cache("extract", page, _extract_key(page, kind), PageExtraction)
+def cached_extraction(page: PageImage, kind: str, context: str = "") -> PageExtraction | None:
+    return _from_cache("extract", page, _extract_key(page, kind, context), PageExtraction)
 
 
 def classify_page(page: PageImage) -> PageClassification:
@@ -279,13 +313,15 @@ def classify_page(page: PageImage) -> PageClassification:
     return _cached("classify", page, _classify_key(page), PageClassification, produce)
 
 
-def extract_page(page: PageImage, kind: str) -> PageExtraction:
+def extract_page(page: PageImage, kind: str, context: str = "") -> PageExtraction:
     image = config.PAGES_DIR / page.image
     hint = f"Page type (from a quick pre-check): {kind}\n\nText layer (may be empty or scrambled):\n{page.text[:8000]}"
+    if context:
+        hint += f"\n\nPrevious sheet of this document (context only):\n{context}"
     if config.LLM_BACKEND == "claude-code":
         produce = lambda: _call_claude_code(config.EXTRACT_MODEL, EXTRACT_SYSTEM, image, hint, PageExtraction)
     else:
         content = [_image_block(image), {"type": "text", "text": hint}]
         produce = lambda: _call_json(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, EXTRACT_SYSTEM, content,
                                      PageExtraction, 32000)
-    return _cached("extract", page, _extract_key(page, kind), PageExtraction, produce)
+    return _cached("extract", page, _extract_key(page, kind, context), PageExtraction, produce)

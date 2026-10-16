@@ -62,7 +62,7 @@ def test_layers_without_bottoms_are_not_fabricated():
         return XLayer(top_m=top, bottom_m=bottom, description_original="a", description_en=None, primary="sand",
                       secondary=[], uscs=None, stratigraphic_name=None, stratigraphic_code=None,
                       stratigraphic_color=None, geologic_age=None, color=None, consistency=None,
-                      relative_density=None, weathering=None, rock_strength=None, moisture=None)
+                      relative_density=None, weathering=None, rock_strength=None, moisture=None, bbox=None)
 
     class Log:
         layers = [x(0, None), x(None, 5), x(5, 10)]
@@ -76,7 +76,7 @@ def _xlayer(top, bottom, description="a", primary="sand"):
     return XLayer(top_m=top, bottom_m=bottom, description_original=description, description_en=None, primary=primary,
                   secondary=[], uscs=None, stratigraphic_name=None, stratigraphic_code=None,
                   stratigraphic_color=None, geologic_age=None, color=None, consistency=None,
-                  relative_density=None, weathering=None, rock_strength=None, moisture=None)
+                  relative_density=None, weathering=None, rock_strength=None, moisture=None, bbox=None)
 
 
 def _sheets(*pages):
@@ -176,3 +176,38 @@ def test_review_api(con):
     released = client.get("/api/boreholes", params={"status": "released"}).json()["features"]
     assert [f["properties"]["id"] for f in released] == ["demo:BH1"]
     assert client.post("/api/boreholes/missing/review", json={"decision": "approved", "reviewer": "A"}).status_code == 404
+
+
+def test_lithology_carried_over_sheet_break_only():
+    sheets = _sheets([_xlayer(0, 20, "granite, slightly weathered", "plutonic_rock")],
+                     [_xlayer(20, 30, "joints at 22-25 m", "unknown"), _xlayer(30, 40, "medium rock", "unknown")])
+    notes: list[str] = []
+    layers = _layers(sheets, final_depth=40, notes=notes)
+    # The unit running over the break inherits; the next unit on the same sheet stays unknown.
+    assert [l.primary.value for l in layers] == ["plutonic_rock", "plutonic_rock", "unknown"]
+    assert len(notes) == 1
+
+
+def test_document_crs_prefers_resolvable_statement():
+    from pipeline.assemble import PageResult, document_crs
+    pages = [
+        PageResult("d", "d.pdf", 1, "text", None, "Report. Levels in m AHD. All coordinates are MGA94 Zone 56."),
+        PageResult("d", "d.pdf", 2, "borehole_log", None, "", None),
+        PageResult("d", "d.pdf", 3, "legend", None, "", "Grid: MGA94 Zone 56"),
+    ]
+    text, page = document_crs(pages)
+    assert "MGA94" in text and page in (1, 3)
+    assert document_crs([PageResult("d", "d.pdf", 1, "text", None, "Site investigation in Korea")]) is None
+
+
+def test_position_outlier_is_flagged():
+    from pipeline.assemble import flag_position_outliers
+    holes = []
+    for i, (lat, lon) in enumerate([(48.47, 7.94), (48.471, 7.941), (48.472, 7.939), (49.9, 7.94)]):
+        bh = make()
+        bh.borehole_id = f"demo:BH{i}"
+        bh.location = Location(lat=lat, lon=lon, method=GeorefMethod.stated_coordinates, confidence=0.95)
+        holes.append(bh)
+    flag_position_outliers(holes)
+    assert [b.location.confidence for b in holes] == [0.95, 0.95, 0.95, 0.5]
+    assert any("km from the other holes" in i for i in holes[3].issues)

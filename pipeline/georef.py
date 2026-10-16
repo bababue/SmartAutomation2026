@@ -37,6 +37,11 @@ CRS_HINTS: list[tuple[str, list[int]]] = [
     (r"etrs ?89.*utm ?33|utm33e89", [25833]),
     (r"gauss|krüger|kruger|\bgk\b", [31466, 31467, 31468, 31469]),
     (r"korea|kgd ?2002|east belt", [5187, 5186, 5185, 5188]),
+    # Korean origin names (GRS80 belt and the older Bessel "modified" belt are both in use)
+    (r"동부\s?원점", [5187, 5176]),
+    (r"중부\s?원점", [5186, 5174]),
+    (r"서부\s?원점", [5185, 5173]),
+    (r"동해\s?원점", [5188, 5177]),
     (r"posgar", [5343, 5344, 5345, 5346, 5347, 5348, 5349]),
     (r"sirgas", [31981, 31982, 31983, 31984, 31985]),
     (r"lv95|ch1903\+", [2056]),

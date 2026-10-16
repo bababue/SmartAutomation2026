@@ -16,7 +16,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config, ingest, llm, store
-from .assemble import LOG_KINDS, PageResult, assemble
+from .assemble import LOG_KINDS, PageResult, assemble, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
 
@@ -72,6 +72,65 @@ def _parallel(fn, items, label):
     return results
 
 
+# Continuation sheets can be separated by a photo or legend page.
+CHAIN_GAP = 3
+
+
+def _chains(pages: list[ingest.PageImage], classes) -> list[list[ingest.PageImage]]:
+    """Extraction order. A log page that shares a hole name with the previous log page of the same
+    document (per the classification) continues it: it waits for that page and gets its summary as
+    context. Independent chains run in parallel."""
+    chains: list[list[ingest.PageImage]] = []
+    last: dict[str, tuple[ingest.PageImage, set[str], int]] = {}
+    for p in sorted(pages, key=lambda p: (p.doc_id, p.page)):
+        c = classes[(p.doc_id, p.page)]
+        if c.kind.value not in LOG_KINDS:
+            chains.append([p])
+            continue
+        names = {norm_name(log.name) for log in c.logs}
+        prev = last.get(p.doc_id)
+        if prev and names & prev[1] and p.page - prev[0].page <= CHAIN_GAP:
+            index = prev[2]
+            chains[index].append(p)
+        else:
+            index = len(chains)
+            chains.append([p])
+        last[p.doc_id] = (p, names, index)
+    return chains
+
+
+def _walk(chain, classes, extract):
+    """Extract one chain in page order; each page gets the summary of the previous one."""
+    results, failed, prev = {}, [], None
+    for p in chain:
+        kind = classes[(p.doc_id, p.page)].kind.value
+        try:
+            x = extract(p, kind, llm.sheet_context(prev))
+        except Exception as exc:  # keep going; report at the end
+            failed.append((p, exc))
+            x = None
+        if x is not None:
+            results[(p.doc_id, p.page)] = x
+        prev = x
+    return results, failed
+
+
+def _extract(todo, classes):
+    chains = _chains(todo, classes)
+    results, failed, done = {}, [], 0
+    with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as pool:
+        for fut in as_completed([pool.submit(_walk, ch, classes, llm.extract_page) for ch in chains]):
+            r, f = fut.result()
+            results.update(r)
+            failed += f
+            before, done = done, done + len(r) + len(f)
+            if done // 10 > before // 10 or done == len(todo):
+                print(f"  extract: {done}/{len(todo)}", flush=True)
+    for item, exc in failed:
+        print(f"  ! extract failed {item.doc_id} p{item.page}: {type(exc).__name__}: {exc}", file=sys.stderr)
+    return results
+
+
 def cmd_ingest(args) -> None:
     con = store.connect()
     _ingest(_select(args), con)
@@ -113,7 +172,7 @@ def cmd_run(args) -> None:
 
     todo = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
     print(f"Extract {len(todo)} log/coordinate pages")
-    extractions = _parallel(lambda p: llm.extract_page(p, classes[(p.doc_id, p.page)].kind.value), todo, "extract")
+    extractions = _extract(todo, classes)
     _store(con, docs, rendered, classes, extractions)
 
 
@@ -134,7 +193,7 @@ def _store(con, docs, rendered, classes, extractions) -> None:
         print(f"  ! kept previous results for incomplete documents: {', '.join(skipped)}", file=sys.stderr)
     results = [
         PageResult(p.doc_id, source_file[p.doc_id], p.page, classes[(p.doc_id, p.page)].kind.value,
-                   extractions.get((p.doc_id, p.page)), p.text)
+                   extractions.get((p.doc_id, p.page)), p.text, classes[(p.doc_id, p.page)].crs_text)
         for doc_id in done for p in rendered[doc_id]
     ]
     boreholes = assemble(results)
@@ -162,12 +221,12 @@ def cmd_rebuild(args) -> None:
     for ps in rendered.values():
         for p in ps:
             c = llm.cached_classification(p)
-            if c is None:
-                continue
-            classes[(p.doc_id, p.page)] = c
-            x = llm.cached_extraction(p, c.kind.value)
-            if x is not None:
-                extractions[(p.doc_id, p.page)] = x
+            if c is not None:
+                classes[(p.doc_id, p.page)] = c
+    todo = [p for ps in rendered.values() for p in ps
+            if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
+    for chain in _chains(todo, classes):  # same chains and context as the run, so the cache keys match
+        extractions.update(_walk(chain, classes, llm.cached_extraction)[0])
     print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")
     _store(con, docs, rendered, classes, extractions)
 

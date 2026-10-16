@@ -5,6 +5,8 @@ export type Lithology = string
 export interface SourceRef {
   file: string
   page: number | null
+  /** Approximate region on the page image as fractions (x0, y0, x1, y1), read by the vision model. */
+  bbox: [number, number, number, number] | null
 }
 
 export interface Layer {
@@ -41,6 +43,7 @@ export interface Location {
   place_name: string | null
   country: string | null
   confidence: number | null
+  source: SourceRef | null
 }
 
 export interface SPT {
@@ -55,6 +58,7 @@ export interface Groundwater {
   depth_m: number | null
   kind: string
   dry: boolean | null
+  reference: 'ground' | 'casing' | 'other' | null
   raw: string | null
 }
 

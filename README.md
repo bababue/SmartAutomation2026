@@ -61,6 +61,13 @@ size (some inputs are ~80 MB / 150 pages) does not matter for API limits:
 3. Per-page cache: interrupted runs resume, re-assembly (`pipeline rebuild`) costs nothing.
 4. Context across pages is restored in code: multi-sheet logs are merged by hole name, coordinate tables
    are linked to logs, lab sheets can be linked by hole name and depth.
+5. Continuation sheets (same hole name as the previous log page) are extracted in page order, each with a
+   short summary of the previous sheet (last layers, hole name); independent logs run in parallel.
+6. A coordinate system stated anywhere in the document (other logs, coordinate tables, notes, legends, report
+   text) is used for logs that do not name one; holes far from the others of the same document are flagged.
+
+Every layer and the coordinates carry an approximate region on the source page (read by the vision model);
+the UI outlines it on the original page when a reviewer hovers the value.
 
 ## Repository layout
 

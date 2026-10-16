@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Detail, Layer } from '../types'
+import type { Detail, Layer, SourceRef } from '../types'
 import { SHOW_SOURCE_FILE } from '../dev'
 import { lithStyle, patternId } from '../lithology'
 import { Profile } from './Profile'
@@ -35,17 +35,19 @@ export function DetailPanel({ detail, onClose, onReviewChange }: Props) {
   const bh = detail.borehole
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
+  const [coordsHovered, setCoordsHovered] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
   const pages = detail.source_pages
   const page = pages[Math.min(pageIndex, pages.length - 1)]  // the panel is keyed by id; clamp anyway
 
-  // Follow the hovered layer to the page it was read from.
+  // What is hovered, and where it was read: follow it to its page and outline it there.
+  const focus: SourceRef | null = coordsHovered ? loc.source : hovered != null ? bh.layers[hovered]?.source ?? null : null
   useEffect(() => {
-    if (hovered == null) return
-    const src = bh.layers[hovered]?.source
-    const i = pages.findIndex((p) => p.file === src?.file && p.page === src?.page)
+    if (!focus) return
+    const i = pages.findIndex((p) => p.file === focus.file && p.page === focus.page)
     if (i >= 0) setPageIndex(i)
-  }, [hovered, bh.layers, pages])
+  }, [focus, pages])
+  const highlight = focus?.bbox && page && focus.file === page.file && focus.page === page.page ? focus.bbox : null
 
   // 'report.pdf p. 1, 2' per source file
   const sourceFiles = useMemo(() => {
@@ -96,7 +98,10 @@ export function DetailPanel({ detail, onClose, onReviewChange }: Props) {
 
           <h3>Record</h3>
           <dl className="record">
-            <dt>Coordinates as printed</dt><dd>{loc.coords_raw ?? '–'}{loc.crs_raw ? ` (${loc.crs_raw})` : ''}</dd>
+            <dt>Coordinates as printed</dt>
+            <dd onMouseEnter={() => setCoordsHovered(true)} onMouseLeave={() => setCoordsHovered(false)}>
+              {loc.coords_raw ?? '–'}{loc.crs_raw ? ` (${loc.crs_raw})` : ''}
+            </dd>
             <dt>Position (WGS84)</dt>
             <dd>
               {loc.lat != null ? `${fmt(loc.lat, 6)}, ${fmt(loc.lon, 6)}` : '–'}
@@ -109,7 +114,7 @@ export function DetailPanel({ detail, onClose, onReviewChange }: Props) {
             <dt>Method</dt><dd>{bh.drilling_method ?? '–'}</dd>
             <dt>Client</dt><dd>{bh.client ?? '–'}</dd>
             <dt>Contractor</dt><dd>{bh.contractor ?? '–'}</dd>
-            {bh.groundwater.length > 0 && (<><dt>Groundwater</dt><dd>{bh.groundwater.map((g) => g.dry ? 'dry' : `${fmt(g.depth_m)} m (${g.kind})`).join('; ')}</dd></>)}
+            {bh.groundwater.length > 0 && (<><dt>Groundwater</dt><dd>{bh.groundwater.map((g) => g.dry ? 'dry' : `${fmt(g.depth_m)} m ${g.reference === 'casing' ? 'below casing ' : ''}(${g.kind})`).join('; ')}</dd></>)}
           </dl>
 
           <h3>Layers</h3>
@@ -159,7 +164,18 @@ export function DetailPanel({ detail, onClose, onReviewChange }: Props) {
               <p className="muted source-file">{page.file}</p>
               <a href={page.url} target="_blank" rel="noreferrer" className="source-link">
                 <img src={page.url} alt={`Original page ${page.page} of ${page.file}`} />
+                {highlight && (
+                  <span
+                    className="source-highlight"
+                    title="Approximate position read by the model"
+                    style={{
+                      left: `${highlight[0] * 100}%`, top: `${highlight[1] * 100}%`,
+                      width: `${(highlight[2] - highlight[0]) * 100}%`, height: `${(highlight[3] - highlight[1]) * 100}%`,
+                    }}
+                  />
+                )}
               </a>
+              <p className="muted source-hint">Hover a layer or the coordinates to outline where they were read.</p>
             </>
           ) : (
             <p className="muted">No source page stored for this record.</p>

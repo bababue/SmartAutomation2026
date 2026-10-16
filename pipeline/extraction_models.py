@@ -39,6 +39,10 @@ class PageClassification(BaseModel):
     logs: list[LogRef] = Field(description="Boreholes/pits whose log or coordinates appear on this page")
     language: str | None = Field(description="ISO 639-1 code of the main language of the page")
     has_coordinates: bool = Field(description="True if coordinates or a coordinate table are visible")
+    crs_text: str | None = Field(
+        description="Statement of the coordinate system, grid, datum or zone exactly as printed on this page "
+        "(e.g. 'Coordinates: MGA94 Zone 55'); null if none"
+    )
 
 
 class XSecondary(BaseModel):
@@ -64,6 +68,10 @@ class XLayer(BaseModel):
     weathering: str | None
     rock_strength: str | None
     moisture: str | None
+    bbox: list[float] | None = Field(
+        description="Where this is printed on the page image: [x0, y0, x1, y1] as fractions of image width and "
+        "height (0-1, origin top left). Approximate is fine; null if unsure"
+    )
 
 
 class XSPT(BaseModel):
@@ -95,6 +103,9 @@ class XSample(BaseModel):
 class XGroundwater(BaseModel):
     depth_m: float | None = Field(description="Water level below ground in metres")
     kind: Literal["struck", "standing", "stable", "unknown"]
+    reference: Literal["ground", "casing", "other"] | None = Field(
+        description="What the depth is measured from, if stated (below ground, below top of casing, ...)"
+    )
     date: str | None = Field(description="ISO date if readable")
     dry: bool | None = Field(description="True if the log explicitly states no water / dry")
     raw: str
@@ -134,6 +145,10 @@ class XLog(BaseModel):
         description="Coordinate text exactly as printed incl. labels, e.g. 'N: 31,12,345 E: 45,03,210'"
     )
     crs_raw: str | None = Field(description="Coordinate system / datum text as printed, e.g. '55H MGA94'")
+    coords_bbox: list[float] | None = Field(
+        description="Where this is printed on the page image: [x0, y0, x1, y1] as fractions of image width and "
+        "height (0-1, origin top left). Approximate is fine; null if unsure"
+    )
     elevation_raw: str | None = Field(description="Ground level / collar elevation exactly as printed")
     elevation_m: float | None
     elevation_datum: str | None

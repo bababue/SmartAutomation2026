@@ -32,7 +32,8 @@ class SourceRef(BaseModel):
     file: str = Field(description="File name relative to the dataset root")
     page: int | None = Field(None, description="1-based page number (None for single images)")
     bbox: tuple[float, float, float, float] | None = Field(
-        None, description="Region on the page (x0, y0, x1, y1) in PDF points, if known"
+        None, description="Region on the page image (x0, y0, x1, y1) as fractions of width/height (0-1, origin "
+        "top left), if known. Approximate: read by the vision model"
     )
 
 
@@ -273,6 +274,9 @@ class GroundwaterObservation(BaseModel):
     kind: Literal["struck", "standing", "stable", "unknown"] = "unknown"
     observed_on: date | None = None
     dry: bool | None = Field(None, description="True if the log states 'no water' / 'NO'")
+    reference: Literal["ground", "casing", "other"] | None = Field(
+        None, description="Reference point of depth_m, if stated (ground surface, top of casing, other)"
+    )
     raw: str | None = None
     source: SourceRef | None = None
 

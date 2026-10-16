@@ -39,4 +39,4 @@ THUMB_LONG_EDGE = int(os.getenv("THUMB_LONG_EDGE", "900"))
 AUTO_APPROVE_THRESHOLD = float(os.getenv("AUTO_APPROVE_THRESHOLD", "0.9"))
 
 # Bump when prompts or extraction models change so cached responses are not reused.
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"

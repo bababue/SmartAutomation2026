@@ -221,6 +221,9 @@ button, input, select { font: inherit; color: inherit; }
 .page-tab { padding: 2px 8px; border: 1px solid var(--grid); border-radius: 2px; background: #fff; cursor: pointer; font-size: 13px; }
 .page-tab-on { border-color: var(--water); background: var(--water-soft); }
 .source-file { font-size: 12px; margin: 0 0 6px; overflow-wrap: anywhere; }
+.source-link { position: relative; display: block; }
+.source-highlight { position: absolute; border: 2px solid #c2410c; background: rgba(194, 65, 12, 0.12); border-radius: 2px; pointer-events: none; }
+.source-hint { font-size: 12px; margin: 6px 0 0; }
 .source-link img { display: block; width: 100%; border: 1px solid var(--grid); background: #fff; cursor: zoom-in; }
 
 /* Views ------------------------------------------------------------------ */
@@ -276,7 +279,7 @@ button, input, select { font: inherit; color: inherit; }
   .detail-body { grid-template-columns: 230px minmax(0, 1fr); overflow: auto; }
   .detail-body > section { overflow: visible; }
   .detail-source { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--grid); }
-  .source-link img { max-width: 640px; }
+  .source-link { max-width: 640px; }  /* the outline is positioned on the link box */
 }
 @media (max-width: 760px) {
   .tabs { order: 3; }
