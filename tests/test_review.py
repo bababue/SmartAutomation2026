@@ -108,6 +108,28 @@ def test_leading_zeros_in_hole_names():
     assert norm_name("BH-10") == "BH10"
     assert norm_name("TP-0") == "TP0"
     assert id_key("BH-01") == "BH01"  # IDs keep the written form
+    assert norm_name("BH No. 1") == "BH1"
+    assert id_key("BH_ZZ01") == "BHZZ01"
+
+
+def test_number_groups_keep_holes_apart():
+    assert norm_name("BH1-01") == norm_name("BH1-1") == norm_name("BH 1.1") == "BH1-1"
+    assert norm_name("BH10-1") == "BH10-1" != norm_name("BH1-01")
+    assert id_key("BH1-01") == "BH101"  # existing IDs unchanged ...
+    assert id_key("BH1-01", separate_numbers=True) == "BH1-01"  # ... unless they collide
+
+
+def test_colliding_ids_are_separated():
+    from pipeline.assemble import _unique_ids
+
+    a = make()
+    a.borehole_id, a.borehole_name = "doc:BH101", "BH1-01"
+    b = make()
+    b.borehole_id, b.borehole_name = "doc:BH101", "BH10-1"
+    c = make()
+    c.borehole_id, c.borehole_name = "doc:BH2", "BH-2"
+    _unique_ids([a, b, c])
+    assert [x.borehole_id for x in (a, b, c)] == ["doc:BH1-01", "doc:BH10-1", "doc:BH2"]
 
 
 def test_inferred_crs_is_explained_in_review_reasons():

@@ -50,16 +50,33 @@ class PageResult:
     crs_text: str | None = None  # coordinate system statement from the page classification
 
 
-def id_key(name: str) -> str:
-    """Name part of the borehole ID: 'BH No. 01' → 'BH01'. Keeps leading zeros so IDs stay stable."""
-    s = re.sub(r"[^A-Z0-9]", "", name.upper())
-    s = re.sub(r"NO(?=\d)", "", s)  # 'BH No. 1' → 'BH1'
-    return s or name.upper()
+def _name_key(name: str, separate_numbers: bool) -> str:
+    s = name.upper().replace("|", " ")
+    if separate_numbers:  # 'BH1-01' and 'BH10-1' stay apart
+        s = re.sub(r"(?<=\d)[^A-Z0-9]+(?=\d)", "|", s)
+    s = re.sub(r"[^A-Z0-9|]", "", s)
+    return re.sub(r"NO(?=\d)", "", s).replace("|", "-")  # 'BH No. 1' → 'BH1'
+
+
+def id_key(name: str, separate_numbers: bool = False) -> str:
+    """Name part of the borehole ID: 'BH No. 01' → 'BH01'. Keeps leading zeros so IDs stay stable.
+    `separate_numbers` keeps a '-' between number groups, for names that would otherwise collide."""
+    return _name_key(name, separate_numbers) or name.upper()
 
 
 def norm_name(name: str) -> str:
-    """Key for matching sheets, tables and documents: also ignores leading zeros ('BH-01' = 'BH-1')."""
-    return re.sub(r"(?<!\d)0+(?=\d)", "", id_key(name))
+    """Key for matching sheets, tables and documents: ignores separators and leading zeros
+    ('BH-01' = 'BH 1' = 'BH No. 1'), but keeps number groups apart ('BH1-01' = 'BH1-1' ≠ 'BH10-1')."""
+    return re.sub(r"(?<!\d)0+(?=\d)", "", _name_key(name, separate_numbers=True)) or name.upper()
+
+
+def _unique_ids(records: list[Borehole]) -> None:
+    """Holes whose plain IDs collide ('BH1-01' and 'BH10-1' → 'BH101') keep their number groups apart."""
+    seen = Counter(bh.borehole_id for bh in records)
+    for bh in records:
+        if seen[bh.borehole_id] > 1:
+            doc_id = bh.borehole_id.split(":", 1)[0]
+            bh.borehole_id = f"{doc_id}:{id_key(bh.borehole_name, separate_numbers=True)}"
 
 
 def _num(raw: str | None) -> float | None:
@@ -393,14 +410,17 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
         if places:
             doc_place = (statistics.median(p[0] for p in places), statistics.median(p[1] for p in places),
                          statistics.median(p[2] for p in places))
+        doc_records: list[Borehole] = []
         for logs in groups.values():
             if any(log.layers for log, _ in logs):
                 try:
                     bh, unreadable = build_borehole(doc_id, pages[0].source_file, logs, coord_rows, doc_place,
                                                     group_crs[group])
                     built[group].append((bh, unreadable, page_texts))
+                    doc_records.append(bh)
                 except Exception as exc:  # one broken record must not stop the whole run
                     print(f"  ! could not assemble {doc_id}:{logs[0][0].name}: {type(exc).__name__}: {exc}")
+        _unique_ids(doc_records)
     for records in built.values():
         flag_position_outliers([bh for bh, _, _ in records])
         for bh, unreadable, page_texts in records:
