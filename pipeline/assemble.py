@@ -536,7 +536,9 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
         if other is None:
             kept[key] = bh
             continue
-        richer, poorer = (bh, other) if len(bh.layers) > len(other.layers) else (other, bh)
+        # The better-checked record wins; the layer count only breaks ties (more layers can mean over-segmented).
+        better = lambda b: (b.confidence or 0.0, len(b.layers))
+        richer, poorer = (bh, other) if better(bh) > better(other) else (other, bh)
         richer.sources = list({(s.file, s.page): s for s in richer.sources + poorer.sources}.values())
         kept[key] = richer
     return list(kept.values())
