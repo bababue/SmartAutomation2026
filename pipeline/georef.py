@@ -74,6 +74,9 @@ COUNTRY_CRS: dict[str, list[int]] = {
 
 GEOGRAPHIC = 4326
 
+# East-oriented reconstructions of the Danish System 34/45 grids, whose original y axis points west.
+WESTING_GRIDS = {10250, 10160, 10254}
+
 
 @lru_cache(maxsize=None)
 def _to_wgs84(epsg: int) -> Transformer:
@@ -370,12 +373,15 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
                 if abs(n) < 1000 and abs(e) < 1000:
                     continue
                 for epsg in epsgs:
-                    try:
-                        lon, lat = _to_wgs84(epsg).transform(e, n)
-                    except Exception:
-                        continue
-                    if math.isfinite(lat) and math.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180:
-                        out.append(Candidate(lat, lon, f"EPSG:{epsg}", epsg, e, n, "projected" + swap_note, epsg in hinted))
+                    # Danish System 34/45 count y towards the west; logs print it with or without the sign.
+                    for east in ([e, -e] if epsg in WESTING_GRIDS and e > 0 else [e]):
+                        try:
+                            lon, lat = _to_wgs84(epsg).transform(east, n)
+                        except Exception:
+                            continue
+                        if math.isfinite(lat) and math.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180:
+                            note = "projected" + (" (westing)" if east != e else "") + swap_note
+                            out.append(Candidate(lat, lon, f"EPSG:{epsg}", epsg, east, n, note, epsg in hinted))
     if place:
         for c in out:
             c.distance_km = haversine_km(c.lat, c.lon, place[0], place[1])

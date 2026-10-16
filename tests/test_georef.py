@@ -206,3 +206,12 @@ def test_danish_system_34():
     result = georeference(f"-E: {-e:.0f} (m) N: {n:.0f} (m) S34S", None, "DK", lat + 0.02, lon - 0.03, 5.0)
     assert result.location.crs_epsg == 10250, result.issues
     assert haversine_km(result.location.lat, result.location.lon, lat, lon) < 0.05
+
+
+def test_danish_system_34_printed_as_positive_westing():
+    lat, lon = 55.6761, 12.5683
+    e, n = fwd(10250, lat, lon)  # e < 0 in the east-oriented reconstruction
+    result = georeference(f"X : {-e:.0f} (m) Y : {n:.0f} (m)", None, "DK", lat + 0.01, lon - 0.02, 2.0)
+    assert result.location.crs_epsg == 10250, result.issues
+    assert haversine_km(result.location.lat, result.location.lon, lat, lon) < 0.05
+    assert not any(i.startswith("CRS ambiguous") for i in result.issues)
