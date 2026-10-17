@@ -602,6 +602,8 @@ button, input, select { font: inherit; color: inherit; }
 .section-cell { stroke: var(--ink); stroke-width: 0.3; }
 .section-hole:hover .section-hole-spine { stroke: var(--water); stroke-width: 2; }
 .section-hole:hover .section-cell { stroke: var(--water); stroke-width: 1; }
+.section-hole-hover .section-hole-spine { stroke: var(--water); stroke-width: 2; }
+.section-hole-hover .section-cell { stroke: var(--water); stroke-width: 1; }
 .section-hole:focus-visible .section-hole-spine { stroke: var(--ink); stroke-width: 2; }
 .section-hole:focus-visible .section-cell { stroke: var(--ink); stroke-width: 1; }
 .section-tooltip { position: absolute; z-index: 5; max-width: 260px; pointer-events: none; }

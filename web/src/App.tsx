@@ -34,7 +34,7 @@ export default function App() {
   const [routeActive, setRouteActive] = useState(initial.routeActive)
   const [tunnels, setTunnels] = useState<SavedTunnel[]>(loadTunnels)
   const [activeTunnelId, setActiveTunnelId] = useState<string | null>(initial.tunnelId)
-  const [grouped, setGrouped] = useState(true)
+  const [grouped, setGrouped] = useStoredFlag('borehole-atlas.group-results', 'on', 'off', () => true)
   const activeTunnel = tunnels.find((tunnel) => tunnel.id === activeTunnelId) ?? null
   const route = activeTunnel?.route ?? null
   const routeHoleIds = activeTunnel?.holeIds ?? EMPTY_IDS
@@ -57,6 +57,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId)
+  const [hoveredHoleId, setHoveredHoleId] = useState<string | null>(null)
   // Holes opened from "Similar ground elsewhere", one step per jump; the button shows only on the hole jumped to.
   const [trail, setTrail] = useState<{ from: { id: string; name: string }; to: string }[]>([])
   const back = trail.at(-1)?.to === selectedId ? trail.at(-1) : undefined
@@ -67,7 +68,7 @@ export default function App() {
   const [reviewFilters, setReviewFilters] = useState<ReviewFilters>(initial.reviewFilters)
   const [auditOnly, setAuditOnly] = useState(initial.auditOnly)
   const [statsTab, setStatsTab] = useState(initial.statsTab)
-  const [listOpen, setListOpen] = useState(initial.routeActive || initial.view === 'review' ? true : initial.listOpen)
+  const [listOpen, setListOpen] = useState(initial.listOpen)
   const [sheetWidth, setSheetWidth] = useState<number | null>(null)  // null: default split; a reload resets it
   const beforeSource = useRef<{ listOpen: boolean; sheetWidth: number | null }>({ listOpen: true, sheetWidth: null })
   // The source page needs the room: opening it hides the list and widens the sheet so the record
@@ -166,7 +167,7 @@ export default function App() {
       setReviewFilters(s.reviewFilters)
       setAuditOnly(s.auditOnly)
       setStatsTab(s.statsTab)
-      setListOpen(s.routeActive || s.view === 'review' ? true : s.listOpen)
+      setListOpen(s.listOpen)
       setFilters(s.filters)
       setQuery(s.filters.q)
     }
@@ -292,6 +293,9 @@ export default function App() {
   }, [data.features, known, selectedId])
   const inTunnel = routeActive && view === 'map'
   const activeRoute = inTunnel ? route : null
+  const inactiveRoutes = useMemo(() => inTunnel ? tunnels.filter((tunnel) => tunnel.id !== activeTunnelId)
+    .map((tunnel) => tunnel.route).filter((item): item is TunnelRoute => item !== null) : [], [inTunnel, tunnels, activeTunnelId])
+  const hoveredHole = hoveredHoleId ? routeFeatures.find((feature) => feature.properties.id === hoveredHoleId) : null
   const nearby = useMemo(() => activeRoute ? nearbyBoreholes(routePoints.features, activeRoute) : [], [routePoints, activeRoute])
   const routeCandidates = useMemo(() => {
     if (!activeRoute) return nearby
@@ -404,10 +408,10 @@ export default function App() {
         </div>
       </header>
 
-      {!inTunnel && view !== 'review' && <button className="edge-tab list-toggle" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} aria-controls="sidebar"
+      <button className="edge-tab list-toggle" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} aria-controls="sidebar"
         aria-label={listOpen ? 'Hide filters and results' : 'Show filters and results'} title={listOpen ? 'Hide list' : 'Show list'}>
         {listOpen ? '‹' : '›'}
-      </button>}
+      </button>
       <aside className="sidebar" id="sidebar" inert={!listOpen}>
         <div className="filters view-tabs">
           <div className="filter-bar" role="group" aria-label="Views">
@@ -458,7 +462,8 @@ export default function App() {
       </aside>
 
       <main className={`map-wrap${inTunnel ? ' map-wrap-section' : ''}`}>
-        <MapView data={points} route={activeRoute} routeDraft={routeDraft}
+        <MapView data={points} route={activeRoute} inactiveRoutes={inactiveRoutes} routeDraft={routeDraft}
+          hoveredHole={hoveredHole?.geometry.coordinates ?? null} onHoverHole={setHoveredHoleId}
           onRoutePoint={(point) => setRouteDraft((draft) => draft ? [...draft, point] : draft)}
           selectedId={selectedId} focus={focus} onSelect={(id) => { setSelectedId(id); setListOpen(true) }}
           sheetWidth={detail ? sheetWidth : null} dark={dark} view3d={view3d} />
@@ -473,10 +478,12 @@ export default function App() {
             features={routeFeatures}
             route={activeRoute}
             selectedId={selectedId}
+            hoveredId={hoveredHoleId}
+            onHover={setHoveredHoleId}
             onSelect={setSelectedId}
             onRemove={toggleRouteHole}
           />
-        ) : inTunnel && (
+        ) : inTunnel && activeTunnel && (
           <section className="section" aria-label="Tunnel profile">
             <header className="section-head"><h2>{activeTunnel?.name || 'Tunnel profile'}</h2></header>
             <div className="section-plot section-empty">
@@ -484,7 +491,7 @@ export default function App() {
                 <line x1="58" x2="100%" y1="257" y2="257" className="section-axis" />
                 <line x1="58" x2="58" y1="36" y2="257" className="section-axis" />
               </svg>
-              <p>{activeTunnel ? 'Draw a tunnel route to see its profile here.' : 'Select a tunnel to see its profile, or create a new tunnel.'}</p>
+              <p>Draw a tunnel route to see its profile here.</p>
             </div>
           </section>
         )}

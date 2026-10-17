@@ -12,6 +12,8 @@ interface Props {
   features: Feature[]
   route: TunnelRoute
   selectedId: string | null
+  hoveredId: string | null
+  onHover: (id: string | null) => void
   onSelect: (id: string) => void
   onRemove: (id: string) => void
 }
@@ -120,7 +122,7 @@ function useBoxZoom({ plotWidth, svgWidth, onZoom, onPick, onDragStart }: {
 }
 
 /** Boreholes along a route, with lithology inferred between adjacent logs. */
-export function SectionView({ features, route, selectedId, onSelect, onRemove }: Props) {
+export function SectionView({ features, route, selectedId, hoveredId, onHover, onSelect, onRemove }: Props) {
   const section = useRef<HTMLElement>(null)
   const box = useRef<HTMLDivElement>(null)
   const tooltip = useRef<HTMLDivElement>(null)
@@ -418,10 +420,11 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove }:
             const lineWidth = Math.max(1, Math.min(COL, nearest * 0.7))
             const hitWidth = Math.max(lineWidth, Math.min(24, nearest * 0.9))
             return (
-              <g key={p.id} data-hole-id={p.id} className={`section-hole${p.id === selectedId ? ' section-hole-on' : ''}`}
+              <g key={p.id} data-hole-id={p.id} className={`section-hole${p.id === selectedId ? ' section-hole-on' : ''}${p.id === hoveredId ? ' section-hole-hover' : ''}`}
                 role="button" tabIndex={0} aria-label={`Select ${p.name}${p.id === selectedId ? ', press Delete to remove from section' : ''}`}
-                onMouseEnter={(event) => showHoleTooltip(event, p, i)} onMouseMove={(event) => showHoleTooltip(event, p, i)} onMouseLeave={hideTooltip}
-                onFocus={(event) => showTooltip(centre(event.currentTarget), p)} onBlur={hideTooltip}
+                onMouseEnter={(event) => { onHover(p.id); showHoleTooltip(event, p, i) }} onMouseMove={(event) => showHoleTooltip(event, p, i)}
+                onMouseLeave={() => { onHover(null); hideTooltip() }}
+                onFocus={(event) => { onHover(p.id); showTooltip(centre(event.currentTarget), p) }} onBlur={() => { onHover(null); hideTooltip() }}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(p.id) }
                   if (p.id === selectedId && (event.key === 'Delete' || event.key === 'Backspace')) { event.preventDefault(); onRemove(p.id) }
