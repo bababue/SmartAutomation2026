@@ -18,9 +18,9 @@ from schema.borehole import Borehole, GeorefMethod, ReviewStatus
 from . import config
 
 # Findings that always need a human, whatever the score: anything that suggests a misread.
-BLOCKING = ("no layers extracted", "log not extracted", "CRS ambiguous", "invalid interval", "non-finite depth",
-            "invalid WGS84", "gap", "overlap", "layers end at", "stale correction", "log starts at", "depths printed in feet",
-            "missing sheets", "sheet header differs", "same printed coordinates as")
+BLOCKING = ("no layers extracted", "log not extracted", "log not assembled", "CRS ambiguous", "invalid interval",
+            "non-finite depth", "invalid WGS84", "gap", "overlap", "layers end at", "stale correction", "log starts at",
+            "depths printed in feet", "missing sheets", "sheet header differs", "same printed coordinates as")
 
 # Georeferencing doubts that explain a position confidence below the release threshold.
 GEOREF_DOUBTS = ("coordinate system inferred", "coordinate axes inferred", "coordinate notation or datum ambiguous",
@@ -81,7 +81,7 @@ def counts_against(unreadable: str) -> bool:
 
 
 # Findings that need a look before release, without blocking: they cap the extraction confidence.
-NEEDS_LOOK = ("boundary inferred", "core loss inferred", "lithology of layer")
+NEEDS_LOOK = ("boundary inferred", "core loss inferred", "lithology of layer", "properties differ")
 NEEDS_LOOK_RE = re.compile(r"^core run .*: (?:(?:SCR|RQD) [\d.]+% above TCR|\w+ [\d.]+% outside)")
 
 
@@ -186,7 +186,8 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
 
 # Findings as data: a stable code and a severity per finding text, for queries and the review queue.
 FINDING_CODES: list[tuple[str, str]] = [
-    ("no layers extracted", "no_layers"), ("log not extracted", "log_not_extracted"), ("layer ", "invalid_interval"), ("gap", "gap"), ("overlap", "overlap"),
+    ("no layers extracted", "no_layers"), ("log not extracted", "log_not_extracted"),
+    ("log not assembled", "log_not_assembled"), ("layer ", "invalid_interval"), ("gap", "gap"), ("overlap", "overlap"),
     ("minor discontinuity", "minor_discontinuity"), ("layers end at", "depth_mismatch"),
     ("log starts at", "log_starts_below_surface"), ("missing sheets", "missing_sheets"),
     ("sheet header differs", "sheet_header_differs"), ("same printed coordinates as", "coords_shared"),
@@ -197,7 +198,8 @@ FINDING_CODES: list[tuple[str, str]] = [
     ("printed coordinates could not be matched", "coords_unmatched"), ("coordinates ", "coords_far_from_place"),
     ("position ", "position_outlier"), ("no place to cross-check", "no_place_check"),
     ("not georeferenced", "not_georeferenced"), ("invalid WGS84", "invalid_position"), ("unreadable:", "unreadable"),
-    ("boundary inferred", "boundary_inferred"), ("core loss inferred", "core_loss_inferred"),
+    ("boundary inferred", "boundary_inferred"), ("properties differ", "sheet_conflict"),
+    ("core loss inferred", "core_loss_inferred"),
     ("lithology of layer", "lithology_inferred"), ("reached at the final depth", "end_of_hole_material"),
     ("corrected by", "correction"), ("stale correction", "stale_correction"), ("depths printed in feet", "feet"),
     ("core run", "core_run_inconsistent"), ("sample", "test_below_final_depth"), ("SPT at", "test_below_final_depth"),

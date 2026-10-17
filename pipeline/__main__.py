@@ -22,7 +22,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config, corrections, evaluate, experiment, ingest, knowledge, llm, store
-from .assemble import LOG_KINDS, PageResult, assemble, dedupe, norm_name
+from .assemble import LOG_KINDS, PageResult, assemble, dedupe, norm_name, placeholder
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
 
@@ -237,7 +237,7 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     labs = labs or {}
     source_file = {d.doc_id: d.path for d in docs}
 
-    def lost_logs(doc_id: str) -> list[str]:
+    def lost_logs(doc_id: str) -> list[tuple[int, str]]:
         """Log pages that came back with fewer logs than the classification counted. Counted, not matched by
         name: the classification reads the thumbnail and often writes a hole's name differently. A log without
         layers counts: a last sheet often holds only notes or the end-of-hole statement. Probe records (dynamic
@@ -248,9 +248,12 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
             if c.kind.value in LOG_KINDS - {"probe_log"}:
                 found = len(extractions[(doc_id, p.page)].logs)
                 if found < max(len(c.logs), 1):
-                    lost.append(f"log not extracted: page {p.page} shows {max(len(c.logs), 1)} logs, "
-                                f"{found} came back")
+                    lost.append((p.page, f"log not extracted: page {p.page} shows {max(len(c.logs), 1)} logs, "
+                                         f"{found} came back"))
         return lost
+
+    def has_previous(doc_ids) -> bool:
+        return any(con.execute("SELECT 1 FROM boreholes WHERE doc_id = ? LIMIT 1", (d,)).fetchone() for d in doc_ids)
 
     def complete(doc_id: str) -> bool:
         if doc_id in (incomplete_docs or set()):
@@ -264,9 +267,8 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
         if not available:
             return False
         # Earlier records of the document stay rather than lose a hole; without any, the document is stored
-        # with a blocking finding, so a fresh database does not silently miss it.
-        return not (lost_logs(doc_id) and con.execute("SELECT 1 FROM boreholes WHERE doc_id = ? LIMIT 1",
-                                                      (doc_id,)).fetchone())
+        # with a blocking placeholder per lost page, so a fresh database does not silently miss it.
+        return not (lost_logs(doc_id) and has_previous([doc_id]))
 
     done = [doc_id for doc_id in rendered if complete(doc_id)]
     if dry_run:  # nothing is written, so show what is there so far
@@ -289,18 +291,18 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     failed_docs: set[str] = set()
     boreholes = assemble(results, deduplicate=False, failed_docs=failed_docs)
     if failed_docs and not dry_run:
-        failed_groups = {d.split("__")[0] for d in failed_docs}
+        # A hole that failed to assemble is a blocking placeholder; earlier records of its group stay instead.
+        failed_groups = {g for g in {d.split("__")[0] for d in failed_docs}
+                         if has_previous(d for d in done if d.split("__")[0] == g)}
         done = [d for d in done if d.split("__")[0] not in failed_groups]
         boreholes = [bh for bh in boreholes if store.document_group(bh.borehole_id) not in failed_groups]
-        print(f"  ! kept previous results for {len(failed_groups)} groups with assembly errors", file=sys.stderr)
+        if failed_groups:
+            print(f"  ! kept previous results for {len(failed_groups)} groups with assembly errors", file=sys.stderr)
     if not dry_run:
-        lost = {doc_id: notes for doc_id in done if (notes := lost_logs(doc_id))}
-        for bh in boreholes:
-            if notes := lost.get(bh.borehole_id.split(":", 1)[0]):
-                bh.issues += notes
-                corrections.rescore(bh)
-        for doc_id, notes in lost.items():
-            print(f"  ! {doc_id}: {len(notes)} classified logs came back without layers", file=sys.stderr)
+        for doc_id in done:
+            for page, issue in lost_logs(doc_id):
+                boreholes.append(placeholder(doc_id, source_file[doc_id], page, issue))
+                print(f"  ! {doc_id}: {issue}", file=sys.stderr)
     # Per document group: read knowledge and corrections and replace the group's records in one short write
     # transaction. A correction saved meanwhile cannot be lost, and reviewers wait for one group at most.
     groups: dict[str, list] = {}
@@ -325,8 +327,14 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
                         f["target"] == bh.borehole_id for f in fixes[bh.borehole_id])
                     protected[bh.borehole_id] = {uid} | {f["id"] for f in fixes[bh.borehole_id]} | (
                         {bh.borehole_id} if reviewed_as else set())
-            # Independent groups do not share an identity scope; coincident positions alone cannot join them.
-            records = dedupe(records, protected)
+            # Copies of a hole are judged as they will be stored, with knowledge and corrections, but merged before
+            # either applies, so a correction of a lab value finds the values moved in from a copy. Independent
+            # groups do not share an identity scope; coincident positions alone cannot join them.
+            judged = [bh.model_copy(deep=True) for bh in records]
+            knowledge.apply_all(con, judged)
+            for bh in judged:
+                corrections.apply(bh, fixes[bh.borehole_id])
+            records = dedupe(records, protected, {bh.borehole_id: bh for bh in judged})
             # The model's output for `eval`: after merging duplicates, which moves lab values, before reviewer input.
             extracted.update({bh.borehole_id: store.extracted_summary(bh) for bh in records})
             knowledge.apply_all(con, records)  # what reviewers taught beyond single records

@@ -41,7 +41,7 @@ from schema.borehole import (
 from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLog
 from .georef import candidates, crs_from_hint, georeference, haversine_km
 from .knowledge import printed_pair
-from .scoring import counts_against, score
+from .scoring import counts_against, finding_severity, score
 
 LOG_KINDS = {"borehole_log", "test_pit_log", "probe_log"}
 
@@ -248,10 +248,31 @@ def _plain(text: str) -> str:
     return re.sub(r"\W+", " ", CONTINUED.sub(" ", SAME_AS_BEFORE.sub(" ", text)).lower()).strip()
 
 
+PROPERTIES = sorted(set(Layer.model_fields) - {"top_m", "bottom_m", "description_original", "description_en",
+                                               "language", "source", "confidence"})
+
+
 def _same_properties(a: Layer, b: Layer) -> bool:
-    fields = set(Layer.model_fields) - {"top_m", "bottom_m", "description_original", "description_en",
-                                       "language", "source", "confidence"}
-    return all(getattr(a, field) == getattr(b, field) for field in fields)
+    return all(getattr(a, field) == getattr(b, field) for field in PROPERTIES)
+
+
+def _carry_properties(prev: Layer, nxt: Layer) -> list[str]:
+    """Take what a continuation sheet says about a unit into it: empty fields are filled and secondary components
+    joined. A field both sheets fill differently is returned as a conflict."""
+    conflicts = []
+    for field in PROPERTIES:
+        a, b = getattr(prev, field), getattr(nxt, field)
+        if field == "primary" or b is None or a == b:
+            continue
+        if field == "secondary":
+            known = {s.lithology for s in a}
+            prev.secondary = a + [s for s in b if s.lithology not in known]
+        elif a is None:
+            setattr(prev, field, b)
+        else:
+            conflicts.append(f"{field} '{a}' on page {prev.source.page if prev.source else '?'}, "
+                             f"'{b}' on page {nxt.source.page if nxt.source else '?'}")
+    return conflicts
 
 
 def _sheet_join(prev: Layer, nxt: Layer) -> str | None:
@@ -391,6 +412,10 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
                 prev.description_original += f" / {layer.description_original}"
                 if prev.description_en and layer.description_en:
                     prev.description_en += f" / {layer.description_en}"
+            conflicts = _carry_properties(prev, layer)
+            if conflicts and notes is not None:
+                notes.append(f"properties differ across the sheet break: layer {prev.top_m:g}–{prev.bottom_m:g} m, "
+                             + "; ".join(conflicts))
             continue
         if join == "extend":
             if notes is not None:
@@ -826,6 +851,16 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     return bh, sum(map(counts_against, unreadable))
 
 
+def placeholder(doc_id: str, source_file: str, page: int | None, issue: str, name: str | None = None) -> Borehole:
+    """A blocking record for a log the run could not turn into a hole, so its page goes to a person."""
+    bh = Borehole(borehole_id=f"{doc_id}:{id_key(name)}" if name else f"{doc_id}:p{page}-lost",
+                  borehole_name=name or f"log not extracted, {doc_id} p{page}",
+                  sources=[SourceRef(file=source_file, page=page)])
+    bh.issues = [issue] + bh.validate_log()
+    score(bh, {}, 0)
+    return bh
+
+
 def _log_key(log: XLog, page_kind: str) -> tuple[str | None, str]:
     return hole_key(log.name, log.investigation_type if log.investigation_type in ("borehole", "test_pit", "probe")
                     else _KINDS.get(page_kind))
@@ -970,6 +1005,11 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
                     if failed_docs is not None:
                         failed_docs.update(r.doc_id for r in pages)
                     print(f"  ! could not assemble {doc_id}:{logs[0][0].name}: {type(exc).__name__}: {exc}")
+                    page = logs[0][1].page
+                    bh = placeholder(doc_id, pages[0].source_file, page, f"log not assembled: {logs[0][0].name} on "
+                                     f"page {page} ({type(exc).__name__})", logs[0][0].name)
+                    built[group].append((bh, 0, page_texts))
+                    doc_records.append(bh)
         _unique_ids(doc_records)
         _unique_ids_by_type(doc_records)
     for group, records in built.items():
@@ -985,11 +1025,13 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
     return dedupe(boreholes) if deduplicate else boreholes
 
 
-def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None) -> list[Borehole]:
+def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
+           judged: dict[str, Borehole] | None = None) -> list[Borehole]:
     """Same hole in several documents (e.g. a PDF and its PNG export): keep the richer record. `protected` maps the
     records a reviewer decided or corrected to what identifies that review (uid, correction ids): such a record
-    wins over an unreviewed copy; two records reviewed independently of each other both stay."""
-    protected = protected or {}
+    wins over an unreviewed copy; two records reviewed independently of each other both stay. `judged` holds each
+    record as it will be stored (knowledge and corrections applied), which decides the better copy."""
+    protected, judged = protected or {}, judged or {}
     kept: dict[tuple, Borehole] = {}
     for bh in boreholes:
         loc = bh.location
@@ -1008,12 +1050,15 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None) -
             kept[(bh.borehole_id,)] = bh
             continue
         # A reviewed record wins, first the one the review was made under (its id is in its own identity), then one
-        # with all its sheets over a fragment, then the better-checked one; the layer count only breaks ties (more
-        # layers can mean over-segmented).
-        better = lambda b: (b.borehole_id in protected.get(b.borehole_id, ()), b.borehole_id in protected,
-                            not any(i.startswith("missing sheets") for i in b.issues),
-                            b.review_status == ReviewStatus.auto_approved,
-                            min(b.confidence or 0.0, b.location.confidence or 0.0), b.confidence or 0.0, len(b.layers))
+        # without blocking findings (e.g. a fragment with missing sheets), then the better-checked one; the layer
+        # count only breaks ties (more layers can mean over-segmented).
+        def better(b: Borehole) -> tuple:
+            j = judged.get(b.borehole_id, b)
+            return (b.borehole_id in protected.get(b.borehole_id, ()), b.borehole_id in protected,
+                    not any(finding_severity(i) == "blocking" for i in j.issues),
+                    j.review_status == ReviewStatus.auto_approved,
+                    min(j.confidence or 0.0, j.location.confidence or 0.0), j.confidence or 0.0, len(j.layers))
+
         richer, poorer = (bh, other) if better(bh) > better(other) else (other, bh)
         richer.sources = list({(s.file, s.page): s for s in richer.sources + poorer.sources}.values())
         # Lab sheets are often in one of the documents only.
