@@ -46,10 +46,18 @@ def scope_keys(bh: Borehole) -> dict[str, str | None]:
             "region": (bh.location.country or "").upper() or None, "global": None}
 
 
-def applicable(items: list[dict], bh: Borehole) -> list[dict]:
+SPECIFICITY = {"document": 0, "project": 1, "region": 2, "global": 3}
+
+
+def applicable(items: list[dict], bh: Borehole, project: str | None = None) -> list[dict]:
+    """Items for this record, most specific scope first. `project` overrides the extracted project name
+    (a reviewer corrected it), so knowledge of the wrong project is not applied."""
     keys = scope_keys(bh)
-    return [k for k in items if k["scope_type"] == "global" or
+    if project is not None:
+        keys["project"] = norm_project(project)
+    hits = [k for k in items if k["scope_type"] == "global" or
             (keys.get(k["scope_type"]) is not None and k["scope_value"] == keys[k["scope_type"]])]
+    return sorted(hits, key=lambda k: (SPECIFICITY[k["scope_type"]], -k["confirmations"]))
 
 
 # --- local grids from reviewer positions -----------------------------------------------------------
@@ -102,7 +110,7 @@ def _affine(ab: list[tuple[float, float]], xy: list[tuple[float, float]]) -> lis
     return [*cx, *cy]
 
 
-def fit_grid(points: list[tuple[tuple[float, float], tuple[float, float]]]) -> dict | None:
+def fit_grid(points: list[tuple[tuple[float, float], tuple[float, float]]], validate: bool = True) -> dict | None:
     """Fit printed (a, b) → WGS84 from control points: Helmert, affine from four points. Tries both
     axis orders; returns parameters, RMS residual in metres and point count, or None if inconsistent."""
     if len(points) < 2:
@@ -122,9 +130,31 @@ def fit_grid(points: list[tuple[tuple[float, float], tuple[float, float]]]) -> d
         residuals = [(c[0] * a + c[1] * b + c[2] - x) ** 2 + (c[3] * a + c[4] * b + c[5] - y) ** 2
                      for (a, b), (x, y) in zip(ab, xy)]
         rms = math.sqrt(sum(residuals) / len(residuals))
+        scale = math.sqrt(abs(c[0] * c[4] - c[1] * c[3]))  # metres per printed unit
+        if not 0.2 <= scale <= 5:  # e.g. all control points at one spot: not a grid
+            continue
         if best is None or rms < best["rms_m"]:
-            best = {"swap": swap, "params": c, "rms_m": rms, "n": len(points), "lat0": lat0, "lon0": lon0}
-    return best if best and best["rms_m"] <= 50 else None
+            best = {"swap": swap, "params": c, "rms_m": rms, "n": len(points), "lat0": lat0, "lon0": lon0,
+                    "scale": scale}
+    if not best or best["rms_m"] > 50:
+        return None
+    spread = max(math.dist(a, b) for a in xy for b in xy)
+    if spread < 30:  # control points too close together to define a grid
+        return None
+    best["centre"] = (sum(a for (a, _), _ in points) / len(points), sum(b for (_, b), _ in points) / len(points))
+    best["radius"] = max(math.dist(pair, best["centre"]) for pair, _ in points)
+    if len(points) >= 3 and validate:  # predictive check: each point from a grid fitted to the others
+        errors = []
+        for i in range(len(points)):
+            g = fit_grid(points[:i] + points[i + 1:], validate=False)
+            if g is None:
+                return {**best, "loo_m": None}
+            lat, lon = grid_position(g, points[i][0])
+            errors.append(haversine_km(lat, lon, *points[i][1]) * 1000)
+        best["loo_m"] = max(errors)
+    else:
+        best["loo_m"] = None
+    return best
 
 
 def grid_position(grid: dict, pair: tuple[float, float]) -> tuple[float, float]:
@@ -166,10 +196,12 @@ def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str
         crs_items = sorted((k for k in items if k["kind"] == "crs"), key=lambda k: -k["confirmations"])
         for k in crs_items:
             epsg = int(k["payload"]["epsg"])
-            near = (loc.lat, loc.lon) if loc.lat is not None else None
+            if loc.lat is None or loc.lon is None:
+                break  # nothing to cross-check a learned system against
+            near = (loc.lat, loc.lon)
             c = resolve_with(loc.coords_raw, epsg, near)
             # The learned system must land near where the record already is (inferred CRS or named place).
-            if c is None or (near and haversine_km(c.lat, c.lon, *near) > max(25.0, (loc.accuracy_m or 0) / 1000 * 2)):
+            if c is None or haversine_km(c.lat, c.lon, *near) > max(25.0, (loc.accuracy_m or 0) / 1000 * 2):
                 continue
             _apply(loc, c, loc.method if loc.method == GeorefMethod.linked_table else GeorefMethod.stated_coordinates)
             loc.crs_candidates, loc.accuracy_m = [], 10.0
@@ -179,27 +211,32 @@ def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str
                          f"({k['confirmations']} confirmation(s), {k['scope_type']})")
             break
     pair = printed_pair(loc.coords_raw)
-    if grid and pair and loc.method == GeorefMethod.geocoded_place:
+    inside = grid and pair and math.dist(pair, grid["centre"]) <= max(3 * grid["radius"], 1.0)  # no far extrapolation
+    if inside and loc.method == GeorefMethod.geocoded_place:
         lat, lon = grid_position(grid, pair)
         if loc.lat is None or haversine_km(lat, lon, loc.lat, loc.lon) <= 50:
             loc.lat, loc.lon, loc.method = round(lat, 7), round(lon, 7), GeorefMethod.stated_coordinates
             loc.crs_epsg, loc.crs_candidates = None, []
             loc.crs_proj = f"local grid fitted to {grid['n']} reviewer positions (RMS {grid['rms_m']:.1f} m)"
             loc.accuracy_m = max(grid["rms_m"], 5.0)
-            loc.confidence = 0.9 if grid["n"] >= 3 and grid["rms_m"] <= 10 else 0.8
+            # Release only on a predictive check: every control point recovered from the others within 20 m.
+            loc.confidence = 0.9 if grid["loo_m"] is not None and grid["loo_m"] <= 20 else 0.8
             _settle_position(bh)
             notes.append(f"position from a local grid fitted to {grid['n']} reviewer positions "
                          f"(RMS {grid['rms_m']:.1f} m)")
-    for k in items:
-        if k["kind"] != "term":
-            continue
-        term, target = k["payload"]["term"], Lithology(k["payload"]["primary"])
-        pattern = re.compile(rf"(?<!\w){re.escape(term)}(?!\w)", re.I)
-        for layer in bh.layers:
-            if layer.primary != target and pattern.search(layer.description_original):
-                layer.primary = target
-                notes.append(f"lithology of layer {layer.top_m:g}–{layer.bottom_m:g} m from reviewer knowledge: "
-                             f"'{term}' → {target.value}")
+    terms = [k for k in items if k["kind"] == "term"]  # most specific scope first
+    for layer in bh.layers:
+        # The main material is named first ('CALICHE : grey, ...'); 'SAND, trace of caliche' stays sand.
+        leading = re.split(r"[:,;(]", layer.description_original.lstrip("*- "), maxsplit=1)[0]
+        for k in terms:
+            term, target = k["payload"]["term"], Lithology(k["payload"]["primary"])
+            pattern = re.compile(rf"(?<!\w){re.escape(term)}(?!\w)", re.I)
+            if layer.primary == Lithology.unknown and pattern.search(layer.description_original) or pattern.search(leading):
+                if layer.primary != target:
+                    layer.primary = target
+                    notes.append(f"lithology of layer {layer.top_m:g}–{layer.bottom_m:g} m from reviewer knowledge: "
+                                 f"'{term}' → {target.value}")
+                break
     return notes
 
 
@@ -210,7 +247,10 @@ def apply_all(con: sqlite3.Connection, boreholes: list[Borehole]) -> None:
     if not items and not grids:
         return
     for bh in boreholes:
-        notes = apply(bh, applicable(items, bh), grids.get(store.document_group(bh.borehole_id)))
+        fixed = [c["payload"]["value"] for c in store.corrections_for(con, bh.borehole_id)
+                 if c["kind"] == "field" and c["payload"]["field"] == "project_name"]
+        notes = apply(bh, applicable(items, bh, fixed[-1] if fixed else None),
+                      grids.get(store.document_group(bh.borehole_id)))
         if notes:
             bh.issues = list(dict.fromkeys(bh.issues + notes))
             corrections.rescore(bh)
@@ -233,8 +273,8 @@ def prompt_context(con: sqlite3.Connection, doc_id: str) -> str:
             continue
         p, origin = k["payload"], "told by someone" if k["source"] == "external" else "from earlier reviews"
         if k["kind"] == "crs":
-            lines.append(f"- Coordinates in this {k['scope_type']} have been EPSG:{p['epsg']} ({origin}).")
-        elif k["kind"] == "term":
+            continue  # applied in code with a place check; in the prompt it could end up as 'printed' crs_raw
+        if k["kind"] == "term":
             lines.append(f"- '{p['term']}' means the DIN 4023 class {p['primary']} ({origin}).")
         elif k["kind"] == "note":
             lines.append(f"- {p['text']} ({origin})")

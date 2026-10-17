@@ -321,7 +321,7 @@ def correct(borehole_id: str, body: Correction, con: DB):
             country = (store.load_borehole(con, updated[0]).location.country or "").upper()
             if country:
                 store.add_knowledge(con, "region", country, "crs", {"epsg": payload["epsg"]}, "derived",
-                                    f"confirmed for {group}", item["reviewer"])
+                                    f"confirmed for {group}", item["reviewer"], evidence=f"document:{group}")
     bh = store.load_borehole(con, borehole_id)
     return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
             "corrections": store.corrections_for(con, borehole_id), "blocking": _blocking(bh), "updated": updated}

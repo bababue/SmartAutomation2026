@@ -70,11 +70,13 @@ def test_apply_all_uses_grid_terms_and_corrections_win(con):
     store.add_knowledge(con, "project", "line2", "term", {"term": "caliche", "primary": "limestone"}, "external",
                         "site engineer on the phone", "Ana")
     knowledge.apply_all(con, records)
-    s5 = records[5]
-    assert s5.location.method == GeorefMethod.stated_coordinates and haversine_km(s5.location.lat, s5.location.lon, *HOLES[5]) < 0.02
-    assert s5.layers[1].primary.value == "limestone"
-    assert any(i.startswith("position from a local grid fitted to 3") for i in s5.issues)
-    assert not any(i.startswith("position from place name only") for i in s5.issues)
+    s3, s5 = records[3], records[5]
+    assert s3.location.method == GeorefMethod.stated_coordinates and haversine_km(s3.location.lat, s3.location.lon, *HOLES[3]) < 0.02
+    assert any(i.startswith("position from a local grid fitted to 3") for i in s3.issues)
+    assert not any(i.startswith("position from place name only") for i in s3.issues)
+    assert s3.location.confidence == 0.9  # each control point is recovered from the other two
+    assert s5.location.method == GeorefMethod.geocoded_place  # four spacings beyond the control points: no extrapolation
+    assert s3.layers[1].primary.value == "limestone"  # 'CALICHE, hard' names the main material
     # The reviewer's own correction still wins on that record.
     corrections.apply(records[0], store.corrections_for(con, records[0].borehole_id))
     assert records[0].location.method == GeorefMethod.manual
@@ -88,9 +90,12 @@ def test_learned_crs_needs_confirmations_to_count_as_stated(con):
     item = store.add_knowledge(con, "region", "AU", "crs", {"epsg": 28356}, "derived", None, "Ana")
     notes = knowledge.apply(bh, knowledge.applicable([item], bh))
     assert bh.location.crs_epsg == 28356 and bh.location.confidence == 0.8 and notes
-    for _ in range(2):
-        item = store.add_knowledge(con, "region", "AU", "crs", {"epsg": 28356}, "derived", None, "Ben")
-    assert item["confirmations"] == 3
+    for _ in range(3):  # the same document again proves nothing
+        item = store.add_knowledge(con, "region", "AU", "crs", {"epsg": 28356}, "derived", None, "Ana", evidence="document:a")
+    assert item["confirmations"] == 2
+    for doc in ("b", "c"):
+        item = store.add_knowledge(con, "region", "AU", "crs", {"epsg": 28356}, "derived", None, "Ana", evidence=f"document:{doc}")
+    assert item["confirmations"] == 4
     bh2 = hole("au:BH2", (lat, lon), f"E {e:.1f} N {n:.1f}")
     bh2.location.country = "AU"
     knowledge.apply(bh2, knowledge.applicable([item], bh2))
@@ -104,3 +109,20 @@ def test_prompt_context_for_new_pages(con):
     text = knowledge.prompt_context(con, "r")
     assert "below the kerb" in text and "told by someone" in text and "Argentina" not in text
     assert knowledge.prompt_context(con, "unknown-doc") == ""
+
+
+
+def test_collapsed_control_points_are_not_a_grid():
+    pts = [(local_coords(*ll), HOLES[0]) for ll in HOLES[:3]]  # three holes, all set to the same spot
+    assert fit_grid(pts) is None
+
+
+def test_term_rule_does_not_override_a_named_main_material(con):
+    src = SourceRef(file="r.pdf", page=1)
+    bh = Borehole(borehole_id="r:S1", borehole_name="S1", location=Location(),
+                  layers=[Layer(top_m=0, bottom_m=2, description_original="SAND, trace of caliche", primary="sand", source=src),
+                          Layer(top_m=2, bottom_m=3, description_original="Caliche: hard", primary="sand", source=src)])
+    rule = {"kind": "term", "scope_type": "global", "scope_value": None, "confirmations": 1,
+            "payload": {"term": "caliche", "primary": "limestone"}}
+    knowledge.apply(bh, [rule])
+    assert [l.primary.value for l in bh.layers] == ["sand", "limestone"]

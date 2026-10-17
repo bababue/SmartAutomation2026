@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS corrections (
 -- source: derived (from corrections) | review (entered from the documents) | external (phone, e-mail, site).
 CREATE TABLE IF NOT EXISTS knowledge (
     id INTEGER PRIMARY KEY, scope_type TEXT, scope_value TEXT, kind TEXT, payload TEXT, source TEXT, note TEXT,
-    created_by TEXT, created_at TEXT, confirmations INTEGER DEFAULT 1, active INTEGER DEFAULT 1
+    created_by TEXT, created_at TEXT, confirmations INTEGER DEFAULT 1, active INTEGER DEFAULT 1, evidence TEXT
 );
 """
 
@@ -67,6 +67,8 @@ def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
     con.executescript(SCHEMA)
     if "extracted" not in {r["name"] for r in con.execute("PRAGMA table_info(boreholes)")}:
         con.execute("ALTER TABLE boreholes ADD COLUMN extracted TEXT")  # database from before evaluation
+    if "evidence" not in {r["name"] for r in con.execute("PRAGMA table_info(knowledge)")}:
+        con.execute("ALTER TABLE knowledge ADD COLUMN evidence TEXT")  # from before independent confirmations
     return con
 
 
@@ -235,20 +237,27 @@ def group_borehole_ids(con: sqlite3.Connection, group: str) -> list[str]:
 
 
 def add_knowledge(con: sqlite3.Connection, scope_type: str, scope_value: str | None, kind: str, payload: dict,
-                  source: str, note: str | None, created_by: str) -> dict:
-    """Store a knowledge item; the same derived fact again only counts as one more confirmation."""
+                  source: str, note: str | None, created_by: str, evidence: str | None = None) -> dict:
+    """Store a knowledge item. The same fact again counts as a confirmation only with independent evidence
+    (another document for derived facts, another person otherwise): repeating a correction proves nothing."""
     key = as_json(payload)
+    evidence = evidence or f"by:{created_by}"
     row = con.execute(
-        "SELECT id FROM knowledge WHERE active = 1 AND scope_type = ? AND IFNULL(scope_value, '') = ? AND kind = ? "
-        "AND payload = ?", (scope_type, scope_value or "", kind, key),
+        "SELECT id, evidence FROM knowledge WHERE active = 1 AND scope_type = ? AND IFNULL(scope_value, '') = ? "
+        "AND kind = ? AND payload = ?", (scope_type, scope_value or "", kind, key),
     ).fetchone()
     if row:
-        con.execute("UPDATE knowledge SET confirmations = confirmations + 1 WHERE id = ?", (row["id"],))
+        seen = set(json.loads(row["evidence"] or "[]"))
+        if evidence not in seen:
+            seen.add(evidence)
+            con.execute("UPDATE knowledge SET evidence = ?, confirmations = ? WHERE id = ?",
+                        (as_json(sorted(seen)), len(seen), row["id"]))
         return knowledge_item(con, row["id"])
     cur = con.execute(
-        "INSERT INTO knowledge (scope_type, scope_value, kind, payload, source, note, created_by, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (scope_type, scope_value, kind, key, source, note, created_by, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO knowledge (scope_type, scope_value, kind, payload, source, note, created_by, created_at, evidence) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (scope_type, scope_value, kind, key, source, note, created_by, datetime.now(timezone.utc).isoformat(),
+         as_json([evidence])),
     )
     return knowledge_item(con, cur.lastrowid)
 
