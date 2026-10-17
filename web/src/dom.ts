@@ -13,3 +13,6 @@ export const isTyping = (target: EventTarget | null) =>
 
 /** Bounds of the open detail sheet, which covers the right part of the map. */
 export const detailSheetRect = () => document.querySelector('.detail')?.getBoundingClientRect()
+
+/** A colour of the current theme, for canvases (MapLibre) that cannot read CSS variables. */
+export const cssColor = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
