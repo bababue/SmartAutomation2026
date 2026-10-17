@@ -70,8 +70,10 @@ def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) 
 
 
 # The model names the field of each unreadable item ('header: ...', 'tests: ...'). Header fields and test values
-# do not decide the release; an item without a field name counts.
-MINOR_UNREADABLE = re.compile(r"^(?:unreadable:\s*)?(?:header|tests)\s*:", re.I)
+# do not decide the release; an item without a field name counts, and so does anything about the position or the
+# ground level, whatever field it is filed under.
+MINOR_UNREADABLE = re.compile(r"^(?:unreadable:\s*)?(?:header|tests)\s*:(?!.*\b(?:coordinat\w*|crs|datum|grid|zone|"
+                              r"easting|northing|latitude|longitude|elevation|level|epsg|utm)\b)", re.I)
 
 
 def counts_against(unreadable: str) -> bool:

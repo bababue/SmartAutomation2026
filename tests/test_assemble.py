@@ -270,3 +270,6 @@ def test_only_unreadable_items_outside_the_header_and_tests_lower_the_extraction
     assert confidence(*["header: drilling method cut off by a punch hole", "tests: SPT blows at 4.5 m faint"] * 2) == clean
     assert confidence(*[f"depth: boundary at {d} m faint" for d in (1, 2, 3, 4)]) < clean
     assert confidence(*[f"boundary at {d} m faint" for d in (1, 2, 3, 4)]) < clean  # without a field name it counts
+    # Doubts about the position or the ground level count under any field name.
+    assert confidence(*["header: datum illegible", "header: coordinate uncertain", "header: ground level faint",
+                        "tests: UTM zone cut off"]) < clean
