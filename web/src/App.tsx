@@ -54,6 +54,7 @@ export default function App() {
   const [refresh, setRefresh] = useState(0) // bump after a review decision
   const [sectionIds, setSectionIds] = useState<string[]>(initial.sectionIds)
   const [blockingOnly, setBlockingOnly] = useState(initial.blockingOnly)
+  const [auditOnly, setAuditOnly] = useState(initial.auditOnly)
   const [uploadJob, setUploadJob] = useState<{ id: string; label: string } | null>(null)
   const [uploading, setUploading] = useState(false) // from the first byte sent until the job is done or failed
   const [listOpen, setListOpen] = useState(initial.listOpen)
@@ -108,12 +109,12 @@ export default function App() {
 
   // Page and selection changes get a history entry, so Back closes a borehole or leaves the queue.
   useEffect(() => {
-    const url = writeUrl({ view, selectedId, sectionIds, listOpen, filters, blockingOnly })
+    const url = writeUrl({ view, selectedId, sectionIds, listOpen, filters, blockingOnly, auditOnly })
     const shown = readUrl(window.location.search)
     if (url === (window.location.search || window.location.pathname)) return
     if (shown.view !== view || shown.selectedId !== selectedId) window.history.pushState(null, '', url)
     else window.history.replaceState(null, '', url)
-  }, [view, selectedId, sectionIds, listOpen, filters, blockingOnly])
+  }, [view, selectedId, sectionIds, listOpen, filters, blockingOnly, auditOnly])
 
   useEffect(() => {
     const onPop = () => {
@@ -122,6 +123,7 @@ export default function App() {
       setSelectedId(s.selectedId)
       setSectionIds(s.sectionIds)
       setBlockingOnly(s.blockingOnly)
+      setAuditOnly(s.auditOnly)
       setListOpen(s.listOpen)
       setFilters(s.filters)
       setQuery(s.filters.q)
@@ -151,10 +153,10 @@ export default function App() {
 
   useEffect(() => {
     const ctrl = new AbortController()
-    fetchQueue(blockingOnly, ctrl.signal).then(({ items, total }) => { setQueue(items); setQueueTotal(total) }).catch(() => undefined)
+    fetchQueue(blockingOnly, ctrl.signal, 200, auditOnly).then(({ items, total }) => { setQueue(items); setQueueTotal(total) }).catch(() => undefined)
     fetchStats().then(setStats).catch(() => undefined)
     return () => ctrl.abort()
-  }, [refresh, blockingOnly])
+  }, [refresh, blockingOnly, auditOnly])
 
   // Only the response for the currently selected borehole may land in state.
   useEffect(() => {
@@ -334,7 +336,7 @@ export default function App() {
             </p>
           )}
           <AppMenu inReview={view === 'review'} inStats={view === 'stats'} uploading={uploading} dark={dark} columns3d={columns3d}
-            onToggleReview={() => setView(view === 'review' ? 'map' : 'review')}
+            onToggleReview={() => { setAuditOnly(false); setView(view === 'review' ? 'map' : 'review') }}
             onToggleStats={() => setView(view === 'stats' ? 'map' : 'stats')}
             onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} onToggleColumns={() => setColumns3d(!columns3d)} />
         </div>
@@ -385,6 +387,7 @@ export default function App() {
         )}
         {view === 'stats' && (
           <StatsView filters={filters} onClose={() => setView('map')}
+            onReviewAudit={() => { setAuditOnly(true); setView('review') }}
             onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })); setView('map') }} />
         )}
       </main>

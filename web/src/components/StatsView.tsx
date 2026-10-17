@@ -7,6 +7,8 @@ interface Props {
   filters: Filters
   /** Narrow the map to a document group (the list's group filter). */
   onShowGroup: (group: string) => void
+  /** Open the review queue on the release audit sample. */
+  onReviewAudit: () => void
   onClose: () => void
 }
 
@@ -54,7 +56,7 @@ function Bar({ value, max, fill, pattern, title }: { value: number; max: number;
   )
 }
 
-export function StatsView({ filters, onShowGroup, onClose }: Props) {
+export function StatsView({ filters, onShowGroup, onReviewAudit, onClose }: Props) {
   const [stats, setStats] = useState<StatsDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -130,6 +132,32 @@ export function StatsView({ filters, onShowGroup, onClose }: Props) {
             </ol>
             <p className="stats-note">Released after a person checked them: <b>{n(s.funnel.released - s.funnel.released_automatically)}</b>,
               released in all: <b>{n(s.funnel.released)}</b></p>
+          </section>
+
+          <section className="stats-card" aria-labelledby="stats-audit">
+            <h3 id="stats-audit">Release audit</h3>
+            <p className="muted">How often an automatic release is wrong: a random sample of released records, checked by a
+              person. A correction or rejection counts as wrong. Over the whole database.</p>
+            {!s.audit ? (
+              <p className="stats-note">No sample drawn yet: run <code>python -m pipeline eval audit</code>.</p>
+            ) : (
+              <>
+                {s.audit.reviewed > 0 ? (
+                  <p className="stats-figure">
+                    <b>{Math.round(100 * (s.audit.rate ?? 0))} %</b> wrong
+                    <span className="muted"> ({n(s.audit.wrong)} of {n(s.audit.reviewed)}; 95 % interval
+                      {' '}{Math.round(100 * s.audit.low)}–{Math.round(100 * s.audit.high)} %)</span>
+                  </p>
+                ) : <p className="stats-note">None of the sample checked yet.</p>}
+                <Shares label="Audit progress" parts={[
+                  { key: 'checked', label: 'Checked', value: s.audit.reviewed, color: 'var(--water)' },
+                  { key: 'open', label: 'Not checked yet', value: s.audit.sample - s.audit.reviewed, color: 'var(--grid)' },
+                ]} />
+                {s.audit.reviewed < s.audit.sample && (
+                  <button className="btn stats-action" onClick={onReviewAudit}>Check the sample in the review queue</button>
+                )}
+              </>
+            )}
           </section>
 
           <section className="stats-card" aria-labelledby="stats-findings">

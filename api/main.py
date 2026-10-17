@@ -29,7 +29,7 @@ import pymupdf
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, export, ingest, scoring, store, uploads
+from pipeline import config, corrections, evaluate, export, ingest, scoring, store, uploads
 from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
 from . import similar
@@ -262,18 +262,22 @@ def list_boreholes(
 
 @app.get("/api/review-queue")
 def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
-                 blocking: bool = Query(False, description="only records with a blocking finding")):
+                 blocking: bool = Query(False, description="only records with a blocking finding"),
+                 audit: bool = Query(False, description="the release audit sample instead (any status)")):
     """Everything waiting for a human, weakest first (also records without a position), a page at a time.
     The total is in the X-Total-Count header so the response stays a plain list."""
-    where = "review_status = 'pending_review'" + (
+    where, params = "review_status = 'pending_review'" + (
         " AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = boreholes.rid AND f.severity = 'blocking')"
-        if blocking else "")
-    total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}").fetchone()[0]
+        if blocking else ""), []
+    if audit:  # automatic releases drawn for a person to check (`pipeline eval audit`)
+        uids = [r["uid"] for r in (evaluate.load_audit() or {"records": []})["records"]]
+        where, params = f"uid IN ({','.join('?' * len(uids)) or 'NULL'})", uids
+    total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}", params).fetchone()[0]
     rows = con.execute(
         "SELECT id, name, project, location_name, country, score, confidence, loc_confidence, loc_method, "
         "n_layers, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file, reasons "
         f"FROM boreholes WHERE {where} ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
-        (limit, offset),
+        (*params, limit, offset),
     ).fetchall()
     items = [{**{k: r[k] for k in r.keys() if k != "reasons"}, "reasons": json.loads(r["reasons"] or "[]")}
              for r in rows]
@@ -728,6 +732,7 @@ def stats_detail(
         "groups": [{"group": r["grp"], "count": r["n"], "released": r["released"],
                     "top_finding": top_finding.get(r["grp"])} for r in group_rows],
         "crs": [[r["epsg"], r["n"]] for r in crs],
+        "audit": evaluate.audit_summary(con),  # the whole database: the sample is drawn from all releases
     }
 
 

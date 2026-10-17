@@ -268,6 +268,8 @@ export interface StatsDetail {
   depths: number[]
   groups: { group: string; count: number; released: number; top_finding: { code: string; records: number } | null }[]
   crs: [number, number][]
+  /** Release audit over the whole database; null: no sample drawn yet (`pipeline eval audit`). */
+  audit: { sample: number; reviewed: number; wrong: number; rate: number | null; low: number; high: number } | null
 }
 
 export interface UploadStatus {

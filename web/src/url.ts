@@ -10,6 +10,8 @@ export interface UrlState {
   filters: Filters
   /** Review queue: only records with a blocking finding. */
   blockingOnly: boolean
+  /** Review queue: the release audit sample instead (automatic releases drawn for a person to check). */
+  auditOnly: boolean
 }
 
 const STATUSES: StatusFilter[] = ['all', 'released', 'pending', 'rejected']
@@ -39,6 +41,7 @@ export function readUrl(search: string): UrlState {
     selectedId: p.get('borehole'),
     sectionIds: p.getAll('section'),
     blockingOnly: p.get('blocking') === '1',
+    auditOnly: p.get('audit') === '1',
     listOpen: p.get('list') !== 'closed',
     filters: {
       q: p.get('q') ?? '',
@@ -61,6 +64,7 @@ export function writeUrl(s: UrlState): string {
   if (s.selectedId) p.set('borehole', s.selectedId)
   s.sectionIds.forEach((id) => p.append('section', id))
   if (s.blockingOnly) p.set('blocking', '1')
+  if (s.auditOnly) p.set('audit', '1')
   if (!s.listOpen) p.set('list', 'closed')
   if (f.q.trim()) p.set('q', f.q.trim())
   f.lithology.forEach((l) => p.append('lith', encodeRange(l)))

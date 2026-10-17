@@ -13,6 +13,8 @@ run changes them and they drop back to review.
 from __future__ import annotations
 
 import json
+import math
+import random
 import re
 import sqlite3
 import statistics
@@ -27,6 +29,7 @@ from . import config, store
 from .georef import haversine_km
 
 REFERENCE_PATH = config.DATA_DIR / "eval" / "reference.json"
+AUDIT_PATH = config.DATA_DIR / "eval" / "audit.json"
 DEPTH_TOLERANCE_M = 0.1
 
 
@@ -353,11 +356,91 @@ def report(scores: dict[str, Score], holdout: set[str] = frozenset()) -> str:
     return "\n".join(lines)
 
 
+# --- release audit: how often is an automatic release wrong? -------------------------------------------------
+
+def draw_audit(con: sqlite3.Connection, size: int, seed: int, path: Path = AUDIT_PATH) -> list[str]:
+    """A reproducible random sample of automatically released records not yet in the reference, for a person to
+    check. Kept by uid, so the sample survives rebuilds that rename a hole."""
+    reference = load_reference(path.with_name(REFERENCE_PATH.name))  # the audit lives beside the reference
+    candidates = sorted((r["id"], r["uid"]) for r in con.execute(
+        "SELECT id, uid FROM boreholes WHERE review_status = ?", (ReviewStatus.auto_approved.value,))
+        if r["id"] not in reference)
+    sample = random.Random(seed).sample(candidates, min(size, len(candidates)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"created": datetime.now(timezone.utc).isoformat(), "seed": seed,
+                                "records": [{"id": bid, "uid": uid} for bid, uid in sorted(sample)]}, indent=1),
+                    encoding="utf-8")
+    return [bid for bid, _ in sorted(sample)]
+
+
+def load_audit(path: Path = AUDIT_PATH) -> dict | None:
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def audit_outcomes(con: sqlite3.Connection, audit: dict) -> dict[str, str]:
+    """Per audited uid: 'confirmed' (approved without a change), 'wrong' (rejected, or corrected before the
+    approval, also by a document-wide correction) or 'open' (no decision since the sample was drawn)."""
+    since, out = audit["created"], {}
+    for rec in audit["records"]:
+        uid = rec["uid"]
+        row = con.execute("SELECT id FROM boreholes WHERE uid = ?", (uid,)).fetchone()
+        bid = row["id"] if row else rec["id"]
+        decision = con.execute("SELECT decision FROM review_events WHERE (uid = ? OR borehole_id = ?) AND at > ? "
+                               "ORDER BY id DESC LIMIT 1", (uid, bid, since)).fetchone()
+        corrected = con.execute(
+            "SELECT 1 FROM corrections WHERE at > ? AND ((scope = 'borehole' AND (uid = ? OR target = ?)) "
+            "OR (scope = 'document' AND target = ?)) LIMIT 1", (since, uid, bid, store.document_group(bid))).fetchone()
+        if decision is None or decision["decision"] not in (ReviewStatus.approved.value, ReviewStatus.rejected.value):
+            out[uid] = "open"
+        else:
+            out[uid] = "wrong" if decision["decision"] == ReviewStatus.rejected.value or corrected else "confirmed"
+    return out
+
+
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95 % Wilson score interval of a share k/n; sound for small samples and shares near 0."""
+    if n == 0:
+        return 0.0, 1.0
+    p = k / n
+    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def audit_summary(con: sqlite3.Connection, path: Path = AUDIT_PATH) -> dict | None:
+    """The false-release rate among the audited records a person has decided on, with its interval."""
+    audit = load_audit(path)
+    if audit is None:
+        return None
+    outcomes = audit_outcomes(con, audit)
+    reviewed = [o for o in outcomes.values() if o != "open"]
+    wrong = reviewed.count("wrong")
+    low, high = wilson(wrong, len(reviewed))
+    return {"sample": len(outcomes), "reviewed": len(reviewed), "wrong": wrong,
+            "rate": wrong / len(reviewed) if reviewed else None, "low": low, "high": high,
+            "created": audit["created"], "seed": audit["seed"]}
+
+
+def audit_line(s: dict) -> str:
+    if not s["reviewed"]:
+        return f"release audit: {s['sample']} automatic releases drawn, none checked yet"
+    return (f"release audit: {s['wrong']} of {s['reviewed']} checked automatic releases needed a correction or "
+            f"rejection ({100 * s['rate']:.0f} %, 95 % CI {s['low'] * 100:.0f}–{s['high'] * 100:.0f} %); "
+            f"{s['sample'] - s['reviewed']} of {s['sample']} not checked yet")
+
+
 def cmd_eval(args) -> None:
     if args.action == "holdout":
         print(f"holdout: {', '.join(sorted(set_holdout(args.doc or []))) or 'none'}")
         return
     con = store.connect()
+    if args.action == "audit":
+        if load_audit() is None or args.redraw:
+            ids = draw_audit(con, args.size, args.seed)
+            print(f"drew {len(ids)} automatically released records (seed {args.seed}) into {AUDIT_PATH}; check them in "
+                  "the review queue (?view=review&audit=1), then run `python -m pipeline eval snapshot`")
+        print(audit_line(audit_summary(con)))
+        return
     if args.action == "snapshot":
         added, updated, n = snapshot(con)
         print(f"reference: {added} added, {updated} updated, {n} records in {REFERENCE_PATH}")
@@ -371,6 +454,8 @@ def cmd_eval(args) -> None:
     print(("final values, reviewer corrections included" if args.corrected
            else "model output before reviewer corrections") + "\n")
     print(report(compare(reference, current, corrected), load_holdout()))
+    if audit := audit_summary(con):
+        print("\n" + audit_line(audit))
     if fallback:
         print(f"\n{fallback} records were stored before the model output was kept and are compared with their "
               "final values; run `python -m pipeline rebuild` to fill it in.")

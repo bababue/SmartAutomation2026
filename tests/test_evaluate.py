@@ -211,3 +211,27 @@ def test_lab_evaluation_distinguishes_range_upper_bounds():
     assert evaluate.match_lab(reference, reference) == 1
     bh.lab_results[0].value_upper = 20
     assert evaluate.match_lab(reference, store.extracted_summary(bh)["lab"]) == 0
+
+
+def test_release_audit_counts_corrected_and_rejected_releases_as_wrong(tmp_path):
+    from tests.test_store import record
+    con = store.connect(tmp_path / "a.sqlite")
+    for i in range(6):
+        bh = record(bid=f"rep:BH{i}", name=f"BH {i}")
+        bh.review_status = ReviewStatus.auto_approved
+        store.save_borehole(con, bh)
+    con.commit()
+    path = tmp_path / "audit.json"
+    drawn = evaluate.draw_audit(con, 4, seed=7, path=path)
+    assert drawn == evaluate.draw_audit(con, 4, seed=7, path=path) and len(drawn) == 4  # reproducible
+    confirmed, corrected, rejected, untouched = drawn
+    store.record_review(con, confirmed, ReviewStatus.approved, "Ana", None)
+    store.add_correction(con, "borehole", corrected, "layer", {"orig_top": 0, "orig_bottom": 4.5, "primary": "silt"},
+                         "Ana", None)
+    con.commit()
+    store.record_review(con, corrected, ReviewStatus.approved, "Ana", None)
+    store.record_review(con, rejected, ReviewStatus.rejected, "Ana", None)
+    s = evaluate.audit_summary(con, path)
+    assert (s["sample"], s["reviewed"], s["wrong"]) == (4, 3, 2)
+    assert s["low"] < 2 / 3 < s["high"] and 0 <= s["low"] and s["high"] <= 1
+    assert evaluate.wilson(0, 15)[0] == 0 and 0.15 < evaluate.wilson(0, 15)[1] < 0.25  # no error seen is no proof of none

@@ -723,6 +723,9 @@ select.field { padding: 0 4px; }
 .stats-bar svg { display: block; }
 .stats-bar span { display: block; height: 100%; min-width: 2px; background: var(--water); border-radius: 0 4px 4px 0; }
 .stats-note { margin: 10px 0 0; font-size: 13px; }
+.stats-figure { margin: 4px 0 10px; font-size: 14px; }
+.stats-figure b { font-size: 28px; font-weight: 600; margin-right: 4px; }
+.stats-action { margin-top: 12px; }
 .stats-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .stats-table th { text-align: left; font-weight: 500; color: var(--graphite); border-bottom: 1px solid var(--grid); padding: 4px 6px; }
 .stats-table td { border-bottom: 1px solid var(--rule-soft); padding: 4px 6px; vertical-align: middle; }

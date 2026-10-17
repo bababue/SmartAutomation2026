@@ -65,8 +65,8 @@ export const fetchSimilar = (id: string, signal?: AbortSignal) =>
 export const fetchStats = () => request<Stats>('/api/stats')
 export const fetchStatsDetail = (f: Filters, signal?: AbortSignal) =>
   request<StatsDetail>(`/api/stats/detail?${filterParams(f)}`, { signal })
-export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200): Promise<{ items: QueueItem[]; total: number }> {
-  const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}`, { signal })
+export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200, audit = false): Promise<{ items: QueueItem[]; total: number }> {
+  const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}${audit ? '&audit=true' : ''}`, { signal })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   const items = (await res.json()) as QueueItem[]
   return { items, total: Number(res.headers.get('X-Total-Count') ?? items.length) }
