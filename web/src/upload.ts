@@ -26,6 +26,7 @@ export const pending = (s: Status) => s === 'uploading' || s === 'queued' || s =
 const onServer = (b: Batch) => !!b.jobId && (b.status === 'queued' || b.status === 'processing')
 /** Once records are being stored, a cancellation would come too late. */
 export const cancellable = (b: Batch) => onServer(b) && b.progress?.stage !== 'store'
+const MAX_POLL_FAILURES = 5
 
 /** Uploads in batches, from the file chooser or dropped on the page, with their progress on the server. */
 export function useUpload(onUploaded: () => void, onSelect: (id: string) => void) {
@@ -51,21 +52,34 @@ export function useUpload(onUploaded: () => void, onSelect: (id: string) => void
       .catch((err) => update(key, { status: 'error', error: err.message }))
   }, [])
 
+  // Batches with a status request in flight, and those whose job has ended, are not polled.
+  const skip = useRef(new Set<string>())
+  const failures = useRef(new Map<string, number>())
+
   // One poller for every batch still on the server's queue, and for the day's model calls while any runs.
   useEffect(() => {
     const t = setInterval(() => {
       const running = batchesRef.current.filter(onServer)
       if (running.length) fetchLlmUsage().then(setUsage).catch(() => {})
-      running.forEach((b) => {
+      running.filter((b) => !skip.current.has(b.key)).forEach((b) => {
+        skip.current.add(b.key)
         fetchUploadStatus(b.jobId!)
           .then((s) => {
+            failures.current.delete(b.key)
             apply(b.key, s)
             if (s.status === 'done') {
               onUploaded()
               if (s.boreholes.length) onSelect(s.boreholes[0].id)  // open the new hole; the list names the others
             }
+            if (pending(s.status)) skip.current.delete(b.key)
           })
-          .catch(() => update(b.key, { status: 'error', error: 'Lost track of the upload' }))
+          .catch(() => {
+            // A restarting API or a dropped connection is not the end of the job.
+            const n = (failures.current.get(b.key) ?? 0) + 1
+            failures.current.set(b.key, n)
+            if (n >= MAX_POLL_FAILURES) update(b.key, { status: 'error', error: 'Lost track of the upload' })
+            else skip.current.delete(b.key)
+          })
       })
     }, 1500)
     return () => clearInterval(t)

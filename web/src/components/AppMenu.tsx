@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { exportUrl } from '../api'
 
 interface Props {
@@ -59,7 +59,7 @@ export function AppMenu({ inStats, uploading, dark, view3d, onToggleStats,
     trigger?.focus()
   }
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
+  const onKeyDown = (e: KeyboardEvent) => {
     if (!open) return
     const active = document.activeElement as HTMLElement | null
     const inSub = !!active?.closest('.menu-flyout')

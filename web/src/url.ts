@@ -56,8 +56,7 @@ export function readUrl(search: string): UrlState {
     tunnelId: p.get('tunnel'),
     selectedId: p.get('borehole'),
     auditOnly: p.get('audit') === '1',
-    // 'quality' is an alias of the details tab.
-    statsTab: p.get('tab') === 'quality' ? 'details' : STATS_TABS.find((t) => t === p.get('tab')) ?? 'overview',
+    statsTab: STATS_TABS.find((t) => t === p.get('tab')) ?? 'overview',
     listOpen: p.get('list') !== 'closed',
     reviewFilters: {
       finding: p.get('finding'),

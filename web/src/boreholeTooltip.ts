@@ -15,7 +15,7 @@ export function tooltipContent(p: TooltipBorehole) {
   if (p.depth != null) root.append(el('span', 'tip-line', `Borehole depth ${fmtNum(p.depth, 1)} m`))
   if (p.loc_method === 'geocoded_place') root.append(el('span', 'tip-line', 'Approximate position'))
   if (p.layer_lithology) root.append(el('span', 'tip-line',
-    `${p.layer_top}–${p.layer_bottom} m below ground: ${lithStyle(p.layer_lithology).label}`))
+    `${fmtNum(p.layer_top, 1)}–${fmtNum(p.layer_bottom, 1)} m below ground: ${lithStyle(p.layer_lithology).label}`))
   return root
 }
 

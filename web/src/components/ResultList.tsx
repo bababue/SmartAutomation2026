@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Feature, GroupFacet } from '../types'
+import { isTyping } from '../dom'
 import { fmtMetres } from '../format'
 import { CoreStrip } from './Profile'
 
@@ -19,12 +20,20 @@ interface Props {
 export function ResultList({ features, groups, activeGroup, onShowGroup, selectedId, onSelect, loading, grouped }: Props) {
   const [openOverride, setOpenOverride] = useState<Map<string, { open: boolean; selectedId: string | null }>>(new Map())
   const selectedRef = useRef<HTMLButtonElement>(null)
+  const focusedFor = useRef<string | null>(null)
   const selectedGroup = features.find((feature) => feature.properties.id === selectedId)?.properties.grp
+  // Focus follows a new selection only from within the list: a search field or the map keeps it, since the
+  // review shortcuts act on keys that reach the window.
   useEffect(() => {
-    if (loading || !selectedId) return
     const button = selectedRef.current
-    button?.focus({ preventScroll: true })
-    button?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    if (loading || !selectedId || !button) return
+    button.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    if (focusedFor.current === selectedId) return
+    focusedFor.current = selectedId
+    const active = document.activeElement
+    if (!active || active === document.body || (!isTyping(active) && active.closest('.sidebar')?.contains(button))) {
+      button.focus({ preventScroll: true })
+    }
   }, [selectedId, selectedGroup, loading, openOverride, grouped])
   if (!loading && !features.length) {
     return (

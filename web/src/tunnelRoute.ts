@@ -39,7 +39,6 @@ export interface RouteCandidate extends RoutePosition {
   name: string
 }
 
-const STORAGE_KEY = 'borehole-atlas.tunnel-route'
 const TUNNELS_KEY = 'borehole-atlas.tunnels'
 const RAD = Math.PI / 180
 /** Metres per degree, for the flat approximation used over the short distances of a site or a route. */
@@ -146,29 +145,23 @@ function validRoute(value: unknown): TunnelRoute | null {
 export function loadTunnels(): SavedTunnel[] {
   try {
     const saved = localStorage.getItem(TUNNELS_KEY)
-    if (saved) {
-      const entries: unknown = JSON.parse(saved)
-      if (!Array.isArray(entries)) return []
-      return entries.flatMap((entry): SavedTunnel[] => {
-        try {
-          if (!entry || typeof entry.id !== 'string' || typeof entry.name !== 'string') return []
-          const route = entry.route == null ? null : validRoute(entry.route)
-          if (entry.route != null && !route) return []
-          return [{ id: entry.id, name: entry.name, route,
-            holeIds: Array.isArray(entry.holeIds) ? entry.holeIds.filter((id: unknown): id is string => typeof id === 'string') : [] }]
-        } catch { return [] }
-      })
-    }
-    const previous = localStorage.getItem(STORAGE_KEY)
-    if (!previous) return []
-    const route = validRoute(JSON.parse(previous))
-    return route ? [{ id: crypto.randomUUID(), name: route.name, route, holeIds: [] }] : []
+    if (!saved) return []
+    const entries: unknown = JSON.parse(saved)
+    if (!Array.isArray(entries)) return []
+    return entries.flatMap((entry): SavedTunnel[] => {
+      try {
+        if (!entry || typeof entry.id !== 'string' || typeof entry.name !== 'string') return []
+        const route = entry.route == null ? null : validRoute(entry.route)
+        if (entry.route != null && !route) return []
+        return [{ id: entry.id, name: entry.name, route,
+          holeIds: Array.isArray(entry.holeIds) ? entry.holeIds.filter((id: unknown): id is string => typeof id === 'string') : [] }]
+      } catch { return [] }
+    })
   } catch { return [] }
 }
 
 export function saveTunnels(tunnels: SavedTunnel[]) {
   try {
     localStorage.setItem(TUNNELS_KEY, JSON.stringify(tunnels))
-    localStorage.removeItem(STORAGE_KEY)
   } catch { /* storage can be unavailable in private browsing */ }
 }

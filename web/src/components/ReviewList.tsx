@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { percentOf } from '../format'
 import { STATUS_LABEL, scoreText } from '../review'
 import type { CrsGroup, GroupFacet, QueueItem } from '../types'
 import { ConfirmCrs } from './ConfirmCrs'
@@ -86,7 +87,7 @@ export function ReviewList({ items, groups, total, loading, audit, noun, selecte
           {!grouped && items.map(renderItem)}
           {grouped && orderedGroups.map((group) => {
             const entries = byGroup.get(group.group) ?? []
-            const share = group.count ? Math.round(100 * group.released / group.count) : 0
+            const share = percentOf(group.released, group.count)
             const open = expanded.has(group.group)
             return <li key={group.group} className="result-group">
               <div className="group-head">

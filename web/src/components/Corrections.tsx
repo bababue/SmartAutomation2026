@@ -11,6 +11,9 @@ type Item = { kind: CorrectionKind; payload: Record<string, unknown>; scope?: Co
 function useCorrection(boreholeId: string, onChange: (update: DetailUpdate) => void) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Some corrections were saved and others not: the form no longer matches the record, and a retry would
+  // send the saved ones again.
+  const [stale, setStale] = useState(false)
 
   /** Sends the corrections in order; stops at the first that fails. */
   async function send(items: Item[]) {
@@ -22,17 +25,25 @@ function useCorrection(boreholeId: string, onChange: (update: DetailUpdate) => v
     }
     setBusy(true)
     setError(null)
+    let saved = 0
     try {
-      for (const it of items) onChange(await postCorrection(boreholeId, it.kind, it.payload, reviewer, it.scope ?? 'borehole'))
+      for (const it of items) {
+        onChange(await postCorrection(boreholeId, it.kind, it.payload, reviewer, it.scope ?? 'borehole'))
+        saved += 1
+      }
       return true
     } catch (e) {
-      setError(`Correction not saved: ${(e as Error).message}`)
+      const message = (e as Error).message
+      if (saved) {
+        setStale(true)
+        setError(`Saved ${saved} of ${items.length} corrections; the rest failed (${message}). Cancel and edit again.`)
+      } else setError(`Correction not saved: ${message}`)
       return false
     } finally {
       setBusy(false)
     }
   }
-  return { send, busy, error }
+  return { send, busy, error, stale }
 }
 
 // NaN for an empty or unreadable entry, so that every comparison with it fails.
@@ -59,8 +70,8 @@ export function HeaderEditor({ borehole, onChange, onDone, children }: {
     location_name: str(borehole.location_name) }
   type Key = keyof typeof initial
   const [v, setV] = useState(initial)
-  const { send, busy, error } = useCorrection(borehole.borehole_id, onChange)
-  const canSave = !busy && v.borehole_name.trim() !== ''
+  const { send, busy, error, stale } = useCorrection(borehole.borehole_id, onChange)
+  const canSave = !busy && !stale && v.borehole_name.trim() !== ''
 
   async function save() {
     if (!canSave) return
@@ -141,7 +152,7 @@ export function RecordEditor({ borehole, onChange, onDone }: {
   const [lat, setLat] = useState(str(loc.lat))
   const [lon, setLon] = useState(str(loc.lon))
   const [groundwater, setGroundwater] = useState('')
-  const { send, busy, error } = useCorrection(borehole.borehole_id, onChange)
+  const { send, busy, error, stale } = useCorrection(borehole.borehole_id, onChange)
 
   const field = (key: Key, label: string, extra: { type?: string; inputMode?: 'decimal'; placeholder?: string } = {}) => (
     <input className={`field${numeric.includes(key) && bad(v[key]) ? ' field-invalid' : ''}`} type={extra.type ?? 'text'}
@@ -167,7 +178,7 @@ export function RecordEditor({ borehole, onChange, onDone }: {
 
   return (
     <div className="card card-editing">
-      <CardHead id="detail-record" title="Record" edit={{ busy, canSave: !invalid, onSave: save, onCancel: onDone }} />
+      <CardHead id="detail-record" title="Record" edit={{ busy, canSave: !stale && !invalid, onSave: save, onCancel: onDone }} />
       <dl className="record record-edit">
         <Row label="Hole name">{field('borehole_name', 'Hole name')}</Row>
         <Row label="Project">{field('project_name', 'Project')}</Row>
@@ -235,7 +246,7 @@ export function LayersEditor({ borehole, onChange, onDone }: {
 }) {
   const [drafts, setDrafts] = useState(() => borehole.layers.map(draftOf))
   const [nextKey, setNextKey] = useState(borehole.layers.length)
-  const { send, busy, error } = useCorrection(borehole.borehole_id, onChange)
+  const { send, busy, error, stale } = useCorrection(borehole.borehole_id, onChange)
   const set = (key: number, patch: Partial<LayerDraft>) => setDrafts(drafts.map((d) => (d.key === key ? { ...d, ...patch } : d)))
 
   function add() {
@@ -268,7 +279,7 @@ export function LayersEditor({ borehole, onChange, onDone }: {
 
   return (
     <div className="card card-flush card-editing">
-      <CardHead id="detail-layers" title="Layers" edit={{ busy, canSave: drafts.every(layerValid), onSave: save, onCancel: onDone }} />
+      <CardHead id="detail-layers" title="Layers" edit={{ busy, canSave: !stale && drafts.every(layerValid), onSave: save, onCancel: onDone }} />
       <div className="table-scroll">
         <table className="layers layers-edit">
           <thead>
@@ -329,8 +340,8 @@ export function TestsEditor({ boreholeId, rows, onChange, onDone }: {
   onChange: (update: DetailUpdate) => void
   onDone: () => void
 }) {
-  const [drafts, setDrafts] = useState(() => rows.map((row) => ({ row, value: str(row.value), rqd: str(row.rqd) })))
-  const { send, busy, error } = useCorrection(boreholeId, onChange)
+  const [drafts, setDrafts] = useState(() => rows.map((row, key) => ({ key, row, value: str(row.value), rqd: str(row.rqd) })))
+  const { send, busy, error, stale } = useCorrection(boreholeId, onChange)
   type Draft = (typeof drafts)[number]
   const set = (d: Draft, patch: Partial<Draft>) => setDrafts(drafts.map((x) => (x === d ? { ...x, ...patch } : x)))
   const ref = (r: TestRow) => ({ test: r.test, orig_depth: r.depth, ...(r.parameter ? { parameter: r.parameter } : {}) })
@@ -348,10 +359,10 @@ export function TestsEditor({ boreholeId, rows, onChange, onDone }: {
 
   return (
     <div className="card card-editing">
-      <CardHead title="Tests" edit={{ busy, canSave: valid, onSave: save, onCancel: onDone }} />
+      <CardHead title="Tests" edit={{ busy, canSave: !stale && valid, onSave: save, onCancel: onDone }} />
       <ul className="tests tests-edit">
         {drafts.map((d) => (
-          <li key={`${d.row.test}-${d.row.depth}-${d.row.parameter ?? ''}`}>
+          <li key={d.key}>
             <span className="num">{fmtNum(d.row.depth)} m</span>
             <span className="tests-label">{d.row.label}</span>
             <input className={`field field-num${bad(d.value) ? ' field-invalid' : ''}`} inputMode="decimal" value={d.value}
@@ -380,14 +391,14 @@ export function NotesEditor({ borehole, onChange, onDone }: {
   onDone: () => void
 }) {
   const [notes, setNotes] = useState(str(borehole.notes))
-  const { send, busy, error } = useCorrection(borehole.borehole_id, onChange)
+  const { send, busy, error, stale } = useCorrection(borehole.borehole_id, onChange)
   async function save() {
     const items: Item[] = notes.trim() === str(borehole.notes).trim() ? [] : [{ kind: 'field', payload: { field: 'notes', value: notes.trim() || null } }]
     if (await send(items)) onDone()
   }
   return (
     <div className="card card-editing">
-      <CardHead title="Notes" edit={{ busy, canSave: true, onSave: save, onCancel: onDone }} />
+      <CardHead title="Notes" edit={{ busy, canSave: !stale, onSave: save, onCancel: onDone }} />
       <textarea className="field notes-input" value={notes} onChange={(e) => setNotes(e.target.value)} rows={5} aria-label="Notes" autoFocus />
       {error && <p className="error" role="alert">{error}</p>}
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { postReview } from '../api'
 import { isTyping } from '../dom'
 import { SEVERITY_LABEL, STATUS_LABEL, fmtDateTime, loadReviewer, saveReviewer, scoreText } from '../review'
@@ -25,6 +25,8 @@ export function ReviewBox({ detail, onChange, onDecided }: Props) {
   const [reviewer, setReviewer] = useState(loadReviewer)
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
+  // Two key presses can land before a re-render shows `busy`.
+  const submitting = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const status = bh.review_status
@@ -42,41 +44,52 @@ export function ReviewBox({ detail, onChange, onDecided }: Props) {
     && !i.startsWith('unreadable:') && !i.startsWith('corrected by'))  // corrections are listed in the panel
 
   async function decide(decision: ReviewStatus) {
-    if (busy || decision === status) return
+    if (submitting.current || decision === status) return
     if (!reviewer.trim()) {
       setOpen(true)
       setError('Enter your name so the decision can be traced.')
       return
     }
+    submitting.current = true
     setBusy(true)
     setError(null)
+    let advanced = false
     try {
       saveReviewer(reviewer.trim())
       onChange(await postReview(bh.borehole_id, decision, reviewer.trim(), comment.trim() || null, detail.content_hash, detail.review_revision))
       setComment('')
-      if (decision !== 'pending_review') onDecided?.()
+      if (decision !== 'pending_review' && onDecided) {
+        // The decided record stays on screen until the next one has loaded; it takes no second decision.
+        advanced = true
+        onDecided()
+      }
     } catch (e) {
       const msg = (e as Error).message
       setError(msg.startsWith('409')
         ? 'Not saved: this record changed since you opened it (a re-run or another reviewer). Reopen it and check again.'
         : `Decision not saved (${msg}).`)
     } finally {
-      setBusy(false)
+      if (!advanced) {
+        submitting.current = false
+        setBusy(false)
+      }
     }
   }
 
-  // Keyboard: A approves, R rejects (not while typing in a field).
+  // Keyboard in review mode: A approves, R rejects (not while typing in a field).
   const onShortcut = useEffectEvent((decision: ReviewStatus) => decide(decision))
+  const reviewMode = !!onDecided
   useEffect(() => {
+    if (!reviewMode) return
     const onKey = (e: KeyboardEvent) => {
-      if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.repeat || isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
       const key = e.key.toLowerCase()
       if (key === 'a') { e.preventDefault(); onShortcut('approved') }
       if (key === 'r') { e.preventDefault(); onShortcut('rejected') }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [reviewMode])
 
   const decisions = (<>
     {decided && (
@@ -84,13 +97,13 @@ export function ReviewBox({ detail, onChange, onDecided }: Props) {
     )}
     {status !== 'rejected' && (
       <button className="btn btn-decide btn-reject" disabled={busy} onClick={() => decide('rejected')}
-        aria-label={onDecided ? 'Reject and next' : 'Reject'} title={`${onDecided ? 'Reject and next' : 'Reject'} (R)`}>
+        aria-label={onDecided ? 'Reject and next' : 'Reject'} title={onDecided ? 'Reject and next (R)' : 'Reject'}>
         <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
       </button>
     )}
     {status !== 'approved' && (
       <button className="btn btn-decide btn-approve" disabled={busy} onClick={() => decide('approved')}
-        aria-label={onDecided ? 'Approve and next' : 'Approve'} title={`${onDecided ? 'Approve and next' : 'Approve'} (A)`}>
+        aria-label={onDecided ? 'Approve and next' : 'Approve'} title={onDecided ? 'Approve and next (A)' : 'Approve'}>
         <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.8" /></svg>
       </button>
     )}

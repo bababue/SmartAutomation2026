@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import type { Detail, DetailUpdate, Layer, SimilarGround, SourceRef } from '../types'
 import { lithStyle, patternId } from '../lithology'
 import { CardHead, CorrectionList, HeaderEditor, LayersEditor, NotesEditor, RecordEditor, TestsEditor, type TestRow } from './Corrections'
@@ -35,6 +35,13 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
   const [editing, setEditing] = useState<'head' | 'record' | 'layers' | 'tests' | 'notes' | null>(null)
   const done = () => setEditing(null)
   const [sourceOpen, setSourceOpen] = useState(false)
+  // Closing the panel or switching the record (it is keyed) closes the source page too, so the layout is restored.
+  const toggleSource = useEffectEvent(onSourceToggle)
+  useEffect(() => {
+    if (!sourceOpen) return
+    toggleSource(true)
+    return () => toggleSource(false)
+  }, [sourceOpen])
 
   const [pageIndex, setPageIndex] = useState(0)
   const pages = detail.source_pages
@@ -119,7 +126,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
               {loc.crs_candidates.length > 1 && <span className="muted"> (also possible: {loc.crs_candidates.slice(1).join(', ')})</span>}
             </dd>
             <dt>Ground level</dt><dd>{withSuffix(bh.surface_elevation_raw ?? fmtNum(bh.surface_elevation_m), bh.elevation_datum)}</dd>
-            <dt>Final depth</dt><dd>{fmtNum(bh.depth_m)} m{bh.inclination_deg != null && bh.inclination_deg !== 90 && Math.abs(bh.inclination_deg) !== 90 ? `, inclined ${bh.inclination_deg}°` : ''}</dd>
+            <dt>Final depth</dt><dd>{fmtNum(bh.depth_m)} m{bh.inclination_deg != null && Math.abs(bh.inclination_deg) !== 90 ? `, inclined ${bh.inclination_deg}°` : ''}</dd>
             <dt>Drilled</dt><dd>{bh.start_date ?? '–'}{bh.end_date && bh.end_date !== bh.start_date ? ` to ${bh.end_date}` : ''}</dd>
             <dt>Method</dt><dd>{bh.drilling_method ?? '–'}</dd>
             <dt>Client</dt><dd>{bh.client ?? '–'}</dd>
@@ -216,7 +223,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
         )}
       </div>
       </div>
-      <button className="edge-tab source-toggle" onClick={() => { setSourceOpen(!sourceOpen); onSourceToggle(!sourceOpen) }} aria-expanded={sourceOpen} aria-controls="detail-source"
+      <button className="edge-tab source-toggle" onClick={() => setSourceOpen(!sourceOpen)} aria-expanded={sourceOpen} aria-controls="detail-source"
         title={`${sourceOpen ? 'Hide' : 'Show'} ${documentTitle}`}>
         {sourceOpen ? '›' : '‹'} <span>{documentTitle}</span>
       </button>

@@ -237,13 +237,18 @@ export function MapView({ data, route, routeFocusKey, inactiveRoutes, routeDraft
         if (!feature || feature.geometry.type !== 'Point') return
         const source = m.getSource('boreholes') as GeoJSONSource
         const center = feature.geometry.coordinates as [number, number]
-        const zoom = await source.getClusterExpansionZoom(feature.properties.cluster_id)
-        if (zoom <= CLUSTER_MAX_ZOOM && m.getZoom() < CLUSTER_MAX_ZOOM) {
-          m.easeTo({ center: center as LngLatLike, zoom })
-          return
+        let leaves
+        try {
+          const zoom = await source.getClusterExpansionZoom(feature.properties.cluster_id)
+          if (zoom <= CLUSTER_MAX_ZOOM && m.getZoom() < CLUSTER_MAX_ZOOM) {
+            m.easeTo({ center: center as LngLatLike, zoom })
+            return
+          }
+          // Holes at (almost) the same position never split up: offer a list instead.
+          leaves = await source.getClusterLeaves(feature.properties.cluster_id, 50, 0)
+        } catch {
+          return  // the points were replaced meanwhile and the cluster is gone
         }
-        // Holes at (almost) the same position never split up: offer a list instead.
-        const leaves = await source.getClusterLeaves(feature.properties.cluster_id, 50, 0)
         picker.remove()
         picker.setLngLat(center).setDOMContent(pickerList(leaves.map((l) => l.properties as MapPoint), (id) => {
           picker.remove()

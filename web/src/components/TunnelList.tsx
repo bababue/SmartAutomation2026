@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { fmtDistance } from '../format'
 import { routeLength, tunnelProject, type SavedTunnel } from '../tunnelRoute'
 import type { Feature } from '../types'
 import { GroupingToggle } from './GroupingToggle'
@@ -12,8 +13,6 @@ interface Props {
   grouped: boolean
   onGroupedChange: (grouped: boolean) => void
 }
-
-const formatLength = (metres: number) => metres >= 1000 ? `${(metres / 1000).toFixed(2)} km` : `${Math.round(metres)} m`
 
 export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onCreate, grouped, onGroupedChange }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -42,7 +41,7 @@ export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onCreate,
       <button className={`tunnel-result${selectedId === tunnel.id ? ' tunnel-result-selected' : ''}`}
         aria-current={selectedId === tunnel.id} onClick={() => onSelect(tunnel.id)} data-list-item>
         <strong>{tunnel.name || 'Tunnel'}</strong>
-        <span>{tunnel.route ? formatLength(routeLength(tunnel.route.coordinates)) : 'Route not drawn'}
+        <span>{tunnel.route ? fmtDistance(routeLength(tunnel.route.coordinates)) : 'Route not drawn'}
           {' · '}{tunnel.holeIds.length} borehole{tunnel.holeIds.length === 1 ? '' : 's'}</span>
       </button>
     </li>

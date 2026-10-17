@@ -118,7 +118,7 @@ export default function App() {
   const routeLoading = routeActive && routeLoadedFor !== refresh
 
   useEffect(() => {
-    const t = setTimeout(() => setFilters((f) => ({ ...f, q: query })), 250)
+    const t = setTimeout(() => setFilters((f) => (f.q === query ? f : { ...f, q: query })), 250)
     return () => clearTimeout(t)
   }, [query])
 
@@ -224,7 +224,13 @@ export default function App() {
     const ctrl = new AbortController()
     fetchDetail(selectedId, ctrl.signal)
       .then(setDetail)
-      .catch((e) => e.name !== 'AbortError' && setError(`Could not load the borehole (${e.message}).`))
+      .catch((e) => {
+        if (e.name === 'AbortError') return
+        // The sheet must not keep showing the previous record; the error shows in the list.
+        setDetail(null)
+        setListOpen(true)
+        setError(`Could not load the borehole (${e.message}).`)
+      })
     return () => ctrl.abort()
   }, [selectedId, refresh])
 
@@ -270,7 +276,7 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return
-      if (e.target instanceof Element && e.target.closest('.maplibregl-map, [role="menu"], [role="listbox"]')) return
+      if (e.target instanceof Element && e.target.closest('.maplibregl-map, [role="menu"], [role="listbox"], .detail, .tunnel-detail, .section')) return
       if (!sidebar.current || sidebar.current.inert) return
       const items = [...sidebar.current.querySelectorAll<HTMLButtonElement>('[data-list-item]')]
       const i = items.findIndex((b) => b.getAttribute('aria-current') === 'true')
