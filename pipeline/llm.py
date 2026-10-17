@@ -227,7 +227,7 @@ def _cache_key(*parts: str | bytes) -> str:
 
 def _classify_key(page: PageImage, model: str, effort: str) -> str:
     thumb = config.PAGES_DIR / page.thumb
-    return _cache_key(config.PROMPT_VERSION, model, effort, thumb.read_bytes(), page.text[:1500])
+    return _cache_key(config.CLASSIFY_PROMPT_VERSION, model, effort, thumb.read_bytes(), page.text[:1500])
 
 
 def _extract_key(page: PageImage, kind: str, context: str, model: str, effort: str) -> str:
