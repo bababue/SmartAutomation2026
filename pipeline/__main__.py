@@ -46,7 +46,7 @@ def _select(args) -> list[ingest.SourceDoc]:
     return docs
 
 
-def _ingest(docs, con, dataset_dir: Path = config.DATASET_DIR) -> dict[str, list[ingest.PageImage]]:
+def _ingest(docs, con, dataset_dir: Path | None = None) -> dict[str, list[ingest.PageImage]]:
     rendered = {}
     for d in docs:
         pages = ingest.render(d, dataset_dir)
@@ -182,7 +182,7 @@ def cmd_estimate(args) -> None:
 
 
 def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = True,
-        dataset_dir: Path = config.DATASET_DIR, progress: Progress | None = None) -> None:
+        dataset_dir: Path | None = None, progress: Progress | None = None) -> None:
     """Ingest, classify, extract and store the given documents (costs API calls)."""
     if max_pages is not None and max_pages < 1:
         raise ValueError("max_pages must be positive")

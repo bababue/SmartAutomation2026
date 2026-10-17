@@ -27,16 +27,6 @@ def record(bid="rep:BH01", name="BH-01", top_clay=4.5, ucs=42.0):
     return bh
 
 
-@pytest.fixture()
-def con(tmp_path, monkeypatch):
-    path = tmp_path / "s.sqlite"
-    monkeypatch.setattr(config, "DB_PATH", path)
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
-    c = store.connect(path)
-    yield c
-    c.close()
-
-
 def test_projections_are_queryable(con):
     store.save_borehole(con, record())
     rid = con.execute("SELECT rid FROM boreholes").fetchone()[0]

@@ -12,7 +12,6 @@ from pipeline import config, store, uploads
 def db_path(tmp_path, monkeypatch):
     path = tmp_path / "uploads.sqlite"
     monkeypatch.setattr(config, "DB_PATH", path)
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
     monkeypatch.setattr(config, "MAX_UPLOAD_WORKERS", 1)
     monkeypatch.setattr(config, "MAX_UPLOAD_JOBS", 2)
     return path

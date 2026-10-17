@@ -148,7 +148,6 @@ def test_corrected_record_still_shows_the_model_error(tmp_path, monkeypatch):
 
     path = tmp_path / "test.sqlite"
     monkeypatch.setattr(config, "DB_PATH", path)
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
     con = store.connect(path)
     src = SourceRef(file="demo.pdf", page=1)
     bh = Borehole(borehole_id="DOC1:BH1", borehole_name="BH1", depth_m=5,

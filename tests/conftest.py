@@ -14,3 +14,18 @@ def no_second_coordinate_reading(monkeypatch):
     """`run` reads printed coordinates a second time; tests never call a model."""
     from pipeline import llm
     monkeypatch.setattr(llm, "read_coordinates", lambda *args: None)
+
+
+@pytest.fixture()
+def db_path(tmp_path, monkeypatch):
+    path = tmp_path / "test.sqlite"
+    monkeypatch.setattr(config, "DB_PATH", path)
+    return path
+
+
+@pytest.fixture()
+def con(db_path):
+    from pipeline import store
+    c = store.connect()
+    yield c
+    c.close()

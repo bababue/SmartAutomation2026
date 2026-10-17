@@ -158,7 +158,8 @@ def _migrate_v4(con: sqlite3.Connection) -> None:
         con.execute("PRAGMA user_version = 4")
 
 
-def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
+def connect(path: Path | None = None) -> sqlite3.Connection:
+    path = path or config.DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path, check_same_thread=False, timeout=30)
     con.row_factory = sqlite3.Row

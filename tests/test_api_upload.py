@@ -16,7 +16,6 @@ from pipeline import config, store
 def client(tmp_path, monkeypatch):
     path = tmp_path / "test.sqlite"
     monkeypatch.setattr(config, "DB_PATH", path)
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
     monkeypatch.setattr(config, "UPLOADS_DIR", tmp_path / "uploads")
     monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
     monkeypatch.setattr(config, "MAX_UPLOAD_PAGES", 2)

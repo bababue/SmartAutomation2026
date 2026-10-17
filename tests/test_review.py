@@ -146,16 +146,6 @@ def test_scientific_notation():
     assert _num("3,5x10-7") == pytest.approx(3.5e-7)
 
 
-@pytest.fixture()
-def con(tmp_path, monkeypatch):
-    path = tmp_path / "test.sqlite"
-    monkeypatch.setattr(config, "DB_PATH", path)
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
-    c = store.connect(path)
-    yield c
-    c.close()
-
-
 def test_human_decision_survives_rerun_with_same_content(con):
     bh = make(position=0.3, method=GeorefMethod.geocoded_place)
     score(bh, {}, 0)

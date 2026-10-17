@@ -14,14 +14,9 @@ from tests.test_assemble import _log
 from tests.test_store import record
 
 
-@pytest.fixture()
-def con(tmp_path, monkeypatch):
-    path = tmp_path / "publish.sqlite"
+@pytest.fixture(autouse=True)
+def pages_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
-    connection = store.connect(path)
-    yield connection
-    connection.close()
 
 
 def inputs(doc_id="report", names=("BH1",)):

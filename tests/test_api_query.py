@@ -25,7 +25,6 @@ def hole(bid, lat, lon, layers, ucs=None):
 def client(tmp_path, monkeypatch):
     path = tmp_path / "q.sqlite"
     monkeypatch.setattr(config, "DB_PATH", path)
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
     con = store.connect(path)
     for bh in [
         hole("q:A", 10.0, 179.5, [(0, 12, "sand"), (12, 30, "clay")], ucs=120),   # clay deep, strong rock test
