@@ -400,8 +400,8 @@ button, input, select { font: inherit; color: inherit; }
 .detail-data { grid-area: data; }
 .detail-source { grid-area: source; }
 .detail-body { padding-right: 32px; }  /* room for the source tab */
-/* The panel scrolls as one; the source page stays in view beside the data. */
-.detail-source { position: sticky; top: 18px; align-self: start; max-height: calc(100cqh - 36px); overflow: auto; }
+/* The panel scrolls as one; the profile and the source page stay beside the data and scroll on their own. */
+.detail-profile, .detail-source { position: sticky; top: 18px; align-self: start; max-height: calc(100cqh - 36px); overflow: auto; }
 .detail-data { display: flex; flex-direction: column; gap: 14px; }
 .detail-data > * { margin-top: 0; margin-bottom: 0; }
 .detail-data > h3 { font-size: 15px; font-weight: 600; margin: 4px 0 -8px; }
