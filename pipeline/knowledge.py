@@ -31,7 +31,7 @@ from pyproj import Transformer
 from schema.borehole import Borehole, GeorefMethod, Lithology
 
 from . import corrections, store
-from .georef import _apply, _pairs, candidates, haversine_km, parse_tokens, resolve_with
+from .georef import apply_reading, candidates, haversine_km, pairs, parse_tokens, resolve_with
 from .scoring import RELATIVE_PIECE
 
 SCOPES = ("document", "project", "region", "global")
@@ -69,10 +69,10 @@ def printed_pair(coords_raw: str | None) -> tuple[float, float] | None:
     if not coords_raw:
         return None
     tokens = [t for t in parse_tokens(coords_raw) if t.values]
-    pairs = _pairs(tokens)
-    if not pairs:
+    found = pairs(tokens)
+    if not found:
         return None
-    north, east, _ = pairs[0]
+    north, east, _ = found[0]
     return east.values[0], north.values[0]
 
 
@@ -244,7 +244,7 @@ def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str
                 doubts.append("coordinate axes inferred, not labelled")
             if spread_m > 50 and not any(i.startswith("coordinate notation") for i in doubts):
                 doubts.append(f"coordinate notation or datum ambiguous: readings differ by up to {spread_m:.0f} m")
-            _apply(loc, c, loc.method if loc.method == GeorefMethod.linked_table else GeorefMethod.stated_coordinates)
+            apply_reading(loc, c)
             loc.crs_candidates, loc.accuracy_m = [], max(10.0, spread_m, loc.accuracy_m or 0) if doubts else 10.0
             loc.confidence = 0.9 if k["confirmations"] >= CONFIRMED and not doubts else 0.8
             _settle_position(bh)
