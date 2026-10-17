@@ -31,7 +31,7 @@ from .scoring import SOURCE_CONFLICTS, counts_against, score
 GEOREF_ISSUES = (
     "CRS ambiguous", "coordinate system inferred", "coordinate axes inferred", "coordinate notation or datum ambiguous",
     "coordinate system taken from", "coordinates ", "printed coordinates", "position ", "no place to cross-check",
-    "not georeferenced", "invalid WGS84",
+    "not georeferenced", "invalid WGS84", "coordinate system read differently",
 )
 # Items the model could not read about the coordinates (not about levels), settled by the same fix.
 GEOREF_UNREADABLE = re.compile(r"^unreadable:(?!.*\b(?:elevation|level)\b).*\b(?:coordinat\w*|crs|datum|grid|zone|easting|northing)\b", re.I)

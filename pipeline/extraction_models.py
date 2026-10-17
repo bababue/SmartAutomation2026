@@ -196,3 +196,8 @@ class XLabRow(BaseModel):
 class PageLabResults(BaseModel):
     rows: list[XLabRow]
     unreadable: list[str] = Field(description="What you could not read reliably on this page")
+
+
+class CoordinateReading(BaseModel):
+    coords_raw: str | None = Field(description="Coordinate text exactly as printed, incl. axis labels; null if none")
+    crs_raw: str | None = Field(description="Coordinate system / grid / datum / zone text as printed; null if none")

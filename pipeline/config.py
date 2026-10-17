@@ -59,3 +59,5 @@ AUTO_APPROVE_THRESHOLD = float(os.getenv("AUTO_APPROVE_THRESHOLD", "0.9"))
 PROMPT_VERSION = "v4"
 # Lab-sheet extraction has its own prompt and cache, so it can change without re-extracting logs.
 LAB_PROMPT_VERSION = "lab-v1"
+COORDS_PROMPT_VERSION = "coords-v1"  # second reading of printed coordinates, see pipeline/coordcheck.py
+COORDS_EFFORT = os.getenv("COORDS_EFFORT", "low")

@@ -56,6 +56,14 @@ depths that literally appear in that text.
   depth mismatch, ambiguous coordinate system, empty log.
 - Positions whose coordinate system is only inferred (not printed), or whose notation allows readings a
   few hundred metres apart (decimal minutes vs. seconds), stay below the threshold until a person confirms them.
+- Printed coordinates are read a second time (`pipeline/coordcheck.py`): the region around them, enlarged,
+  with a prompt that only copies coordinates and CRS (the whole page for coordinate-table rows). The same
+  point within 5 m is noted as confirmed; a different point or coordinate system is blocking, nothing legible
+  needs a look. It has its own cache stage and key (`COORDS_PROMPT_VERSION`), and runs with `pipeline run`
+  only; `rebuild` uses what is cached.
+- A log page that comes back with fewer logs than the classification counted is extracted once more; the
+  retry is cached separately (`extract-retry`), so the first answer stays traceable. Only if the retry is no
+  better does the page become a blocking placeholder.
 - Reviewers approve, reject or reopen with name and optional comment; every decision is logged.
 - Re-runs keep human decisions as long as the reviewed content is unchanged; if the data changes, the
   record returns to the queue with a note.
