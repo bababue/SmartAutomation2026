@@ -69,6 +69,15 @@ def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) 
     return found / total if total >= 3 else None
 
 
+# The model names the field of each unreadable item ('header: ...', 'tests: ...'). Header fields and test values
+# do not decide the release; an item without a field name counts.
+MINOR_UNREADABLE = re.compile(r"^(?:unreadable:\s*)?(?:header|tests)\s*:", re.I)
+
+
+def counts_against(unreadable: str) -> bool:
+    return not MINOR_UNREADABLE.match(unreadable)
+
+
 # Findings that need a look before release, without blocking: they cap the extraction confidence.
 NEEDS_LOOK = ("boundary inferred", "core loss inferred", "lithology of layer")
 NEEDS_LOOK_RE = re.compile(r"^core run .*: (?:(?:SCR|RQD) [\d.]+% above TCR|\w+ [\d.]+% outside)")
@@ -144,7 +153,7 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
             extraction = UNCONFIRMED_CAP
             reasons.append("Nothing confirms the layer depths independently (PDF text layer missing, partial or not "
                            "matching, and no complete log from 0 m to a stated final depth on a scan)")
-    look = [i for i in bh.issues if i.startswith(NEEDS_LOOK) or NEEDS_LOOK_RE.match(i)]
+    look = [i for i in bh.issues if finding_severity(i) == "needs_look"]
     if look and extraction > UNCONFIRMED_CAP:
         extraction = UNCONFIRMED_CAP
         reasons.append(f"{len(look)} finding(s) need a look before release (inferred values or inconsistent core runs)")
@@ -165,7 +174,7 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
         reasons.append("Coordinate system ambiguous: " + ", ".join(loc.crs_candidates[:3]))
 
     bh.score = round(min(bh.confidence, position), 2)
-    blocking = [i for i in bh.issues if any(b in i for b in BLOCKING)]
+    blocking = [i for i in bh.issues if finding_severity(i) == "blocking"]
     released = bh.score >= config.AUTO_APPROVE_THRESHOLD and not blocking
     bh.review_status = ReviewStatus.auto_approved if released else ReviewStatus.pending_review
     if not released and not reasons:

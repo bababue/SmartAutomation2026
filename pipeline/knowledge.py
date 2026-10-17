@@ -31,7 +31,7 @@ from pyproj import Transformer
 from schema.borehole import Borehole, GeorefMethod, Lithology
 
 from . import corrections, store
-from .georef import _apply, _pairs, haversine_km, parse_tokens, resolve_with
+from .georef import _apply, _pairs, candidates, haversine_km, parse_tokens, resolve_with
 from .scoring import RELATIVE_PIECE
 
 SCOPES = ("document", "project", "region", "global")
@@ -235,10 +235,20 @@ def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str
             # The learned system must land near where the record already is (inferred CRS or named place).
             if c is None or haversine_km(c.lat, c.lon, *near) > max(25.0, (loc.accuracy_m or 0) / 1000 * 2):
                 continue
+            readings = [r for r in candidates(loc.coords_raw, f"EPSG:{epsg}", None, near) if r.epsg == epsg
+                        and ("guessed" in c.note or "guessed" not in r.note)]
+            spread_m = max((haversine_km(c.lat, c.lon, r.lat, r.lon) * 1000 for r in readings), default=0)
+            doubts = [i for i in bh.issues if i.startswith(("coordinate axes inferred",
+                                                           "coordinate notation or datum ambiguous"))]
+            if "guessed" in c.note and not doubts:
+                doubts.append("coordinate axes inferred, not labelled")
+            if spread_m > 50 and not any(i.startswith("coordinate notation") for i in doubts):
+                doubts.append(f"coordinate notation or datum ambiguous: readings differ by up to {spread_m:.0f} m")
             _apply(loc, c, loc.method if loc.method == GeorefMethod.linked_table else GeorefMethod.stated_coordinates)
-            loc.crs_candidates, loc.accuracy_m = [], 10.0
-            loc.confidence = 0.9 if k["confirmations"] >= CONFIRMED else 0.8
+            loc.crs_candidates, loc.accuracy_m = [], max(10.0, spread_m, loc.accuracy_m or 0) if doubts else 10.0
+            loc.confidence = 0.9 if k["confirmations"] >= CONFIRMED and not doubts else 0.8
             _settle_position(bh)
+            bh.issues += doubts
             notes.append(f"coordinate system from reviewer knowledge: EPSG:{epsg} "
                          f"({k['confirmations']} confirmation(s), {k['scope_type']})")
             break

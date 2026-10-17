@@ -5,12 +5,14 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import re
 import shutil
 import sqlite3
 import threading
 import uuid
 from collections.abc import Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -26,10 +28,21 @@ import pymupdf
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, export, ingest, scoring, store
+from pipeline import config, corrections, export, ingest, scoring, store, uploads
 from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
-app = FastAPI(title="Borehole Atlas API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    queue = uploads.UploadQueue(config.DB_PATH)
+    app.state.upload_queue = queue
+    try:
+        yield
+    finally:
+        await run_in_threadpool(queue.close)
+
+
+app = FastAPI(title="Borehole Atlas API", lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=2000)  # map points and lists compress about 6:1
 
 
@@ -79,7 +92,13 @@ MAP_COLUMNS = "id, name, location_name, lat, lon, depth, review_status, score, l
 def _bbox_clause(bbox: str) -> tuple[str, list]:
     """R-tree candidates by overlap (its coordinates are rounded outwards), then the exact position. A box
     crossing the antimeridian (min lon > max lon) is split in two."""
-    min_lon, min_lat, max_lon, max_lat = (float(v) for v in bbox.split(","))
+    try:
+        min_lon, min_lat, max_lon, max_lat = (float(v) for v in bbox.split(","))
+    except ValueError:
+        raise HTTPException(422, "bbox must contain four numbers: minLon,minLat,maxLon,maxLat")
+    if not (all(math.isfinite(v) for v in (min_lon, min_lat, max_lon, max_lat))
+            and -180 <= min_lon <= 180 and -180 <= max_lon <= 180 and -90 <= min_lat <= max_lat <= 90):
+        raise HTTPException(422, "bbox must have valid longitude and latitude bounds, with minLat <= maxLat")
     spans = [(min_lon, max_lon)] if min_lon <= max_lon else [(min_lon, 180.0), (-180.0, max_lon)]
     parts, params = [], []
     for lo, hi in spans:
@@ -122,11 +141,12 @@ def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, co
         clause = "rid IN (SELECT rid FROM lab_values WHERE parameter = ?"
         params.append(lab)
         if lab_min is not None:
-            clause += " AND value >= ?"
+            clause += " AND (qualifier IS NULL OR qualifier IN ('>', '≥', '>=', 'range')) AND value >= ?"
             params.append(lab_min)
         if lab_max is not None:
-            clause += " AND value <= ?"
-            params.append(lab_max)
+            clause += (" AND ((qualifier IS NULL OR qualifier IN ('<', '≤', '<=')) AND value <= ? "
+                       "OR qualifier = 'range' AND value_upper >= value AND value_upper <= ?)")
+            params += [lab_max, lab_max]
         where.append(clause + ")")
     if country:
         where.append("country = ?")
@@ -272,7 +292,7 @@ def get_borehole(borehole_id: str, con: DB):
 
 def _blocking(bh: Borehole) -> list[str]:
     """Findings that keep a record in the queue whatever its score."""
-    return [i for i in bh.issues if any(b in i for b in scoring.BLOCKING)]
+    return [i for i in bh.issues if scoring.finding_severity(i) == "blocking"]
 
 
 class Review(BaseModel):
@@ -365,6 +385,10 @@ class FieldFix(BaseModel):
             self.value = date_type.fromisoformat(str(self.value)).isoformat()
         else:
             self.value = str(self.value).strip()[:4000 if self.field == "notes" else 300]
+        if self.field == "borehole_name" and not self.value:
+            raise ValueError("a borehole name cannot be empty")
+        if kind is float and self.value is not None and not math.isfinite(self.value):
+            raise ValueError("numeric fields must be finite")
         return self
 
 
@@ -459,11 +483,6 @@ def correct(borehole_id: str, body: Correction, con: DB):
             "content_hash": _content_hash(con, borehole_id)}
 
 
-# --- upload ------------------------------------------------------------------------------------------
-
-UPLOADS: dict[str, dict] = {}  # job_id -> {status: processing|done|error, boreholes: [...], error}
-
-
 @app.post("/api/upload")
 async def upload_document(file: UploadFile = File(...)):
     # Only the final path component: a client-supplied name must never place the file outside upload_dir.
@@ -500,24 +519,13 @@ async def upload_document(file: UploadFile = File(...)):
             raise
         raise HTTPException(422, f"could not read {filename}: is it a valid {suffix.lstrip('.').upper()} file?") from exc
 
-    UPLOADS[job_id] = {"status": "processing", "boreholes": [], "error": None}
-
-    def work():
-        from pipeline.__main__ import run
-        try:
-            run([doc], dataset_dir=upload_dir)
-            con = store.connect()
-            try:
-                rows = con.execute(
-                    "SELECT id, name, review_status FROM boreholes WHERE doc_id = ?", (doc_id,)
-                ).fetchall()
-            finally:
-                con.close()
-            UPLOADS[job_id] = {"status": "done", "boreholes": [dict(r) for r in rows], "error": None}
-        except Exception as exc:  # reported via /api/upload/{job_id}
-            UPLOADS[job_id] = {"status": "error", "boreholes": [], "error": f"{type(exc).__name__}: {exc}"}
-
-    threading.Thread(target=work, daemon=True).start()
+    try:
+        await run_in_threadpool(app.state.upload_queue.submit, uploads.UploadTask(
+            job_id=job_id, doc_id=doc_id, filename=filename, kind=kind))
+    except uploads.QueueFull:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        shutil.rmtree(config.PAGES_DIR / doc_id, ignore_errors=True)
+        raise HTTPException(503, "the upload queue is full; try again after a document finishes processing")
     return {"job_id": job_id, "pages": len(pages)}
 
 
@@ -540,8 +548,8 @@ def _check_page_count(pages: int) -> None:
 
 
 @app.get("/api/upload/{job_id}")
-def upload_status(job_id: str):
-    job = UPLOADS.get(job_id)
+def upload_status(job_id: str, con: DB) -> uploads.UploadResult:
+    job = uploads.result(con, job_id)
     if job is None:
         raise HTTPException(404, "upload job not found")
     return job

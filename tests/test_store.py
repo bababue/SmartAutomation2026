@@ -1,6 +1,7 @@
 """Store v3: projections, stable uids across id changes, record versions, review revision (synthetic data)."""
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -130,3 +131,33 @@ def test_share_package(con, tmp_path, monkeypatch):
     assert copy.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 1
     assert (out / "pages" / "rep" / "0001.jpg").exists() and "Confidential" in (out / "README.md").read_text()
     assert not (out / "cache").exists()
+
+
+@pytest.mark.parametrize("field,value", [("project_name", "Invented project"), ("project_id", "invented-42"),
+                                         ("location_name", "Invented site"), ("notes", "Check the source"),
+                                         ("drilling_method", "rotary")])
+def test_metadata_changes_reopen_review(con, field, value):
+    original = record()
+    store.save_borehole(con, original)
+    store.record_review(con, original.borehole_id, ReviewStatus.approved, "Ana", None)
+    changed = record().model_copy(update={field: value})
+    store.save_borehole(con, changed)
+    assert store.load_borehole(con, changed.borehole_id).review_status == ReviewStatus.pending_review
+    assert con.execute("SELECT COUNT(*) FROM record_versions").fetchone()[0] == 2
+
+
+def test_lab_projection_migration_preserves_reviews(con):
+    bh = record()
+    bh.lab_results = [LabResult(parameter="ucs", value=5, value_upper=10, qualifier="range", value_raw="5–10 MPa")]
+    store.save_borehole(con, bh)
+    store.record_review(con, bh.borehole_id, ReviewStatus.approved, "Ana", None)
+    con.execute("ALTER TABLE lab_values DROP COLUMN value_upper")
+    con.execute("PRAGMA user_version = 3")
+    con.commit()
+    path = con.execute("PRAGMA database_list").fetchone()["file"]
+    migrated = store.connect(Path(path))
+    try:
+        assert migrated.execute("SELECT value_upper FROM lab_values").fetchone()[0] == 10
+        assert store.load_borehole(migrated, bh.borehole_id).review_status == ReviewStatus.approved
+    finally:
+        migrated.close()

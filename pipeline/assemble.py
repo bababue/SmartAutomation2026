@@ -41,7 +41,7 @@ from schema.borehole import (
 from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLog
 from .georef import candidates, crs_from_hint, georeference, haversine_km
 from .knowledge import printed_pair
-from .scoring import score
+from .scoring import counts_against, score
 
 LOG_KINDS = {"borehole_log", "test_pit_log", "probe_log"}
 
@@ -191,7 +191,7 @@ def lab_qualifier(value_raw: str) -> str | None:
     m = re.match(r"\s*([<>≤≥])", value_raw or "")
     if m:
         return m.group(1)
-    return "range" if re.search(r"\d\s*[-–~]\s*\d", value_raw or "") else None
+    return "range" if re.fullmatch(rf"\s*{_NUMBER}\s*[-–~]\s*{_NUMBER}\s*", value_raw or "") else None
 
 
 def _lab_value(parameter: LabParameter, value_raw: str, unit_raw: str | None) -> float | None:
@@ -207,6 +207,11 @@ def _lab_value(parameter: LabParameter, value_raw: str, unit_raw: str | None) ->
     if any(parameter in params and re.search(pattern, unit) for params, pattern in _LAB_NATIVE):
         return value
     return None  # unknown unit: do not publish a number in the wrong unit
+
+
+def lab_upper(parameter: LabParameter, value_raw: str, unit_raw: str | None) -> float | None:
+    match = re.fullmatch(rf"\s*{_NUMBER}\s*[-–~]\s*({_NUMBER})\s*", value_raw)
+    return _lab_value(parameter, match.group(1), unit_raw) if match else None
 
 
 def _bbox(raw: list[float] | None) -> tuple[float, float, float, float] | None:
@@ -243,12 +248,21 @@ def _plain(text: str) -> str:
     return re.sub(r"\W+", " ", CONTINUED.sub(" ", SAME_AS_BEFORE.sub(" ", text)).lower()).strip()
 
 
+def _same_properties(a: Layer, b: Layer) -> bool:
+    fields = set(Layer.model_fields) - {"top_m", "bottom_m", "description_original", "description_en",
+                                       "language", "source", "confidence"}
+    return all(getattr(a, field) == getattr(b, field) for field in fields)
+
+
 def _sheet_join(prev: Layer, nxt: Layer) -> str | None:
     """How the first layer of a sheet relates to the last one of the sheet before. 'merge': one unit split by
     the sheet break (a back-reference, the same description, or the same lithology run past the sheet end).
     'extend': a unit marked as continued, with its own description, below a short undescribed stretch: it
     started there, at the foot of the previous sheet. None: separate units, or too unclear to join."""
     if _same_page(prev.source, nxt.source) or nxt.top_m < prev.top_m:
+        return None
+    comparable = nxt.model_copy(update={"primary": prev.primary})
+    if not _same_properties(prev, comparable):
         return None
     d = prev.bottom_m - nxt.top_m  # > 0: the sheets overlap; < 0: a stretch nobody describes
     if abs(d) > SHEET_JOIN_M:
@@ -329,15 +343,6 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
                 notes.append(f"reached at the final depth {top:g} m, thickness unknown: "
                              f"{' '.join(x.description_original.split())[:80]}")
             continue
-        if (layers and not _same_page(src, layers[-1].source) and top < layers[-1].bottom_m < bottom
-                and any(abs(l.top_m - top) < 0.05 and (l.primary == x.primary or Lithology.unknown in (l.primary, x.primary))
-                        for l in layers)):  # a different material with the same top is a contradiction, not a restatement
-            # A unit running over several sheets, restated with its full range on a later sheet:
-            # keep only the part below what the earlier sheets already cover.
-            if notes is not None:
-                notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page}; "
-                             f"top set to {layers[-1].bottom_m:g} m")
-            top = layers[-1].bottom_m
         layer = Layer(
             top_m=top,
             bottom_m=bottom,
@@ -358,6 +363,13 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
             moisture=x.moisture,
             source=SourceRef(file=src.file, page=src.page, bbox=_bbox(x.bbox)),
         )
+        if (layers and not _same_page(src, layers[-1].source) and top < layers[-1].bottom_m < bottom
+                and any(abs(l.top_m - top) < 0.05 for l in layers)
+                and all(_same_properties(l, layer) for l in layers if l.bottom_m > top and l.top_m < bottom)):
+            if notes is not None:
+                notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page}; "
+                             f"top set to {layers[-1].bottom_m:g} m")
+            layer.top_m = top = layers[-1].bottom_m
         prev = layers[-1] if layers else None
         if (prev and layer.primary == Lithology.unknown and not _same_page(src, prev.source)
                 and abs(prev.bottom_m - top) < 0.05 and prev.primary not in (Lithology.unknown, Lithology.no_recovery)):
@@ -384,17 +396,17 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
                              f"sheet; top set to {layers[-1].bottom_m:g} m")
             layer.top_m = top = layers[-1].bottom_m
         if (layers and abs(layers[-1].top_m - top) < 0.01 and abs(layers[-1].bottom_m - bottom) < 0.01
-                and layers[-1].primary == layer.primary):
+                and _same_properties(layers[-1], layer)):
             continue  # same layer read twice (overlapping sheets); a different material stays as an overlap
         prev = layers[-1] if layers else None
         if (prev and not _same_page(src, prev.source) and abs(prev.bottom_m - bottom) < 0.01
-                and prev.top_m < top < prev.bottom_m and prev.primary == layer.primary):
+                and prev.top_m < top < prev.bottom_m and _same_properties(prev, layer)):
             # The earlier sheet gave the unit's full range, the next one repeats it from its sheet top.
             if notes is not None:
                 notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats {prev.top_m:g}–{prev.bottom_m:g} m")
             continue
         if (prev and not _same_page(src, prev.source) and abs(prev.top_m - top) < 0.01
-                and bottom < prev.bottom_m - 0.01):
+                and bottom < prev.bottom_m - 0.01 and _same_properties(prev, layer)):
             # The earlier sheet ran its last unit past its own end; the next sheet shows where it really ends.
             if notes is not None:
                 notes.append(f"layer {prev.top_m:g}–{prev.bottom_m:g} m ends at {bottom:g} m per page {src.page}")
@@ -707,7 +719,7 @@ def split_holes(logs: list[tuple[XLog, SourceRef]], doc_crs: tuple[str, int] | N
 def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceRef]],
                    coord_rows: dict[str, XCoordinateRow], doc_place: tuple[float, float, float] | None,
                    doc_crs: tuple[str, int] | None = None, kind: str | None = None) -> tuple[Borehole, int]:
-    """The record (not yet scored) and the number of items the model reported as unreadable.
+    """The record (not yet scored) and the number of unreadable items that count against its release.
     coord_rows is keyed by hole_key; kind is the hole type of the group (borehole, test_pit, probe)."""
     xs = [log for log, _ in logs]
     name = xs[0].name
@@ -796,7 +808,8 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
         lab_results=[LabResult(parameter=lab.parameter, parameter_raw=lab.parameter_raw, value=v,
                                value_raw=f"{lab.value_raw} {lab.unit_raw or ''}".strip(), top_m=lab.top_m,
                                bottom_m=lab.bottom_m, sample_name=lab.sample_name, source=src,
-                               qualifier=lab_qualifier(lab.value_raw))
+                               qualifier=lab_qualifier(lab.value_raw),
+                               value_upper=lab_upper(lab.parameter, lab.value_raw, lab.unit_raw))
                      for x, src in logs for lab in x.lab_results
                      if (v := _lab_value(lab.parameter, lab.value_raw, lab.unit_raw)) is not None],
         sources=[src for _, src in logs],
@@ -804,10 +817,11 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     layer_notes += fill_core_loss(bh)
     layer_notes += extend_sampled_layers(bh)
     issues = bh.validate_log() + layer_notes + geo.issues + unit_findings(xs)
-    unreadable = [u for x in xs for u in x.unreadable]
+    # Items that count come first, so a rescore from the kept findings counts them too.
+    unreadable = sorted((u for x in xs for u in x.unreadable), key=lambda u: not counts_against(u))
     issues += [f"unreadable: {u}" for u in unreadable[:5]]
     bh.issues = list(dict.fromkeys(issues))
-    return bh, len(unreadable)
+    return bh, sum(map(counts_against, unreadable))
 
 
 def _log_key(log: XLog, page_kind: str) -> tuple[str | None, str]:
@@ -877,7 +891,8 @@ def _continues_sheet(sheets: list[tuple[XLog, SourceRef]], log: XLog) -> bool:
     return (last_top if last_top is not None else bottom) - 0.01 <= top <= bottom + SHEET_GAP_M
 
 
-def assemble(results: list[PageResult]) -> list[Borehole]:
+def assemble(results: list[PageResult], *, deduplicate: bool = True,
+             failed_docs: set[str] | None = None) -> list[Borehole]:
     by_doc: dict[str, list[PageResult]] = defaultdict(list)
     for r in results:
         by_doc[r.doc_id].append(r)
@@ -950,6 +965,8 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
                     built[group].append((bh, unreadable, page_texts))
                     doc_records.append(bh)
                 except Exception as exc:  # one broken record must not stop the whole run
+                    if failed_docs is not None:
+                        failed_docs.update(r.doc_id for r in pages)
                     print(f"  ! could not assemble {doc_id}:{logs[0][0].name}: {type(exc).__name__}: {exc}")
         _unique_ids(doc_records)
         _unique_ids_by_type(doc_records)
@@ -963,16 +980,17 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
         for bh, unreadable, page_texts in records:
             score(bh, page_texts, unreadable)
             boreholes.append(bh)
-    return dedupe(boreholes)
+    return dedupe(boreholes) if deduplicate else boreholes
 
 
-def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
+def dedupe(boreholes: list[Borehole], protected: set[str] | None = None) -> list[Borehole]:
     """Same hole in several documents (e.g. a PDF and its PNG export): keep the richer record."""
     kept: dict[tuple, Borehole] = {}
     for bh in boreholes:
         loc = bh.location
         precise = loc.lat is not None and loc.method in (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)
-        if not precise or any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
+        if (protected and bh.borehole_id in protected) or not precise or any(
+                i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
             kept[(bh.borehole_id,)] = bh  # never merge on approximate positions or disputed headers
             continue
         project = re.sub(r"\W+", "", (bh.project_name or "").lower())
@@ -983,8 +1001,9 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
             continue
         # A record with all its sheets wins over a fragment, then the better-checked one; the layer count only
         # breaks ties (more layers can mean over-segmented).
-        better = lambda b: (not any(i.startswith("missing sheets") for i in b.issues), b.confidence or 0.0,
-                            len(b.layers))
+        better = lambda b: (not any(i.startswith("missing sheets") for i in b.issues),
+                            b.review_status == ReviewStatus.auto_approved,
+                            min(b.confidence or 0.0, b.location.confidence or 0.0), b.confidence or 0.0, len(b.layers))
         richer, poorer = (bh, other) if better(bh) > better(other) else (other, bh)
         richer.sources = list({(s.file, s.page): s for s in richer.sources + poorer.sources}.values())
         # Lab sheets are often in one of the documents only.
@@ -1098,7 +1117,8 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
             result = LabResult(parameter=row.parameter, parameter_raw=row.parameter_raw, value=value,
                                value_raw=f"{row.value_raw} {row.unit_raw or ''}".strip(), top_m=top, bottom_m=bottom,
                                sample_name=row.sample_name, source=SourceRef(file=r.source_file, page=r.page),
-                               qualifier=lab_qualifier(row.value_raw))
+                               qualifier=lab_qualifier(row.value_raw),
+                               value_upper=lab_upper(row.parameter, row.value_raw, row.unit_raw))
             add_lab_result(bh, result)
             linked += 1
     return linked, unmatched, implausible
@@ -1122,7 +1142,9 @@ def add_lab_result(bh: Borehole, result: LabResult) -> bool:
     once. Catch-all parameters (chemistry) are not converted and are told apart by printed name and unit,
     since detection limits such as '<1' repeat down a column. Returns whether the result was added."""
     same = next((x for x in bh.lab_results if x.parameter == result.parameter and _same_value(x.value, result.value)
-                 and x.top_m == result.top_m and x.qualifier == result.qualifier
+                 and x.top_m == result.top_m and x.bottom_m == result.bottom_m and x.qualifier == result.qualifier
+                 and x.value_upper == result.value_upper
+                 and (not x.sample_name or not result.sample_name or x.sample_name == result.sample_name)
                  and (x.parameter != LabParameter.other or _lab_name(x) == _lab_name(result))), None)
     if same is None:
         bh.lab_results.append(result)

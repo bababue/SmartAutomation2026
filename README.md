@@ -59,6 +59,10 @@ depths that literally appear in that text.
   BoreholeDataFormat (sheets Metadata, Logdata, Samples, CoreRuns, SPT, Groundwater, TestResults; column
   names and units of the format), `/api/export.csv` has one row per layer. `?status=all` includes the queue.
 
+Laboratory filters return results whose complete reported range satisfies the requested bounds. A value
+`<5 MPa` therefore does not establish a minimum of `4.5 MPa`. Excel exports retain qualifiers and ranges
+as text in the value cells and preserve repeated measurements in separate rows.
+
 ## Learning from reviewers
 
 Local rules are kept as data, not code. Reviewers' corrections become knowledge items with a scope
@@ -89,6 +93,13 @@ size (some inputs are ~80 MB / 150 pages) does not matter for API limits:
 
 Every layer and the coordinates carry an approximate region on the source page (read by the vision model);
 the UI outlines it on the original page when a reviewer hovers the value.
+
+Incomplete extraction, assembly failures and a truncated `--max-pages` run preserve the previous records
+of the affected document group. Deduplication runs after corrections within a document group; records
+with human corrections or decisions keep their own identity.
+
+Web uploads use a bounded queue with status stored in SQLite. Run one API process per database. After a
+restart, queued jobs continue and interrupted jobs report an error so the user can explicitly retry them.
 
 ## Repository layout
 
@@ -358,6 +369,8 @@ Environment variables, read from the shell or from `.env`:
 | `EXTRACT_MODEL` / `EXTRACT_EFFORT` | `claude-opus-5-5` / `medium` | log extraction |
 | `MAX_WORKERS` | `6` (API), `3` (CLI) | parallel LLM calls |
 | `AUTO_APPROVE_THRESHOLD` | `0.9` | release score for automatic release |
+| `MAX_UPLOAD_JOBS` | `8` | maximum queued and processing uploads |
+| `MAX_UPLOAD_WORKERS` | `1` | concurrent upload pipelines in the API process |
 | `DATASET_DIR` | `temp/HKBoreholeChallenge_Data_BFH2026/BoreholeData` | input documents |
 | `DATA_DIR` | `data` | rendered pages, cache, database |
 | `DB_PATH` | `data/boreholes.sqlite` | database (`data/demo.sqlite` for synthetic data) |

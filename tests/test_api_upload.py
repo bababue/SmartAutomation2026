@@ -21,7 +21,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "MAX_UPLOAD_BYTES", 10_000)
     monkeypatch.setattr("pipeline.__main__._missing_credentials", lambda: None)
     store.connect(path).close()
-    return TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
 
 def _pdf_bytes(n_pages: int) -> bytes:
@@ -91,3 +92,32 @@ def test_accepts_file_within_the_page_cap(client, monkeypatch):
         time.sleep(0.05)
     assert status["status"] == "done"
     assert calls  # run() was invoked from the background thread, without touching the LLM
+
+
+def test_uploaded_document_flows_through_review_and_export(client, monkeypatch):
+    from pipeline.extraction_models import LogRef, PageClassification, PageExtraction
+    from tests.test_assemble import _log
+
+    classification = PageClassification(kind="borehole_log", logs=[LogRef(name="BH1", sheet=None)],
+                                        language="en", has_coordinates=True, crs_text=None)
+    log = _log("BH1", "E 412000 N 5320000", 300, [(0, 9)]).model_copy(update={"final_depth_m": 9})
+    monkeypatch.setattr("pipeline.llm.classify_page", lambda *args: classification)
+    monkeypatch.setattr("pipeline.llm.extract_page", lambda *args: PageExtraction(logs=[log], coordinate_rows=[]))
+    response = client.post("/api/upload", files={"file": ("invented.pdf", _pdf_bytes(1), "application/pdf")})
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+    for _ in range(100):
+        result = client.get(f"/api/upload/{job_id}").json()
+        if result["status"] != "processing":
+            break
+        time.sleep(0.01)
+    assert result["status"] == "done" and len(result["boreholes"]) == 1
+    bid = result["boreholes"][0]["id"]
+    detail = client.get(f"/api/boreholes/{bid}/detail").json()
+    assert len(detail["source_pages"]) == 1
+    assert client.get(detail["source_pages"][0]["url"]).status_code == 200
+    assert bid not in client.get("/api/export.csv").text
+    reviewed = client.post(f"/api/boreholes/{bid}/review", json={"decision": "approved", "reviewer": "Ana",
+                           "content_hash": detail["content_hash"], "review_revision": detail["review_revision"]})
+    assert reviewed.status_code == 200
+    assert bid in client.get("/api/export.csv").text

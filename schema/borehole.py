@@ -343,6 +343,7 @@ class LabResult(BaseModel):
     parameter: LabParameter
     parameter_raw: str | None = Field(None, description="Column header as written, e.g. 'Cu (kg/cm2)'")
     value: float = Field(description="Converted to the target unit in LAB_UNITS")
+    value_upper: float | None = Field(None, description="Upper end of a range, in the same target unit as value")
     value_raw: str | None = Field(None, description="Value + unit as written, e.g. '0,35 kg/cm2'")
     qualifier: str | None = Field(None, description="'<', '>', '≤', '≥' or 'range' when the printed value is not exact; "
                                   "value is then the bound or the lower end")

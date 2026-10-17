@@ -263,6 +263,19 @@
           "title": "Value",
           "type": "number"
         },
+        "value_upper": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Upper end of a range, in the same target unit as value",
+          "title": "Value Upper"
+        },
         "value_raw": {
           "anyOf": [
             {

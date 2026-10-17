@@ -20,6 +20,8 @@ UPLOADS_DIR = DATA_DIR / "uploads"  # documents submitted through the web UI, on
 # cap is checked first (while streaming to disk) so an oversized file is rejected before it is rendered.
 MAX_UPLOAD_PAGES = int(os.getenv("MAX_UPLOAD_PAGES", "40"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+MAX_UPLOAD_JOBS = int(os.getenv("MAX_UPLOAD_JOBS", "8"))
+MAX_UPLOAD_WORKERS = int(os.getenv("MAX_UPLOAD_WORKERS", "1"))
 # PDF exports of DOCX files (e.g. saved from Word), same relative path as in the dataset. DOCX logs are
 # often laid out from several image strips in table cells; only a rendered page shows them together.
 CONVERTED_DIR = DATA_DIR / "converted"

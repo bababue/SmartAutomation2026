@@ -65,6 +65,22 @@ def test_units_are_converted_or_the_value_is_dropped():
     assert lab_qualifier("<0.01") == "<" and lab_qualifier("5 - 10") == "range" and lab_qualifier("12.5") is None
 
 
+def test_lab_range_bounds_use_the_same_target_unit():
+    from pipeline.assemble import lab_upper
+    assert lab_upper("ucs", "5–10", "kPa") == pytest.approx(0.01)
+    assert lab_upper("ucs", "5", "kPa") is None
+    bh = hole("BH1")
+    link_lab_results([bh], [lab_page(row("BH1", None, "ucs", "5000–10000", "kPa", top=2))])
+    assert (bh.lab_results[0].value, bh.lab_results[0].value_upper) == (5, 10)
+
+
+@pytest.mark.parametrize("text", ["2 × 10-6", "2x10^-6", "2e-6", "2,0E-6"])
+def test_scientific_exponents_are_exact_values(text):
+    from pipeline.assemble import lab_qualifier, lab_upper
+    assert lab_qualifier(text) is None
+    assert lab_upper("hydraulic_conductivity", text, "m/s") is None
+
+
 
 def test_hole_id_in_sample_column_suffixes_and_implausible_values():
     holes = [hole("QX-10"), hole("QX-11"), hole("QX-01")]

@@ -34,3 +34,17 @@ def test_workbook_sheets_and_values():
     assert [r[8] for r in logs] == ["no", "yes"]  # only the rock layer was cored
     tests = {h.value: c.value for h, c in zip(wb["TestResults"][1], wb["TestResults"][2])}
     assert tests["UCS [MPa]"] == 24.5 and tests["CAI [-]"] == 2.1 and tests["SampleName"] == "C2"
+
+
+def test_workbook_preserves_replicates_other_parameters_and_qualifiers():
+    results = [LabResult(parameter="other", parameter_raw="Analyte A", value=1, value_raw="1 mg/l", top_m=2),
+               LabResult(parameter="other", parameter_raw="Analyte B", value=2, value_raw="2 mg/l", top_m=2),
+               LabResult(parameter="ucs", value=5, qualifier="<", value_raw="<5 MPa", top_m=2),
+               LabResult(parameter="ucs", value=6, value_upper=9, qualifier="range", value_raw="6–9 MPa", top_m=2)]
+    bh = Borehole(borehole_id="r:BH1", borehole_name="BH1", lab_results=results)
+    wb = load_workbook(io.BytesIO(workbook([(bh, "r.pdf")])))
+    rows = [dict(zip([c.value for c in wb["TestResults"][1]], row)) for row in
+            wb["TestResults"].iter_rows(min_row=2, values_only=True)]
+    assert len(rows) == 2
+    assert {r["UCS [MPa]"] for r in rows} == {"<5", "6–9"}
+    assert "Analyte A" in rows[0]["Raw values"] and "Analyte B" in rows[1]["Raw values"]
