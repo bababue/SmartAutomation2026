@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { fetchStatsDetail } from '../api'
-import { fmtCount as n, percentOf as pct, words } from '../format'
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { fetchQuality, fetchStatsDetail } from '../api'
+import { fmtCount as n, fmtError, percentOf as pct, words } from '../format'
 import { lithStyle, patternId } from '../lithology'
 import { SEVERITY_LABEL } from '../review'
-import { hasFilters, type StatsTab } from '../url'
-import type { Filters, StatsDetail } from '../types'
+import { DEFAULT_FILTERS, hasFilters, type StatsTab } from '../url'
+import type { CrsDetermination, Filters, Quality, ReviewFilters, StatsDetail } from '../types'
 import { QualityView } from './QualityView'
 import { Bar, Shares } from './StatsParts'
 
@@ -16,14 +16,74 @@ interface Props {
   onShowGroup: (group: string) => void
   /** Open the review queue on the release audit sample. */
   onReviewAudit: () => void
+  /** Open the review queue with these filters. */
+  onReview: (filters: ReviewFilters) => void
   onClose: () => void
 }
+
+/** The cards a headline figure leads to. */
+type Target = 'coordinates' | 'extraction-quality' | 'release-audit'
 
 const TABS: [StatsTab, string][] = [['data', 'Data'], ['quality', 'Quality & models']]
 const LITH_ROWS = 10
 
-export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onClose }: Props) {
+/** How the coordinate system was settled: label and explanation. */
+const DETERMINATION: [CrsDetermination, string, string][] = [
+  ['stated', 'Stated on the sheet', 'the log names the system, or labels latitude and longitude'],
+  ['document', 'Stated elsewhere in the document', 'on another page or in the coordinate table'],
+  ['reviewer', 'Set by a reviewer', 'a reviewer’s coordinate system correction'],
+  ['knowledge', 'Learned from reviewers', 'confirmed on other holes of the document, or a local grid fitted to reviewer positions'],
+  ['inferred', 'Inferred', 'not stated: the system that lands nearest the named place; marked for a look'],
+  ['ambiguous', 'Ambiguous', 'several systems fit: held for a person to decide'],
+]
+
+function reveal(target: Target): boolean {
+  const el = document.getElementById(target)
+  if (!el) return false
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  el.focus({ preventScroll: true })
+  return true
+}
+
+export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onReview, onClose }: Props) {
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const [whole, setWhole] = useState<StatsDetail | null>(null)
+  const [narrowed, setNarrowed] = useState<StatsDetail | null>(null)
+  const [dataError, setDataError] = useState<string | null>(null)
+  const [quality, setQuality] = useState<Quality | null>(null)
+  const [qualityError, setQualityError] = useState<string | null>(null)
+  const pending = useRef<Target | null>(null)
+  const filtered = hasFilters(filters)
+
+  useEffect(() => {
+    const ctrl = new AbortController()
+    const failed = (set: (e: string) => void, what: string) => (e: Error) => {
+      if (!ctrl.signal.aborted) set(`Could not load the ${what} (${e.message}).`)
+    }
+    fetchStatsDetail(DEFAULT_FILTERS, ctrl.signal).then(setWhole).catch(failed(setDataError, 'statistics'))
+    fetchQuality(ctrl.signal).then(setQuality).catch(failed(setQualityError, 'quality figures'))
+    return () => ctrl.abort()
+  }, [])
+
+  useEffect(() => {
+    if (!filtered) return
+    const ctrl = new AbortController()
+    fetchStatsDetail(filters, ctrl.signal)
+      .then((s) => { setNarrowed(s); setDataError(null) })
+      .catch((e) => { if (!ctrl.signal.aborted) setDataError(`Could not load the statistics (${e.message}).`) })
+    return () => ctrl.abort()
+  }, [filters, filtered])
+
+  // The target card renders once its tab is open and its data has arrived.
+  useEffect(() => {
+    if (pending.current && reveal(pending.current)) pending.current = null
+  }, [tab, whole, narrowed, quality])
+
+  const open = (to: StatsTab, target: Target) => {
+    if (to === tab && reveal(target)) return
+    pending.current = target
+    onTab(to)
+  }
 
   const onKey = (e: KeyboardEvent) => {
     const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
@@ -41,6 +101,7 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onC
           <h2>Statistics</h2>
           <button className="btn" onClick={onClose}>Back to map</button>
         </div>
+        <Claims whole={whole} quality={quality} onOpen={open} onReview={onReview} />
         <div className="stats-tabs" role="tablist" aria-label="Statistics" onKeyDown={onKey}>
           {TABS.map(([key, label], i) => (
             <button key={key} ref={(el) => { tabRefs.current[i] = el }} role="tab" id={`stats-tab-${key}`}
@@ -53,26 +114,85 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onC
       </header>
       <div role="tabpanel" id={`stats-panel-${tab}`} aria-labelledby={`stats-tab-${tab}`}>
         {tab === 'data'
-          ? <DataTab filters={filters} onShowGroup={onShowGroup} />
-          : <QualityView onReviewAudit={onReviewAudit} />}
+          ? <DataTab stats={filtered ? narrowed : whole} error={dataError} filtered={filtered} quality={quality}
+              onShowGroup={onShowGroup} onReview={onReview} />
+          : <QualityView quality={quality} error={qualityError} onReviewAudit={onReviewAudit} />}
       </div>
     </div>
   )
 }
 
-function DataTab({ filters, onShowGroup }: Pick<Props, 'filters' | 'onShowGroup'>) {
-  const [stats, setStats] = useState<StatsDetail | null>(null)
-  const [error, setError] = useState<string | null>(null)
+/** The four claims of the challenge, each one figure over the whole database, each leading to its evidence. */
+function Claims({ whole, quality, onOpen, onReview }: {
+  whole: StatsDetail | null
+  quality: Quality | null
+  onOpen: (tab: StatsTab, target: Target) => void
+  onReview: Props['onReview']
+}) {
+  const loading = '…'
+  const located = whole ? whole.position.printed + whole.position.linked_table : 0
+  const ev = quality?.evaluation
+  const found = ev?.current.boundaries
+  const audit = quality?.audit
+  return (
+    <section className="claims" aria-labelledby="claims-scope">
+      <h3 id="claims-scope" className="claims-scope">Whole database <span>· the list filters do not apply here</span></h3>
+      <ul>
+        <Claim goal="Coordinates" hint="How positions and coordinate systems were obtained"
+          figure={whole ? `${pct(located, whole.boreholes)} %` : loading} label="positioned from printed coordinates"
+          note={whole && `${n(located)} of ${n(whole.boreholes)} holes, read in ${n(whole.crs.length)} coordinate systems (EPSG)`}
+          onClick={() => onOpen('data', 'coordinates')} />
+        <Claim goal="Hit rate" hint="Extraction quality against the human-checked records"
+          figure={!quality ? loading : found?.of ? `${((100 * found.hit) / found.of).toFixed(1)} %` : 'n/a'}
+          label="of layer boundaries found"
+          note={quality && (ev && found?.of
+            ? `${n(Math.round(found.hit))} of ${n(found.of)} in ${n(ev.reference.records)} human-checked records${quality.source === 'snapshot' ? `, snapshot of ${ev.generated}` : ''}`
+            : 'No human-checked reference yet')}
+          onClick={() => onOpen('quality', 'extraction-quality')} />
+        <Claim goal="Release safety" hint="The release audit"
+          figure={!quality ? loading : audit?.reviewed ? <>{n(audit.wrong)}<small> of {n(audit.reviewed)}</small></> : 'n/a'}
+          label="automatic releases wrong"
+          note={quality && (!audit ? 'No audit sample drawn yet'
+            : !audit.reviewed ? `${n(audit.sample)} drawn, none checked yet`
+            : `95 % interval ${Math.round(100 * audit.low)}–${Math.round(100 * audit.high)} %; a random sample checked by a person${audit.reviewed < audit.sample ? `, ${n(audit.sample - audit.reviewed)} still to check` : ''}`)}
+          onClick={() => onOpen('quality', 'release-audit')} />
+        <Claim goal="Work for people" hint="Open the review queue"
+          figure={whole ? n(whole.status.pending_review) : loading} label="records waiting for review"
+          note={whole && `${n(whole.waiting_blocking)} of them with a blocking finding, which no score can release`}
+          onClick={() => onReview({ finding: null, position: null })} />
+      </ul>
+    </section>
+  )
+}
 
-  useEffect(() => {
-    const ctrl = new AbortController()
-    fetchStatsDetail(filters, ctrl.signal)
-      .then((s) => { setStats(s); setError(null) })
-      .catch((e) => { if (!ctrl.signal.aborted) setError(`Could not load the statistics (${e.message}).`) })
-    return () => ctrl.abort()
-  }, [filters])
+function Claim({ goal, figure, label, note, hint, onClick }: {
+  goal: string
+  figure: ReactNode
+  label: string
+  note: string | null
+  hint: string
+  onClick: () => void
+}) {
+  return (
+    <li>
+      <button className="claim" title={hint} onClick={onClick}>
+        <span className="claim-goal">{goal}</span>
+        <span className="claim-figure">{figure}</span>
+        <span className="claim-label">{label}</span>
+        {note && <span className="claim-note">{note}</span>}
+      </button>
+    </li>
+  )
+}
 
-  const s = stats
+function DataTab({ stats: s, error, filtered, quality, onShowGroup, onReview }: {
+  stats: StatsDetail | null
+  error: string | null
+  filtered: boolean
+  quality: Quality | null
+  onShowGroup: Props['onShowGroup']
+  onReview: Props['onReview']
+}) {
   const lith = s?.lithology_m ?? []
   const lithTotal = lith.reduce((sum, [, m]) => sum + m, 0)
   const lithRows = lith.length > LITH_ROWS + 1
@@ -86,12 +206,14 @@ function DataTab({ filters, onShowGroup }: Pick<Props, 'filters' | 'onShowGroup'
   return (
     <>
       <p className="stats-intro muted">
-        {hasFilters(filters) ? 'For the records the current filters select' : 'All records in the database'}, holes without a
+        {filtered ? 'For the records the current filters select' : 'All records in the database'}, holes without a
         position included. Change the filters in the list to narrow it.
       </p>
       {error && <p className="error" role="alert">{error}</p>}
       {!s ? (!error && <p className="muted">Loading…</p>) : (
         <div className="stats-grid">
+          <Coordinates s={s} quality={quality} onReview={onReview} />
+
           <section className="stats-card stats-wide" aria-labelledby="stats-figures">
             <h3 id="stats-figures">Key figures</h3>
             <dl className="stats-tiles">
@@ -105,12 +227,6 @@ function DataTab({ filters, onShowGroup }: Pick<Props, 'filters' | 'onShowGroup'
               { key: 'released', label: 'Released', value: s.status.auto_approved + s.status.approved, color: 'var(--high)' },
               { key: 'pending', label: 'Waiting for review', value: s.status.pending_review, color: 'var(--medium)' },
               { key: 'rejected', label: 'Rejected', value: s.status.rejected, color: 'var(--low)' },
-            ]} />
-            <h4>Position</h4>
-            <Shares label="Position" parts={[
-              { key: 'exact', label: 'From printed coordinates', value: s.position.exact, color: 'var(--water)' },
-              { key: 'approx', label: 'Approximate (place name)', value: s.position.approximate, color: 'var(--water-mid)' },
-              { key: 'none', label: 'None', value: s.position.none, color: 'var(--grid)' },
             ]} />
           </section>
 
@@ -169,22 +285,6 @@ function DataTab({ filters, onShowGroup }: Pick<Props, 'filters' | 'onShowGroup'
             </ol>
           </section>
 
-          {s.crs.length > 0 && (
-            <section className="stats-card" aria-labelledby="stats-crs">
-              <h3 id="stats-crs">Coordinate systems</h3>
-              <p className="muted">Holes per coordinate system their position was read in.</p>
-              <ol className="stats-rows">
-                {s.crs.map(([epsg, count]) => (
-                  <li key={epsg}>
-                    <span className="stats-label">EPSG:{epsg}</span>
-                    <Bar value={count} max={s.crs[0][1]} title={`EPSG:${epsg}: ${n(count)} holes`} />
-                    <span className="stats-value">{n(count)}</span>
-                  </li>
-                ))}
-              </ol>
-            </section>
-          )}
-
           <section className="stats-card stats-wide" aria-labelledby="stats-findings">
             <h3 id="stats-findings">Findings</h3>
             <p className="muted">Records per finding, blocking ones first; notes are left out.</p>
@@ -228,5 +328,80 @@ function DataTab({ filters, onShowGroup }: Pick<Props, 'filters' | 'onShowGroup'
         </div>
       )}
     </>
+  )
+}
+
+function Coordinates({ s, quality, onReview }: { s: StatsDetail; quality: Quality | null; onReview: Props['onReview'] }) {
+  const p = s.position
+  const fromCoordinates = p.printed + p.linked_table
+  const howMax = Math.max(1, ...Object.values(s.crs_determination))
+  const ev = quality?.evaluation
+  return (
+    <section className="stats-card stats-wide" id="coordinates" tabIndex={-1} aria-labelledby="stats-coordinates">
+      <h3 id="stats-coordinates">Coordinates</h3>
+      <p className="muted">Where each hole’s position comes from, and how the coordinate system of its printed coordinates
+        was settled. A hole is placed only where the evidence holds; the rest goes to a person.</p>
+      <h4>How the position was obtained</h4>
+      <Shares label="Position" parts={[
+        { key: 'printed', label: 'Printed coordinates', value: p.printed, color: 'var(--water)' },
+        { key: 'table', label: 'Coordinate table', value: p.linked_table, color: 'var(--water-deep)' },
+        { key: 'manual', label: 'Set by a reviewer', value: p.manual, color: 'var(--graphite)' },
+        { key: 'place', label: 'Place name only (approximate)', value: p.place_name, color: 'var(--water-mid)' },
+        { key: 'none', label: 'None', value: p.none, color: 'var(--grid)' },
+      ]} />
+      <div className="coord-cols">
+        <div>
+          <h4>How the coordinate system was determined</h4>
+          <p className="coord-sub muted">For the {n(fromCoordinates)} holes positioned from printed or tabled coordinates.</p>
+          <ol className="stats-rows">
+            {DETERMINATION.map(([key, label, hint]) => {
+              const value = s.crs_determination[key]
+              return (
+                <li key={key}>
+                  <span className="stats-label" title={hint}>{label}</span>
+                  <Bar value={value} max={howMax} title={`${label}: ${n(value)} holes (${hint})`}
+                    {...(key === 'ambiguous' ? { fill: 'var(--medium)' } : {})} />
+                  <span className="stats-value">{n(value)} <span className="muted">{pct(value, fromCoordinates)} %</span></span>
+                </li>
+              )
+            })}
+          </ol>
+        </div>
+        <div>
+          <h4>Coordinate systems</h4>
+          <p className="coord-sub muted">
+            {n(s.crs.length)} distinct EPSG codes
+            {s.crs_without_epsg > 0 && `; ${n(s.crs_without_epsg)} holes in a local grid without one`}.
+          </p>
+          {s.crs.length > 0 && (
+            <ol className="stats-rows">
+              {s.crs.map(([epsg, count]) => (
+                <li key={epsg}>
+                  <span className="stats-label">EPSG:{epsg}</span>
+                  <Bar value={count} max={s.crs[0][1]} title={`EPSG:${epsg}: ${n(count)} holes`} />
+                  <span className="stats-value">{n(count)}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      </div>
+      <p className="stats-note">
+        {!quality ? <span className="muted">Position error against the reference: loading…</span>
+          : ev ? <>Position error against the reference: median <b>{fmtError(ev.current.position_median_m)}</b>, largest
+            {' '}<b>{fmtError(ev.current.position_max_m)}</b> <span className="muted">({n(ev.reference.records)} human-checked
+            records, whole database)</span></>
+          : <span className="muted">No human-checked reference yet to measure the position error against.</span>}
+      </p>
+      <p className="stats-note">
+        <b>{n(s.positions_withheld)}</b> {s.positions_withheld === 1 ? 'hole' : 'holes'} deliberately left without a
+        position: several holes of one folder would share one place-name point, so a reviewer places them.{' '}
+        {p.none > 0 && (
+          <button className="link-button" onClick={() => onReview({ finding: null, position: 'none' })}>
+            Holes without a position in the review queue
+          </button>
+        )}
+      </p>
+    </section>
   )
 }

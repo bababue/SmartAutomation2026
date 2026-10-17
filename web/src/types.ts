@@ -259,7 +259,14 @@ export interface StatsDetail {
   layers: number
   countries: number
   status: Record<ReviewStatus, number>
-  position: { exact: number; approximate: number; none: number }
+  /** Holes by where their position comes from. */
+  position: { printed: number; linked_table: number; manual: number; place_name: number; none: number }
+  /** Holes positioned from printed or tabled coordinates, by how their coordinate system was settled. */
+  crs_determination: Record<CrsDetermination, number>
+  /** Holes that would share one place-name position, left for a reviewer to place. */
+  positions_withheld: number
+  /** Records waiting for review with a blocking finding. */
+  waiting_blocking: number
   funnel: { records: number; without_blocking: number; released_automatically: number; released: number }
   threshold: number
   /** Blocking first, then needs a look, warnings and notes; most records first within each. */
@@ -270,8 +277,13 @@ export interface StatsDetail {
   /** Holes per final-depth bin of depth_bin_m metres; the last bin holds everything deeper. */
   depths: number[]
   groups: { group: string; count: number; released: number; top_finding: { code: string; records: number } | null }[]
+  /** EPSG code and the holes positioned from coordinates read in it, most first. */
   crs: [number, number][]
+  /** Of those, holes in a local grid or PROJ definition without an EPSG code. */
+  crs_without_epsg: number
 }
+
+export type CrsDetermination = 'stated' | 'document' | 'reviewer' | 'knowledge' | 'inferred' | 'ambiguous'
 
 export interface Share { hit: number; of: number }
 
