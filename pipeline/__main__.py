@@ -312,14 +312,19 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     for group, records in groups.items():
         con.execute("BEGIN IMMEDIATE")
         try:
-            fixes, protected = {}, set()
+            fixes, protected = {}, {}
             for bh in records:
                 uid = store.uid_for(con, bh)
                 fixes[bh.borehole_id] = store.corrections_for(con, bh.borehole_id, uid)
                 previous_status = con.execute("SELECT review_status FROM boreholes WHERE id = ? OR uid = ?",
                                               (bh.borehole_id, uid)).fetchone()
                 if fixes[bh.borehole_id] or previous_status and previous_status[0] in {s.value for s in store.HUMAN}:
-                    protected.add(bh.borehole_id)
+                    decided_here = con.execute("SELECT review_status FROM boreholes WHERE id = ?",
+                                               (bh.borehole_id,)).fetchone()
+                    reviewed_as = (decided_here and decided_here[0] in {s.value for s in store.HUMAN}) or any(
+                        f["target"] == bh.borehole_id for f in fixes[bh.borehole_id])
+                    protected[bh.borehole_id] = {uid} | {f["id"] for f in fixes[bh.borehole_id]} | (
+                        {bh.borehole_id} if reviewed_as else set())
             # Independent groups do not share an identity scope; coincident positions alone cannot join them.
             records = dedupe(records, protected)
             # The model's output for `eval`: after merging duplicates, which moves lab values, before reviewer input.

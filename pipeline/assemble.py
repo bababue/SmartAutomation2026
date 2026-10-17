@@ -985,14 +985,16 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
     return dedupe(boreholes) if deduplicate else boreholes
 
 
-def dedupe(boreholes: list[Borehole], protected: set[str] | None = None) -> list[Borehole]:
-    """Same hole in several documents (e.g. a PDF and its PNG export): keep the richer record."""
+def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None) -> list[Borehole]:
+    """Same hole in several documents (e.g. a PDF and its PNG export): keep the richer record. `protected` maps the
+    records a reviewer decided or corrected to what identifies that review (uid, correction ids): such a record
+    wins over an unreviewed copy; two records reviewed independently of each other both stay."""
+    protected = protected or {}
     kept: dict[tuple, Borehole] = {}
     for bh in boreholes:
         loc = bh.location
         precise = loc.lat is not None and loc.method in (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)
-        if (protected and bh.borehole_id in protected) or not precise or any(
-                i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
+        if not precise or any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
             kept[(bh.borehole_id,)] = bh  # never merge on approximate positions or disputed headers
             continue
         project = re.sub(r"\W+", "", (bh.project_name or "").lower())
@@ -1001,9 +1003,15 @@ def dedupe(boreholes: list[Borehole], protected: set[str] | None = None) -> list
         if other is None:
             kept[key] = bh
             continue
-        # A record with all its sheets wins over a fragment, then the better-checked one; the layer count only
-        # breaks ties (more layers can mean over-segmented).
-        better = lambda b: (not any(i.startswith("missing sheets") for i in b.issues),
+        if bh.borehole_id in protected and other.borehole_id in protected \
+                and not protected[bh.borehole_id] & protected[other.borehole_id]:
+            kept[(bh.borehole_id,)] = bh
+            continue
+        # A reviewed record wins, first the one the review was made under (its id is in its own identity), then one
+        # with all its sheets over a fragment, then the better-checked one; the layer count only breaks ties (more
+        # layers can mean over-segmented).
+        better = lambda b: (b.borehole_id in protected.get(b.borehole_id, ()), b.borehole_id in protected,
+                            not any(i.startswith("missing sheets") for i in b.issues),
                             b.review_status == ReviewStatus.auto_approved,
                             min(b.confidence or 0.0, b.location.confidence or 0.0), b.confidence or 0.0, len(b.layers))
         richer, poorer = (bh, other) if better(bh) > better(other) else (other, bh)

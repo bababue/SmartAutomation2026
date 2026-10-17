@@ -94,7 +94,7 @@ def test_page_cap_preserves_records_from_omitted_pages(con, monkeypatch, command
     assert store.load_borehole(con, "report:BH2") is not None
 
 
-def test_dedupe_keeps_corrected_and_reviewed_records(con, monkeypatch):
+def test_a_reviewed_record_takes_in_its_unreviewed_copy(con, monkeypatch):
     docs, rendered, classes, extractions = inputs("folder__a")
     other = inputs("folder__b")
     docs += other[0]
@@ -110,9 +110,20 @@ def test_dedupe_keeps_corrected_and_reviewed_records(con, monkeypatch):
     con.commit()
     monkeypatch.setattr(cli, "assemble", lambda *args, **kwargs: [a, b])
     cli._store(con, docs, rendered, classes, extractions)
-    assert store.load_borehole(con, b.borehole_id).layers[0].primary.value == "fine_sand"
-    assert store.load_borehole(con, a.borehole_id) is not None
+    kept = store.load_borehole(con, b.borehole_id)
+    assert kept.layers[0].primary.value == "fine_sand"
+    assert {s.file for s in kept.sources} >= {s.file for s in a.sources}
+    assert store.load_borehole(con, a.borehole_id) is None
     assert store.orphan_corrections(con) == []
+
+
+def test_two_reviewed_copies_of_a_hole_both_stay():
+    from pipeline.assemble import dedupe
+    a, b = record(bid="a:BH1"), record(bid="b:BH1")
+    assert len(dedupe([a, b], {"a:BH1": {"uid-a"}, "b:BH1": {"uid-b"}})) == 2
+    assert dedupe([a, b], {"a:BH1": {"uid-a"}}) == [a]
+    # Both reached by the same review (a shared uid or correction): one hole, under the id it was reviewed as.
+    assert dedupe([a, b], {"a:BH1": {"uid", 7}, "b:BH1": {"uid", 7, "b:BH1"}}) == [b]
 
 
 def test_dedupe_prefers_the_better_position():
