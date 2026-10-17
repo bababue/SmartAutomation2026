@@ -202,7 +202,7 @@ def test_statistics_aggregate_the_filtered_records_including_those_without_a_pos
     con.close()
     s = client.get("/api/stats/detail").json()
     assert (s["boreholes"], s["layers"], s["documents"]) == (4, 5, 1)
-    assert s["position"] == {"exact": 3, "approximate": 0, "none": 1}
+    assert s["position"] == {"printed": 3, "linked_table": 0, "manual": 0, "place_name": 0, "none": 1}
     assert dict(s["lithology_m"]) == {"clay": 23.0, "limestone": 15.0, "sand": 12.0, "gravel": 9.0}
     assert s["depths"][1] == 1 and s["depths"][4] == 1 and s["depths"][6] == 1 and sum(s["depths"]) == 3
     assert s["findings"][0]["severity"] == "blocking"  # the lost log first
@@ -212,6 +212,45 @@ def test_statistics_aggregate_the_filtered_records_including_those_without_a_pos
     clay = client.get("/api/stats/detail?lithology=clay:10:").json()
     assert clay["boreholes"] == 1 and dict(clay["lithology_m"])["clay"] == 18.0
     assert client.get("/api/stats/detail?material=sand:0:20:5").status_code == 200  # the ground filters apply too
+
+
+def test_statistics_tell_how_each_coordinate_system_was_settled_and_which_positions_were_withheld(db_path):
+    from pipeline.assemble import unstack_place_positions
+
+    def located(bid, epsg, *issues, method=GeorefMethod.stated_coordinates):
+        bh = hole(bid, 47.0, 8.0, [(0, 9, "gravel")])
+        bh.location.method, bh.location.crs_epsg = method, epsg
+        bh.issues += issues
+        score(bh, {}, 0)
+        return bh
+
+    grid = located("c:I", None, "position from a local grid fitted to 3 reviewer positions")
+    grid.location.crs_proj = "+proj=tmerc +lat_0=47 +lon_0=8"
+    place = [located(f"w:{n}", None, method=GeorefMethod.geocoded_place) for n in "KL"]
+    unstack_place_positions(place)  # two holes of one folder on one place-name point
+    holes = [
+        located("c:A", 25832),
+        located("c:B", 25832, "coordinate system inferred, not stated: EPSG:25832"),
+        located("c:C", 25832, "coordinate system taken from page 2 of the document: UTM 32N"),
+        located("c:D", 2056, "coordinate system from reviewer knowledge: EPSG:2056 (2 confirmation(s), document)"),
+        located("c:E", 2056, "coordinate system inferred, not stated: EPSG:21781",  # a person's word wins
+                "corrected by Ana: coordinate system EPSG:2056"),
+        located("c:F", 25832, "CRS ambiguous: EPSG:25832, EPSG:32632", method=GeorefMethod.linked_table),
+        located("c:G", 4326, method=GeorefMethod.manual),  # a reviewer's position: no system read
+        located("c:H", None, method=GeorefMethod.geocoded_place),
+        grid, *place,
+    ]
+    con = store.connect()
+    for bh in holes:
+        store.save_borehole(con, bh)
+    con.close()
+    s = TestClient(app).get("/api/stats/detail").json()
+    assert s["position"] == {"printed": 6, "linked_table": 1, "manual": 1, "place_name": 1, "none": 2}
+    assert s["crs_determination"] == {"stated": 1, "document": 1, "reviewer": 1, "knowledge": 2, "inferred": 1,
+                                      "ambiguous": 1}
+    assert sorted(s["crs"]) == [[2056, 2], [25832, 4]] and s["crs_without_epsg"] == 1
+    assert s["positions_withheld"] == 2
+    assert s["waiting_blocking"] == 1  # the ambiguous system
 
 
 @pytest.mark.parametrize("path", ["q:dir/H", "q%3Adir%2FH"])

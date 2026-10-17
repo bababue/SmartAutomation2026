@@ -14,6 +14,10 @@ export const percentOf = (part: number, whole: number) => (whole ? Math.round((1
 export const fmtDistance = (m: number) =>
   m >= 1000 ? `${fmtNum(m / 1000, 2)} km` : `${fmtNum(m, m < 1 ? 2 : m < 10 ? 1 : 0)} m`
 
+/** A position error: whole metres, km with one decimal from 1 km on; '–' for none. */
+export const fmtError = (m: number | null) =>
+  m == null ? '–' : m >= 1000 ? `${fmtNum(m / 1000, 1)} km` : `${fmtNum(m, 0)} m`
+
 /** A code as words: 'point_load_index' → 'point load index'. */
 export const words = (code: string) => code.replaceAll('_', ' ')
 

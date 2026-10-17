@@ -118,8 +118,11 @@ the challenge owner's priorities are in [docs/challenge-owner-feedback.md](docs/
   neighbours up to 150 m apart, with a band that widens with distance. Layers between holes are estimated
   where the material sequences match, lighter beyond 150 m; correlated boundaries can be shown dotted. Drag to
   zoom.
-- Statistics view (feedback #9) for the current filter: key figures, release funnel, release audit, findings,
-  logged metres per lithology, final depths, documents with their most frequent finding, coordinate systems.
+- Statistics view (feedback #9): a headline strip over the whole database (share positioned from printed
+  coordinates, boundary hit rate, release audit, records waiting for review); for the current filter: a
+  coordinates card (position source, how the coordinate system was settled, EPSG codes, positions left for a
+  reviewer), key figures, release funnel, findings, logged metres per lithology, final depths, documents with
+  their most frequent finding.
 - Result list grouped by project (document group) with count and release share; "Show on map" filters and
   zooms to the group.
 - Drag-and-drop upload with stage and page progress, model calls today against the limit, menu with review,

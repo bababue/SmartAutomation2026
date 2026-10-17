@@ -1,7 +1,5 @@
-import { useEffect, useState } from 'react'
-import { fetchQuality } from '../api'
 import type { ModelEvaluation, Quality, QualityMetrics, Share, UsageRow } from '../types'
-import { fmtCount as n } from '../format'
+import { fmtCount as n, fmtError } from '../format'
 import { Bar, Shares } from './StatsParts'
 
 type MetricKey = 'boundaries' | 'precision' | 'lithology_depth' | 'final_depth' | 'groundwater' | 'lab'
@@ -24,7 +22,6 @@ const percent = (s: Share) => {
 const range = ([low, high]: [number, number], f: (v: number) => string) => (low === high ? f(low) : `${f(low)}–${f(high)}`)
 const wholePercent = (r: [number, number]) => `${range(r, (v) => String(Math.round(100 * v)))} %`
 const usd = (v: number) => (v === 0 ? '$0' : v >= 10 ? `$${n(Math.round(v))}` : v >= 0.1 ? `$${v.toFixed(2)}` : `$${v.toPrecision(2)}`)
-const distance = (m: number | null) => (m == null ? '–' : m >= 1000 ? `${n(Math.round(m / 100) / 10)} km` : `${Math.round(m)} m`)
 const hours = (s: number) => (s >= 3600 ? `${(s / 3600).toFixed(1)} h` : `${Math.round(s / 60)} min`)
 const tokens = (v: number | null) => (v == null ? '–' : v >= 1e6 ? `${(v / 1e6).toFixed(1)} M` : `${(v / 1000).toFixed(1)} k`)
 
@@ -35,18 +32,11 @@ function modelName(id: string | null): string {
   return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}` : id
 }
 
-export function QualityView({ onReviewAudit }: { onReviewAudit: () => void }) {
-  const [quality, setQuality] = useState<Quality | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const ctrl = new AbortController()
-    fetchQuality(ctrl.signal)
-      .then((q) => { setQuality(q); setError(null) })
-      .catch((e) => { if (!ctrl.signal.aborted) setError(`Could not load the quality figures (${e.message}).`) })
-    return () => ctrl.abort()
-  }, [])
-
+export function QualityView({ quality, error, onReviewAudit }: {
+  quality: Quality | null
+  error: string | null
+  onReviewAudit: () => void
+}) {
   if (error) return <p className="error" role="alert">{error}</p>
   if (!quality) return <p className="muted">Loading…</p>
   const ev = quality.evaluation
@@ -62,7 +52,7 @@ export function QualityView({ onReviewAudit }: { onReviewAudit: () => void }) {
       </p>
       <div className="stats-grid stats-grid-quality">
         {ev ? <Current ev={ev} /> : (
-          <section className="stats-card stats-wide">
+          <section className="stats-card stats-wide" id="extraction-quality" tabIndex={-1}>
             <h3>Extraction quality</h3>
             <p className="stats-note">No evaluation data and no snapshot: approve records in the review queue, then
               run <code>python -m pipeline eval snapshot</code>.</p>
@@ -83,7 +73,7 @@ export function QualityView({ onReviewAudit }: { onReviewAudit: () => void }) {
 function Current({ ev }: { ev: ModelEvaluation }) {
   const c = ev.current
   return (
-    <section className="stats-card stats-wide" aria-labelledby="quality-current">
+    <section className="stats-card stats-wide" id="extraction-quality" tabIndex={-1} aria-labelledby="quality-current">
       <h3 id="quality-current">Extraction quality</h3>
       <p className="muted">
         The model output in this database, before reviewer corrections, against <b>{n(ev.reference.records)}</b> records
@@ -102,7 +92,7 @@ function Current({ ev }: { ev: ModelEvaluation }) {
         ))}
       </dl>
       <p className="stats-note">
-        Position: median error <b>{distance(c.position_median_m)}</b>, largest <b>{distance(c.position_max_m)}</b>;
+        Position: median error <b>{fmtError(c.position_median_m)}</b>, largest <b>{fmtError(c.position_max_m)}</b>;
         {' '}{n(c.without_position)} without a position, coordinate system differs on {n(c.crs_changed)}.
         Reference records not found: <b>{n(c.missing)}</b>.
       </p>
@@ -112,7 +102,7 @@ function Current({ ev }: { ev: ModelEvaluation }) {
 
 function Audit({ audit, onReviewAudit }: { audit: Quality['audit']; onReviewAudit: () => void }) {
   return (
-    <section className="stats-card" aria-labelledby="stats-audit">
+    <section className="stats-card" id="release-audit" tabIndex={-1} aria-labelledby="stats-audit">
       <h3 id="stats-audit">Release audit</h3>
       <p className="muted">How often an automatic release is wrong: a random sample of released records, checked by a
         person. A correction or rejection counts as wrong.</p>
@@ -168,7 +158,7 @@ function Models({ ev, models }: { ev: ModelEvaluation; models: NonNullable<Model
               <tr key={key}><th scope="row" title={hint}>{label}</th>{runs.map((r) => cell(key, r.metrics))}</tr>
             ))}
             <tr><th scope="row">Records not found</th>{runs.map((r) => <td key={r.arm} className="num">{n(r.metrics.missing)}</td>)}</tr>
-            <tr><th scope="row">Largest position error</th>{runs.map((r) => <td key={r.arm} className="num">{distance(r.metrics.position_max_m)}</td>)}</tr>
+            <tr><th scope="row">Largest position error</th>{runs.map((r) => <td key={r.arm} className="num">{fmtError(r.metrics.position_max_m)}</td>)}</tr>
             <tr className="quality-group"><th scope="row">Seconds per page (median)</th>{runs.map((r) => <td key={r.arm} className="num">{r.seconds_per_page ?? '–'}</td>)}</tr>
             <tr>
               <th scope="row">Tokens per page in / out</th>

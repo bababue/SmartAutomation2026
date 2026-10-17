@@ -585,6 +585,9 @@ def flag_shared_coordinates(boreholes: list[Borehole]) -> None:
                 b.issues.append(f"same printed coordinates as {a.borehole_name} at another place ({a.location_name})")
 
 
+SHARED_PLACE = "would share one position from the place name"
+
+
 def unstack_place_positions(boreholes: list[Borehole], keep: Collection[str] = ()) -> None:
     """Several holes of one folder or upload batch at one position from the place name: the point is the
     place's centre, where none of them need be, and the map would stack distinct holes on one spot. Their
@@ -604,8 +607,7 @@ def unstack_place_positions(boreholes: list[Borehole], keep: Collection[str] = (
             bh.location = bh.location.model_copy(update={"lat": None, "lon": None, "method": None,
                                                          "accuracy_m": None, "confidence": 0.0})
             bh.issues = [i for i in bh.issues if i != "position from place name only"]
-            bh.issues.append(f"not georeferenced: {len(holes)} holes of this folder or upload batch would share "
-                             "one position from the place name")
+            bh.issues.append(f"not georeferenced: {len(holes)} holes of this folder or upload batch {SHARED_PLACE}")
             corrections.rescore(bh)
 
 

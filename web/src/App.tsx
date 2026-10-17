@@ -480,6 +480,7 @@ export default function App() {
         {view === 'stats' && (
           <StatsView filters={filters} tab={statsTab} onTab={setStatsTab} onClose={() => setView('map')}
             onReviewAudit={() => { setRouteActive(false); setSelectedId(null); setListOpen(true); setAuditOnly(true); setView('review') }}
+            onReview={(f) => { setRouteActive(false); setSelectedId(null); setListOpen(true); setAuditOnly(false); setReviewFilters(f); setView('review') }}
             onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })); setView('map') }} />
         )}
       </main>

@@ -32,7 +32,7 @@ import pymupdf
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, evaluate, export, ingest, llm, quality, scoring, store, uploads
+from pipeline import assemble, config, corrections, evaluate, export, ingest, llm, quality, scoring, store, uploads
 from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
 from . import models, similar
@@ -878,12 +878,22 @@ def stats(con: DB) -> models.Stats:
 # Final depths in the histogram: 5 m bins up to 50 m, everything deeper in one.
 DEPTH_BIN_M, DEPTH_BINS = 5, 10
 SEVERITY_ORDER = ("blocking", "needs_look", "warning", "info")
+FROM_COORDINATES = "lat IS NOT NULL AND loc_method IN ('stated_coordinates', 'linked_table')"
+# First match wins: a person's decision over what was learned from people, an open ambiguity over a guess.
+CRS_DETERMINATION = " ".join(f"WHEN SUM({cond}) THEN '{key}'" for key, cond in (
+    ("reviewer", "f.code = 'correction' AND f.text LIKE '%: coordinate system EPSG:%'"),
+    ("knowledge", "f.code IN ('crs_from_knowledge', 'position_from_grid')"),
+    ("ambiguous", "f.code = 'crs_ambiguous'"),
+    ("document", "f.code = 'crs_from_document'"),
+    ("inferred", "f.code IN ('crs_inferred', 'axes_inferred')"),
+))
 
 
 @app.get("/api/stats/detail")
 def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
     """Aggregates for the statistics view over the records the list filters select, holes without a position
-    included: key figures, release funnel, findings, logged metres per lithology, final depths and groups."""
+    included: key figures, how positions and coordinate systems were obtained, release funnel, findings, logged
+    metres per lithology, final depths and groups."""
     params = filters.params
     scope = f"SELECT rid FROM boreholes WHERE {filters.sql()}"
 
@@ -893,9 +903,15 @@ def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
     totals, = rows(
         "SELECT COUNT(*) boreholes, COALESCE(SUM(n_layers), 0) layers, COUNT(DISTINCT doc_id) documents, "
         "COUNT(DISTINCT country) countries, "
-        "SUM(loc_method IN ('stated_coordinates', 'linked_table', 'manual')) exact, "
-        "SUM(loc_method = 'geocoded_place') approximate, SUM(lat IS NULL) unlocated, "
-        "SUM(NOT EXISTS (SELECT 1 FROM findings f WHERE f.rid = b.rid AND f.severity = 'blocking')) unblocked "
+        "SUM(lat IS NOT NULL AND loc_method = 'stated_coordinates') printed, "
+        "SUM(lat IS NOT NULL AND loc_method = 'linked_table') linked_table, "
+        "SUM(lat IS NOT NULL AND loc_method = 'manual') manual, "
+        "SUM(lat IS NOT NULL AND loc_method = 'geocoded_place') place_name, SUM(lat IS NULL) none, "
+        "SUM(NOT EXISTS (SELECT 1 FROM findings f WHERE f.rid = b.rid AND f.severity = 'blocking')) unblocked, "
+        "SUM(review_status = 'pending_review' AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = b.rid "
+        "AND f.severity = 'blocking')) waiting_blocking, "
+        "SUM(lat IS NULL AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = b.rid AND f.code = 'not_georeferenced' "
+        f"AND f.text LIKE '%{assemble.SHARED_PLACE}')) withheld "
         "FROM boreholes b WHERE rid IN ({scope})")
     (pages,), = rows("SELECT COALESCE(SUM(pages), 0) FROM documents WHERE doc_id IN "
                      "(SELECT doc_id FROM boreholes WHERE rid IN ({scope}))")
@@ -919,15 +935,20 @@ def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
                   "JOIN boreholes b ON b.rid = f.rid WHERE f.rid IN ({scope}) "
                   "AND f.severity IN ('blocking', 'needs_look', 'warning') GROUP BY grp, f.code ORDER BY n DESC"):
         top_finding.setdefault(r["grp"], {"code": r["code"], "records": r["n"]})
+    from_coordinates = f"rid IN ({{scope}}) AND {FROM_COORDINATES}"
     crs = rows("SELECT json_extract(data, '$.location.crs_epsg') epsg, COUNT(*) n FROM boreholes "
-               "WHERE rid IN ({scope}) AND json_extract(data, '$.location.crs_epsg') IS NOT NULL GROUP BY epsg "
-               "ORDER BY n DESC")
+               f"WHERE {from_coordinates} GROUP BY epsg ORDER BY n DESC")
+    how = {r["how"]: r["n"] for r in rows(
+        f"SELECT how, COUNT(*) n FROM (SELECT CASE {CRS_DETERMINATION} ELSE 'stated' END how FROM boreholes b "
+        f"LEFT JOIN findings f ON f.rid = b.rid WHERE b.{from_coordinates} GROUP BY b.rid) GROUP BY how")}
     return models.StatsDetail.model_validate({
         "documents": totals["documents"], "pages": pages, "boreholes": totals["boreholes"], "layers": totals["layers"],
         "countries": totals["countries"],
         "status": {s.value: by_status.get(s.value, 0) for s in ReviewStatus},
-        "position": {"exact": totals["exact"] or 0, "approximate": totals["approximate"] or 0,
-                     "none": totals["unlocated"] or 0},
+        "position": {k: totals[k] or 0 for k in models.PositionCounts.model_fields},
+        "crs_determination": {k: how.get(k, 0) for k in models.CrsDetermination.model_fields},
+        "positions_withheld": totals["withheld"] or 0,
+        "waiting_blocking": totals["waiting_blocking"] or 0,
         "funnel": {"records": totals["boreholes"], "without_blocking": totals["unblocked"] or 0,
                    "released_automatically": by_status.get("auto_approved", 0),
                    "released": by_status.get("auto_approved", 0) + by_status.get("approved", 0)},
@@ -939,7 +960,8 @@ def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
         "depths": depths,
         "groups": [{"group": r["grp"], "count": r["n"], "released": r["released"],
                     "top_finding": top_finding.get(r["grp"])} for r in group_rows],
-        "crs": [[r["epsg"], r["n"]] for r in crs],
+        "crs": [[r["epsg"], r["n"]] for r in crs if r["epsg"] is not None],
+        "crs_without_epsg": sum(r["n"] for r in crs if r["epsg"] is None),
     })
 
 
