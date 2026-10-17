@@ -492,11 +492,7 @@ async def upload_document(file: UploadFile = File(...)):
     kind = "pdf" if suffix == ".pdf" else "docx" if suffix == ".docx" else "image"
     doc = ingest.SourceDoc(doc_id=doc_id, path=filename, kind=kind)
     try:
-        if kind == "pdf":  # count before rendering: a long PDF would take minutes to render only to be rejected
-            with pymupdf.open(dest) as pdf:
-                _check_page_count(pdf.page_count)
-        pages = await run_in_threadpool(ingest.render, doc, upload_dir)
-        _check_page_count(len(pages))
+        pages = await run_in_threadpool(_render_upload, doc, upload_dir, dest)
     except Exception as exc:
         shutil.rmtree(upload_dir, ignore_errors=True)
         shutil.rmtree(config.PAGES_DIR / doc_id, ignore_errors=True)
@@ -523,6 +519,19 @@ async def upload_document(file: UploadFile = File(...)):
 
     threading.Thread(target=work, daemon=True).start()
     return {"job_id": job_id, "pages": len(pages)}
+
+
+_MUPDF = threading.Lock()  # PyMuPDF is not thread-safe; concurrent uploads must not render at the same time
+
+
+def _render_upload(doc: ingest.SourceDoc, upload_dir: Path, dest: Path) -> list[ingest.PageImage]:
+    with _MUPDF:
+        if doc.kind == "pdf":  # count before rendering: a long PDF would take minutes to render only to be rejected
+            with pymupdf.open(dest) as pdf:
+                _check_page_count(pdf.page_count)
+        pages = ingest.render(doc, upload_dir)
+    _check_page_count(len(pages))
+    return pages
 
 
 def _check_page_count(pages: int) -> None:
