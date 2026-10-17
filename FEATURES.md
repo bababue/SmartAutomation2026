@@ -124,13 +124,14 @@ the challenge owner's priorities are in [docs/challenge-owner-feedback.md](docs/
   zooms to the group.
 - Drag-and-drop upload with stage and page progress, model calls today against the limit, menu with review,
   statistics and export, dark mode, shareable URLs for view, selection and tunnel.
+- Statistics with a quality tab: extraction quality against the reviewed reference, release audit, Opus against
+  Haiku with cost per page, prompt experiments side by side, recorded model calls.
 
 ## Feature ideas
 
 | Idea | Why | Effort |
 |---|---|---|
 | Anomalies across the collection: depth, elevation or lithology outliers against neighbouring holes | Feedback #9 | M |
-| Model comparison page in the app (quality against cost per page) | Feedback #8 | S |
 | Interface in English and German | Users at the challenge owner | M |
 | Measure Mistral or Azure OpenAI through the OpenAI-compatible backend | Feedback #7, #8 | S–M |
 | Projects and sites as entities with one canonical project name across sheets | Project names vary between sheets | M |

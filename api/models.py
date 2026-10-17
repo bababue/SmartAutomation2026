@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from pipeline.ground import GroundSummary
 from schema.borehole import Borehole, GeorefMethod, ReviewStatus
@@ -222,7 +222,125 @@ class StatsDetail(BaseModel):
     depths: list[int]
     groups: list[GroupStats]
     crs: list[tuple[int, int]]
+
+
+class Aggregate(BaseModel):
+    """Part of the model evaluation, which is committed as a snapshot: an unknown field fails, so nothing but
+    the aggregates declared here can end up in the repository."""
+    model_config = ConfigDict(extra="forbid")
+
+
+class Share(Aggregate):
+    hit: float
+    of: float
+
+
+class QualityMetrics(Aggregate):
+    """Reference records compared with a run's model output (pipeline/evaluate.py)."""
+    records: int
+    missing: int
+    corrected: int
+    boundaries: Share  # reference layer boundaries found within the tolerance
+    precision: Share  # the run's boundaries that are in the reference
+    lithology_depth: Share  # metres of the reference log with the same lithology at the same depth
+    final_depth: Share
+    groundwater: Share
+    lab: Share
+    position_median_m: float | None
+    position_max_m: float | None
+    without_position: int
+    crs_changed: int
+
+
+class RunStats(Aggregate):
+    """Per page of an arm's own extractions. Tokens are None where the backend does not report them."""
+    pages: int
+    model: str | None
+    seconds_per_page: float | None
+    input_tokens: float | None
+    output_tokens: float | None
+    usd_per_page: float | None
+    usd_measured: bool  # billed or priced from tokens; else the pipeline's estimate for the model
+
+
+class ModelRun(RunStats):
+    arm: str
+    metrics: QualityMetrics
+
+
+class ModelComparison(Aggregate):
+    prompt: str
+    records: int
+    runs: list[ModelRun]
+
+
+class ArmRun(RunStats):
+    name: str
+    date: str
+    prompt: str | None
+    covered: int  # reference records whose pages this arm extracted itself
+    metrics: QualityMetrics
+
+
+class PromptArms(Aggregate):
+    records: int  # reference records every arm extracted itself: all runs are scored on these
+    documents: int
+    runs: list[ArmRun]
+
+
+class BenchmarkRow(Aggregate):
+    model: str
+    route: str
+    seconds_per_page: tuple[float, float]  # range over repeated runs
+    usd_per_page: float
+    boundaries: tuple[float, float]
+    lithology: tuple[float, float]
+
+
+class Benchmark(Aggregate):
+    pages: int
+    documents: int
+    against: str
+    rows: list[BenchmarkRow]
+
+
+class ReferenceInfo(Aggregate):
+    records: int
+    documents: int
+    created: str | None
+
+
+class ModelEvaluation(Aggregate):
+    generated: str
+    reference: ReferenceInfo
+    current: QualityMetrics
+    models: ModelComparison | None
+    arms: PromptArms
+    benchmark: Benchmark
+    log_pages: int
+
+
+class UsageRow(BaseModel):
+    model: str | None
+    endpoint: str | None
+    stage: str | None
+    calls: int
+    errors: int
+    pages: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float | None
+    priced: int  # calls with a known cost
+    seconds: float
+    first: str
+    last: str
+
+
+class Quality(BaseModel):
+    source: Literal["live", "snapshot", "none"]  # data/eval, the committed snapshot, or neither
+    evaluation: ModelEvaluation | None
     audit: Audit | None
+    usage: list[UsageRow]
 
 
 class DuplicateFile(BaseModel):

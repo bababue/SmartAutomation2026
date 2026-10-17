@@ -60,6 +60,7 @@ export default function App() {
   const [refresh, setRefresh] = useState(0)  // bump to reload map, list, queue and stats
   const [reviewFilters, setReviewFilters] = useState<ReviewFilters>(initial.reviewFilters)
   const [auditOnly, setAuditOnly] = useState(initial.auditOnly)
+  const [statsTab, setStatsTab] = useState(initial.statsTab)
   const [listOpen, setListOpen] = useState(initial.routeActive ? true : initial.listOpen)
   const [sheetWidth, setSheetWidth] = useState<number | null>(null)  // null: default split; a reload resets it
   const beforeSource = useRef<{ listOpen: boolean; sheetWidth: number | null }>({ listOpen: true, sheetWidth: null })
@@ -141,13 +142,13 @@ export default function App() {
 
   // Page and selection changes get a history entry, so Back closes a borehole or leaves the queue.
   useEffect(() => {
-    const url = writeUrl({ view, routeActive, tunnelId: activeTunnelId, selectedId, listOpen, filters, reviewFilters, auditOnly })
+    const url = writeUrl({ view, routeActive, tunnelId: activeTunnelId, selectedId, listOpen, filters, reviewFilters, auditOnly, statsTab })
     const shown = readUrl(window.location.search)
     if (url === (window.location.search || window.location.pathname)) return
     if (shown.view !== view || shown.routeActive !== routeActive ||
       (routeActive && shown.tunnelId !== activeTunnelId) || shown.selectedId !== selectedId) window.history.pushState(null, '', url)
     else window.history.replaceState(null, '', url)
-  }, [view, routeActive, activeTunnelId, selectedId, listOpen, filters, reviewFilters, auditOnly])
+  }, [view, routeActive, activeTunnelId, selectedId, listOpen, filters, reviewFilters, auditOnly, statsTab])
 
   useEffect(() => {
     const onPop = () => {
@@ -158,6 +159,7 @@ export default function App() {
       setSelectedId(s.selectedId)
       setReviewFilters(s.reviewFilters)
       setAuditOnly(s.auditOnly)
+      setStatsTab(s.statsTab)
       setListOpen(s.routeActive ? true : s.listOpen)
       setFilters(s.filters)
       setQuery(s.filters.q)
@@ -466,7 +468,7 @@ export default function App() {
           </section>
         )}
         {view === 'stats' && (
-          <StatsView filters={filters} onClose={() => setView('map')}
+          <StatsView filters={filters} tab={statsTab} onTab={setStatsTab} onClose={() => setView('map')}
             onReviewAudit={() => { setSelectedId(null); setListOpen(true); setAuditOnly(true); setView('review') }}
             onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })); setView('map') }} />
         )}

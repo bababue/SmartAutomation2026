@@ -32,7 +32,7 @@ import pymupdf
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, evaluate, export, ingest, llm, scoring, store, uploads
+from pipeline import config, corrections, evaluate, export, ingest, llm, quality, scoring, store, uploads
 from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
 from . import models, similar
@@ -936,8 +936,19 @@ def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
         "groups": [{"group": r["grp"], "count": r["n"], "released": r["released"],
                     "top_finding": top_finding.get(r["grp"])} for r in group_rows],
         "crs": [[r["epsg"], r["n"]] for r in crs],
-        "audit": evaluate.audit_summary(con),  # the whole database: the sample is drawn from all releases
     })
+
+
+@app.get("/api/stats/quality")
+def stats_quality(con: DB) -> models.Quality:
+    """Extraction quality and model comparison: computed from data/eval where it exists, else the committed
+    snapshot. The release audit and the recorded model calls cover the whole database."""
+    if evaluate.REFERENCE_PATH.exists():
+        source, data = "live", quality.evaluation(con)
+    else:
+        data = quality.load_snapshot()
+        source = "snapshot" if data else "none"
+    return models.Quality(source=source, evaluation=data, audit=evaluate.audit_summary(con), usage=quality.usage(con))
 
 
 @app.get("/api/export.csv")
