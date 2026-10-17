@@ -315,13 +315,24 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
         where, params = _queue_filters(finding, position)
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}", params).fetchone()[0]
     rows = con.execute(
-        f"SELECT id, name, project, location_name, country, score, n_layers, {SOURCE_FILE}, reasons "
+        f"SELECT id, name, project, {GROUP} AS grp, location_name, country, score, review_status, loc_method, "
+        f"n_layers, {SOURCE_FILE}, reasons "
         f"FROM boreholes WHERE {where} ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
         (*params, limit, offset),
     ).fetchall()
     items = [{**{k: r[k] for k in r.keys() if k != "reasons"}, "reasons": json.loads(r["reasons"] or "[]")}
              for r in rows]
-    return models.QueuePage.model_validate({"items": items, "total": total})
+    group_rows = con.execute(
+        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM({RELEASED}) released "
+        "FROM boreholes GROUP BY grp ORDER BY grp"
+    ).fetchall()
+    projects: dict[str, Counter] = {}
+    for r in con.execute(f"SELECT {GROUP} AS grp, TRIM(project) AS project, COUNT(*) n FROM boreholes "
+                         "WHERE NULLIF(TRIM(project), '') IS NOT NULL GROUP BY grp, project"):
+        projects.setdefault(r["grp"], Counter())[r["project"]] = r["n"]
+    groups = [{"group": r["grp"], "project": projects[r["grp"]].most_common(1)[0][0] if r["grp"] in projects else None,
+               "count": r["total"], "released": r["released"]} for r in group_rows]
+    return models.QueuePage.model_validate({"items": items, "total": total, "groups": groups})
 
 
 @app.get("/api/review-queue/findings")
@@ -825,7 +836,7 @@ def cancel_upload(job_id: str, body: CancelBody, con: DB) -> uploads.UploadResul
         raise HTTPException(404, "upload job not found")
     doc_ids = None
     if body.files is not None:
-        by_path = {Path(d["path"]).as_posix(): d["doc_id"] for d in json.loads(row["task"])["docs"]}
+        by_path = {Path(d["path"]).as_posix(): d["doc_id"] for d in json.loads(row["task"]).get("docs", [])}
         if unknown := [f for f in body.files if f not in by_path]:
             raise HTTPException(422, f"not in this upload: {', '.join(unknown)}")
         doc_ids = [by_path[f] for f in body.files]

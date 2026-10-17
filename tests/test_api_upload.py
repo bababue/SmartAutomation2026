@@ -1,6 +1,7 @@
 """Upload endpoint: batches, zip extraction, and the type, size and page checks before any LLM call."""
 
 import io
+import json
 import time
 import zipfile
 from datetime import datetime, timezone
@@ -321,3 +322,15 @@ def test_daily_call_limit_refuses_an_upload_and_usage_counts_the_calls(client, m
     assert not any(config.UPLOADS_DIR.iterdir())
     usage = client.get("/api/llm/usage").json()
     assert usage["today"] == 1 and usage["daily_limit"] == 2
+
+
+def test_an_upload_job_stored_in_another_shape_does_not_break_uploads(client, monkeypatch):
+    monkeypatch.setattr("pipeline.runner.run", lambda *a, **k: None)
+    con = store.connect()
+    with con:
+        con.execute("INSERT INTO upload_jobs (id, task, status, created_at) VALUES ('old', ?, 'done', '2026-01-01')",
+                    (json.dumps({"job_id": "old", "doc_id": "upload-old", "filename": "a.pdf", "kind": "pdf"}),))
+    con.close()
+    res = client.post("/api/uploads", files={"files": ("log.pdf", _pdf_bytes(1), "application/pdf")})
+    assert res.status_code == 200
+    assert client.post("/api/uploads/old/cancel", json={"files": ["a.pdf"]}).status_code == 422

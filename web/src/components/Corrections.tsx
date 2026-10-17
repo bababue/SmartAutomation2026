@@ -47,11 +47,13 @@ interface EditState {
   onCancel: () => void
 }
 
-/** The detail header as fields: hole name, project and location. */
-export function HeaderEditor({ borehole, onChange, onDone }: {
+/** The detail header edited in place: the hole name, project and location become fields in the same type. */
+export function HeaderEditor({ borehole, onChange, onDone, children }: {
   borehole: Borehole
   onChange: (update: DetailUpdate) => void
   onDone: () => void
+  /** Further header actions, after Cancel and Save. */
+  children?: ReactNode
 }) {
   const initial = { borehole_name: str(borehole.borehole_name), project_name: str(borehole.project_name),
     location_name: str(borehole.location_name) }
@@ -67,24 +69,32 @@ export function HeaderEditor({ borehole, onChange, onDone }: {
     }))
     if (await send(items)) onDone()
   }
-  const field = (key: Key, label: string, className = 'field') => (
-    <input className={className} value={v[key]} placeholder={label} aria-label={label} autoFocus={key === 'borehole_name'}
-      onChange={(e) => setV({ ...v, [key]: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && save()} />
+  // A hidden copy of the text sizes each field, so it is exactly as wide as what is typed (or its placeholder).
+  const field = (key: Key, label: string, className: string) => (
+    <span className={`head-field-wrap ${className}`} data-value={v[key] || label}>
+      <input className="head-field" value={v[key]} placeholder={label} aria-label={label} size={1}
+        autoFocus={key === 'borehole_name'} onChange={(e) => setV({ ...v, [key]: e.target.value })}
+        onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { e.stopPropagation(); onDone() } }} />
+    </span>
   )
 
   return (
-    <div className="head-edit">
-      {field('borehole_name', 'Hole name', 'field head-edit-name')}
-      <div className="head-edit-row">
-        {field('project_name', 'Project')}
-        {field('location_name', 'Location')}
-        <span className="card-actions">
-          <button className="btn btn-small btn-ghost" onClick={onDone} disabled={busy}>Cancel</button>
-          <button className="btn btn-small btn-primary" onClick={save} disabled={!canSave}>{busy ? 'Saving…' : 'Save'}</button>
-        </span>
+    <>
+      <div className="head-edit">
+        {field('borehole_name', 'Hole name', 'head-field-name')}
+        <p className="detail-sub head-edit-sub">
+          {field('project_name', 'Project', 'head-field-sub')}
+          {v.project_name.trim() && v.location_name.trim() && <span aria-hidden="true">,</span>}
+          {field('location_name', 'Location', 'head-field-sub')}
+        </p>
+        {error && <p className="error" role="alert">{error}</p>}
       </div>
-      {error && <p className="error" role="alert">{error}</p>}
-    </div>
+      <div className="detail-actions">
+        <button className="btn btn-small btn-ghost head-edit-btn" onClick={onDone} disabled={busy}>Cancel</button>
+        <button className="btn btn-small btn-primary head-edit-btn" onClick={save} disabled={!canSave}>{busy ? 'Saving…' : 'Save'}</button>
+        {children}
+      </div>
+    </>
   )
 }
 

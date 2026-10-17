@@ -11,7 +11,7 @@ import { TunnelList } from './components/TunnelList'
 import { ReviewList } from './components/ReviewList'
 import { StatsView } from './components/StatsView'
 import { SectionView } from './components/SectionView'
-import type { CrsGroup, Detail, DetailUpdate, Feature, FeatureCollection, FindingFacet, Filters, MapPoint, QueueItem, ReviewFilters, Stats } from './types'
+import type { CrsGroup, Detail, DetailUpdate, Feature, FeatureCollection, FindingFacet, Filters, GroupFacet, MapPoint, QueueItem, ReviewFilters, Stats } from './types'
 import { DEFAULT_FILTERS, DEFAULT_REVIEW_FILTERS, readUrl, writeUrl, type View } from './url'
 import { detailSheetRect, isTyping } from './dom'
 import { SheetResizer } from './components/SheetResizer'
@@ -48,6 +48,7 @@ export default function App() {
   const [known, setKnown] = useState<Map<string, Feature>>(new Map())  // full features seen, for the route profile
   const requestedHoleIds = useRef(new Set<string>())
   const [queue, setQueue] = useState<QueueItem[]>([])
+  const [queueGroups, setQueueGroups] = useState<Pick<GroupFacet, 'group' | 'project' | 'count' | 'released'>[]>([])
   const [queueTotal, setQueueTotal] = useState(0)
   const [queueFindings, setQueueFindings] = useState<FindingFacet[]>([])
   const [crsGroups, setCrsGroups] = useState<CrsGroup[]>([])
@@ -61,7 +62,7 @@ export default function App() {
   const [reviewFilters, setReviewFilters] = useState<ReviewFilters>(initial.reviewFilters)
   const [auditOnly, setAuditOnly] = useState(initial.auditOnly)
   const [statsTab, setStatsTab] = useState(initial.statsTab)
-  const [listOpen, setListOpen] = useState(initial.routeActive ? true : initial.listOpen)
+  const [listOpen, setListOpen] = useState(initial.routeActive || initial.view === 'review' ? true : initial.listOpen)
   const [sheetWidth, setSheetWidth] = useState<number | null>(null)  // null: default split; a reload resets it
   const beforeSource = useRef<{ listOpen: boolean; sheetWidth: number | null }>({ listOpen: true, sheetWidth: null })
   // The source page needs the room: opening it hides the list and widens the sheet so the record
@@ -160,7 +161,7 @@ export default function App() {
       setReviewFilters(s.reviewFilters)
       setAuditOnly(s.auditOnly)
       setStatsTab(s.statsTab)
-      setListOpen(s.routeActive ? true : s.listOpen)
+      setListOpen(s.routeActive || s.view === 'review' ? true : s.listOpen)
       setFilters(s.filters)
       setQuery(s.filters.q)
     }
@@ -201,8 +202,8 @@ export default function App() {
   const [queueLoadedKey, setQueueLoadedKey] = useState<string | null>(null)
   useEffect(() => {
     const ctrl = new AbortController()
-    fetchQueue(reviewFilters, ctrl.signal, 200, auditOnly)
-      .then(({ items, total }) => { setQueue(items); setQueueTotal(total); setQueueLoadedKey(queueKey) })
+    fetchQueue(reviewFilters, ctrl.signal, 2000, auditOnly)
+      .then(({ items, total, groups }) => { setQueue(items); setQueueTotal(total); setQueueGroups(groups); setQueueLoadedKey(queueKey) })
       .catch((e) => { if (e.name !== 'AbortError') setQueueLoadedKey(queueKey) })
     fetchQueueFindings(reviewFilters.position, ctrl.signal).then(setQueueFindings).catch(() => undefined)
     fetchCrsGroups(ctrl.signal).then(setCrsGroups).catch(() => undefined)
@@ -322,6 +323,20 @@ export default function App() {
     setRouteActive(false)
     setRouteDraft(null)
   }
+  const openReview = () => {
+    setRouteActive(false)
+    setRouteDraft(null)
+    setAuditOnly(false)
+    setSelectedId(null)
+    setListOpen(true)
+    setView('review')
+  }
+  const closeReview = () => {
+    setSelectedId(null)
+    setAuditOnly(false)
+    setListOpen(true)
+    setView('map')
+  }
   const createTunnel = () => {
     const id = crypto.randomUUID()
     setTunnels((items) => [...items, { id, name: `Tunnel ${items.length + 1}`, route: null, holeIds: [] }])
@@ -368,58 +383,54 @@ export default function App() {
           <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx,.txt,.xlsx,.xlsm,.zip" multiple
             className="visually-hidden" onChange={onFileChosen} aria-label="Upload borehole logs" />
           <UploadQueue batches={batches} usage={usage} onCancel={cancel} onDismiss={dismiss} />
-          {stats && (
-            <p className="stats">
-              <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> of{' '}
-              <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes released
-              {stats.boreholes > stats.located && (
-                <>{' '}<button className="link-button muted" title="Not on the map; review them to set their position"
-                  onClick={() => {
-                    setSelectedId(null); setListOpen(true); setAuditOnly(false)
-                    setReviewFilters({ finding: null, position: 'none' }); setView('review')
-                  }}>
-                  ({(stats.boreholes - stats.located).toLocaleString('en')} without position)
-                </button></>
-              )}
-            </p>
-          )}
-          <AppMenu inReview={view === 'review'} inStats={view === 'stats'} uploading={uploading} dark={dark} view3d={view3d}
-            onToggleReview={() => {
-              setAuditOnly(false)
-              if (view !== 'review') { setSelectedId(null); setListOpen(true) }
-              setView(view === 'review' ? 'map' : 'review')
-            }}
+          {stats && <p className="stats">
+            <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}/{stats.boreholes.toLocaleString('en')}</strong>{' '}
+            (Released/Total) ·{' '}
+            {stats.boreholes > stats.located ? <button className="link-button muted" onClick={() => {
+              setRouteActive(false); setSelectedId(null); setListOpen(true); setAuditOnly(false)
+              setReviewFilters({ finding: null, position: 'none' }); setView('review')
+            }}>{(stats.boreholes - stats.located).toLocaleString('en')} without position</button>
+              : <span>0 without position</span>}
+          </p>}
+          <AppMenu inStats={view === 'stats'} uploading={uploading} dark={dark} view3d={view3d}
             onToggleStats={() => setView(view === 'stats' ? 'map' : 'stats')}
-            onCreateTunnel={createTunnel}
             onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} onToggleView3d={() => setView3d(!view3d)} />
         </div>
       </header>
 
-      {!inTunnel && <button className="edge-tab list-toggle" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} aria-controls="sidebar"
+      {!inTunnel && view !== 'review' && <button className="edge-tab list-toggle" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} aria-controls="sidebar"
         aria-label={listOpen ? 'Hide filters and results' : 'Show filters and results'} title={listOpen ? 'Hide list' : 'Show list'}>
         {listOpen ? '‹' : '›'}
       </button>}
       <aside className="sidebar" id="sidebar" inert={!listOpen}>
         {inTunnel ? <TunnelList tunnels={tunnels} boreholes={known} selectedId={activeTunnelId}
           onSelect={(id) => { setActiveTunnelId(id); setRouteDraft(null); setSelectedId(null) }}
+          onCreate={createTunnel}
           onShowBoreholes={closeTunnel} /> : view === 'review' ? <>
+        {auditOnly && <div className="filters review-mode-card">
+          <div className="filter-bar" role="group" aria-label="Map content">
+            <button className="pill pill-on pill-mode" onClick={closeReview} aria-label="Close review and show boreholes">
+              Review <span aria-hidden="true">×</span>
+            </button>
+          </div>
+        </div>}
         {auditOnly ? (
           <div className="result-head">
             <span>Release audit: automatic releases drawn for a person to check</span>
             <button className="link-button" onClick={() => setAuditOnly(false)}>Waiting records</button>
           </div>
         ) : (
-          <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies} groupLabel={null} onShowTunnels={openTunnel}
+          <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies}
+            onShowTunnels={openTunnel} onShowReview={openReview} onCloseReview={closeReview}
             review={{ filters: reviewFilters, onChange: setReviewFilters, findings: queueFindings }} />
         )}
         {error && <p className="error" role="alert">{error}</p>}
-        <ReviewList items={queue} total={queueTotal} loading={queueLoadedKey !== queueKey} audit={auditOnly}
+        <ReviewList items={queue} groups={queueGroups} total={queueTotal} loading={queueLoadedKey !== queueKey} audit={auditOnly}
           selectedId={selectedId} onSelect={setSelectedId}
           crsGroups={!auditOnly && reviewFilters.position === 'crs_inferred' ? crsGroups : []} onChanged={() => setRefresh((n) => n + 1)} />
         </> : <>
         <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies}
-          groupLabel={filters.group && (data.facets?.groups.find((g) => g.group === filters.group)?.project ?? filters.group)}
-          onShowTunnels={openTunnel} />
+          onShowTunnels={openTunnel} onShowReview={openReview} />
         <div className="result-head">
           <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
         </div>
@@ -453,7 +464,6 @@ export default function App() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             onRemove={toggleRouteHole}
-            onClear={() => setRouteHoleIds([])}
           />
         ) : inTunnel && (
           <section className="section" aria-label="Tunnel profile">
@@ -469,7 +479,7 @@ export default function App() {
         )}
         {view === 'stats' && (
           <StatsView filters={filters} tab={statsTab} onTab={setStatsTab} onClose={() => setView('map')}
-            onReviewAudit={() => { setSelectedId(null); setListOpen(true); setAuditOnly(true); setView('review') }}
+            onReviewAudit={() => { setRouteActive(false); setSelectedId(null); setListOpen(true); setAuditOnly(true); setView('review') }}
             onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })); setView('map') }} />
         )}
       </main>
@@ -483,6 +493,7 @@ export default function App() {
         onStartDrawing={() => { setRouteDraft([]); setRouteError(null) }}
         onUndo={() => setRouteDraft((draft) => draft ? draft.slice(0, -1) : null)} onFinishDrawing={finishRoute}
         onCancelDrawing={() => setRouteDraft(null)} onSelectNearby={() => setRouteHoleIds(nearby.map((candidate) => candidate.id))}
+        onClearBoreholes={() => setRouteHoleIds([])}
         onToggleHole={toggleRouteHole}
         onDelete={() => { setTunnels((items) => items.filter((item) => item.id !== activeTunnelId)); setActiveTunnelId(null); setRouteDraft(null) }}
         onClose={() => { setActiveTunnelId(null); setRouteDraft(null) }} />}

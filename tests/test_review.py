@@ -192,7 +192,9 @@ def test_review_api(con):
     assert res.status_code == 200
     assert res.json()["review_revision"] == seen["review_revision"] + 1
     assert res.json()["review_log"][0]["reviewer"] == "Anna"
-    assert client.get("/api/review-queue").json() == {"items": [], "total": 0}
+    queue = client.get("/api/review-queue").json()
+    assert queue["items"] == [] and queue["total"] == 0
+    assert queue["groups"][0]["released"] == queue["groups"][0]["count"] == 1
     released = client.get("/api/boreholes", params={"status": "released"}).json()["features"]
     assert [f["properties"]["id"] for f in released] == ["demo:BH1"]
     assert client.post("/api/boreholes/missing/review", json={**decision, "content_hash": "x",

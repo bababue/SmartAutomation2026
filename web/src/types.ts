@@ -108,10 +108,13 @@ export interface ReviewEvent {
 export interface QueueItem {
   id: string
   name: string
+  grp: string
   project: string | null
   location_name: string | null
   country: string | null
   score: number | null
+  review_status: ReviewStatus
+  loc_method: Location['method']
   n_layers: number
   source_file: string | null
   reasons: string[]
@@ -121,6 +124,7 @@ export interface QueueItem {
 export interface QueuePage {
   items: QueueItem[]
   total: number
+  groups: Pick<GroupFacet, 'group' | 'project' | 'count' | 'released'>[]
 }
 
 /** Where a waiting record's position comes from; 'crs_inferred': its coordinate system is only inferred. */

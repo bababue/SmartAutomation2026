@@ -184,14 +184,15 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
   score range, lithology, depth to rock, groundwater.
 - **Detail:** two-column profile (stratigraphy, DIN 4023 lithology), layers, tests and lab values next to the
   original page; hovering a value outlines where it was read. Similar holes by ground profile.
-- **Review** (menu): the list shows the waiting records, lowest score first, also those without a position.
+- **Review:** choose **Review** beside the borehole filters. The left sidebar shows waiting records,
+  lowest score first, also those without a position; use the active **Review ×** card to return to boreholes.
   Filter them by where the position comes from (printed coordinates, estimated from the place name, inferred
   coordinate system, none) and by finding. Approve with `A`, reject with `R`, `Esc` to close; the next record
   opens automatically. A document whose waiting holes share an inferred coordinate system shows "Confirm for all
   n" in the detail of each of them. The statistics open the release audit sample in the same list.
 - **Tunnel routes:** choose **Tunnels** beside the borehole filters. The sidebar groups saved tunnels by the
-  project shared by the most selected boreholes; tunnels without a project appear first. Choose **New tunnel**
-  from the menu to create one. Its settings open on the right. Draw an alignment or import a WGS84 GeoJSON
+  project shared by the most selected boreholes; tunnels without a project appear first. Use **+ New tunnel**
+  beside **Tunnels ×** to create one. Its settings open on the right. Draw an alignment or import a WGS84 GeoJSON
   LineString, select boreholes in the corridor, and view the longitudinal section below the map. Spans over
   150 m are drawn lighter as less certain. Tunnels and selected boreholes are saved in this browser, and the
   selected tunnel reopens from its URL after a reload.

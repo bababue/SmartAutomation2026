@@ -82,10 +82,13 @@ class LayerStrips(BaseModel):
 class QueueItem(BaseModel):
     id: str
     name: str
+    grp: str
     project: str | None
     location_name: str | None
     country: str | None
     score: float | None
+    review_status: str
+    loc_method: str | None
     n_layers: int
     source_file: str | None
     reasons: list[str]
@@ -94,6 +97,14 @@ class QueueItem(BaseModel):
 class QueuePage(BaseModel):
     items: list[QueueItem]
     total: int
+    groups: list["QueueGroup"]
+
+
+class QueueGroup(BaseModel):
+    group: str
+    project: str | None
+    count: int
+    released: int
 
 
 class QueueFinding(BaseModel):

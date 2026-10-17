@@ -99,6 +99,8 @@ def test_review_queue_pages(client):
     con.close()
     page = client.get("/api/review-queue?limit=1").json()
     assert page["total"] == 2 and len(page["items"]) == 1
+    assert page["items"][0]["grp"] == "q"
+    assert next(g for g in page["groups"] if g["group"] == "q")["count"] > len(page["items"])
     assert client.get("/api/corrections/orphans").json() == []
 
 
