@@ -152,6 +152,13 @@ GEO_TEXT = [
     ("Lat: 48 Lon: 7", (48.0, 7.0)),
     ("Location: 48.8584 N, 2.2945 E (WGS84)", (48.8584, 2.2945)),  # Eiffel Tower; 'S84' is no latitude
     ("48.8584 N 2.2945 E ETRS89", (48.8584, 2.2945)),
+    # Bare minutes and seconds after a hemisphere letter, label or degree sign, or before a hemisphere letter
+    ("N 48 51 30, E 2 17 40", (48.858333, 2.294444)),
+    ("N 48 51 30 E 2 17 40", (48.858333, 2.294444)),  # the E opens the longitude, it is no hemisphere of 30
+    ("Lat 48 51.5 Lon 2 17.6667", (48.858333, 2.294444)),
+    ("N 40 41.35 W 074 02.6667", (40.689167, -74.044444)),
+    ("48 51 30 N 2 17 40 E", (48.858333, 2.294444)),
+    ("N 48° 51 30 E 2° 17 40", (48.858333, 2.294444)),
 ]
 
 
@@ -170,6 +177,26 @@ def test_degrees_need_a_marker_and_metres_are_not_degrees():
     assert geographic_reading("E 312456.78 N 6251234.50") is None
     assert geographic_reading("N 29,23,382 E 47,59,898") is None  # degrees + decimal minutes in commas
     assert geographic_reading("48° 51′ 30″, 2° 17′ 40″") == pytest.approx((48.858333, 2.294444, False), abs=1e-5)
+
+
+@pytest.mark.parametrize("text", [
+    "N 48 75 12, E 2 17 40",  # minutes of 60 or more
+    "N 48.5 51 E 2 17",  # decimal degrees followed by minutes
+    "N 48 51.5 30 E 2 17 40",  # decimal minutes followed by seconds
+    "N 48 123 E 2 17",  # three-digit minutes
+    "N 48 51 30 15 E 2 17 40",  # one group too many
+])
+def test_bare_numbers_that_are_no_minutes_give_no_geographic_reading(text):
+    from pipeline.georef import geographic_reading
+
+    assert geographic_reading(text) is None
+
+
+def test_projected_metres_after_axis_letters_are_no_degrees():
+    from pipeline.georef import geographic_reading
+
+    for text in ("E 413000 N 5316000", "R 3412345 H 5316000", "E 413 000 N 5 316 000", "UTM 32N 412345 5316000"):
+        assert geographic_reading(text) is None
 
 
 def test_place_decides_axis_order_without_hemispheres():

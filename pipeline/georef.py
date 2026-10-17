@@ -247,6 +247,30 @@ GEO_COMPONENT = re.compile(
     r"(?(pre)|(?P<post>[NSEW](?![A-Za-z]))?)",  # 'S 33.9 E 151.2': the E belongs to the next value
     re.IGNORECASE,
 )
+# Degrees followed by bare minutes (and seconds), as in 'N 48 01 12' or 'Lat 47 59.876'. Only after a hemisphere
+# letter, lat/lon label or degree sign, or before a hemisphere letter: '48.1 7.9' stays two values.
+_NUM = r"\d+(?:[.,]\d+)?(?![.,]?\d)"
+SPACED_DMS = re.compile(
+    r"(?P<intro>(?<![A-Za-z])(?:(?:latitude|longitude|lat|long|lon)\.?\s*[:=]?|[NSEW])\s*)?"
+    rf"(?<![\d.,])(?P<deg>-?{_NUM})\s*(?P<degsym>°|º|˚)?(?P<rest>(?:\s+{_NUM})+)"
+    r"(?!\s*(?:\d|['′’\"″”°º˚]|min\b|sec\b))"
+    r"(?(intro)|(?(degsym)|\s*[NSEW](?![A-Za-z])))",
+    re.IGNORECASE,
+)
+
+
+def _mark_spaced_dms(text: str) -> str | None:
+    """'N 48 01 12' → 'N 48° 01′ 12″'. None when bare numbers after a degree value cannot be its minutes and
+    seconds: reading only the degrees would drop digits."""
+    out, end = [], 0
+    for m in SPACED_DMS.finditer(text):
+        groups = m.group("rest").split()
+        if (len(groups) > 2 or not re.fullmatch(r"-?\d{1,3}(?:[.,]\d+)?", m.group("deg"))
+                or not all(re.fullmatch(r"\d{1,2}(?:[.,]\d+)?", g) for g in groups)):
+            return None
+        out += [text[end:m.start("deg")], f"{m.group('deg')}° " + " ".join(g + s for g, s in zip(groups, "′″"))]
+        end = m.end("rest")
+    return "".join(out) + text[end:]
 
 
 def _geo_value(m: re.Match) -> tuple[str | None, float] | None:
@@ -270,7 +294,9 @@ def _geo_value(m: re.Match) -> tuple[str | None, float] | None:
 def geographic_reading(coords_raw: str) -> tuple[float, float, bool] | None:
     """(lat, lon, labelled) when the text is one latitude and one longitude written as degrees with
     hemisphere letters, degree signs or lat/lon labels. labelled=False: order assumed latitude first."""
-    text = coords_raw.replace("−", "-").replace("–", "-")
+    text = _mark_spaced_dms(coords_raw.replace("−", "-").replace("–", "-"))
+    if text is None:
+        return None
     parts = [v for m in GEO_COMPONENT.finditer(text) if m.group("deg") and (v := _geo_value(m))]
     if len(parts) != 2:
         return None
