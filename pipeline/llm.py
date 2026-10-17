@@ -5,7 +5,7 @@
   outputs (max. 16 nullable fields per request).
 - Server-side refusal fallback enabled (`fallbacks: "default"`).
 - Responses are cached on disk by input hash, so re-runs cost nothing and a crash mid-run
-  loses no work.
+  loses no work. API calls also store their token usage there, for measured cost per page.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import TypeVar
 
@@ -28,6 +29,16 @@ from .ingest import PageImage
 T = TypeVar("T", bound=BaseModel)
 
 _client: anthropic.Anthropic | None = None
+_usage = threading.local()  # token usage of the call in progress on this thread (see _cached)
+
+# USD per million tokens (input, output), Anthropic list prices. Cache writes cost 1.25x input,
+# cache reads 0.1x input.
+PRICES = {
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-haiku-5-5": (0.10, 0.50),
+}
+USAGE_FIELDS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 
 
 class ExtractionRefused(RuntimeError):
@@ -183,10 +194,49 @@ def _call_structured(model: str, effort: str, system: str, content: list[dict], 
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
     )
+    _record_usage(response)
     _check_stop(response)
     if response.parsed_output is None:
         raise RuntimeError("no structured output")
     return response.parsed_output
+
+
+def _record_usage(response) -> None:
+    """Add the response's tokens to the usage of the current page (repair rounds add up). Keyed by the
+    model that answered, which differs from the requested one after a refusal fallback."""
+    acc = getattr(_usage, "acc", None)
+    if acc is None:
+        return
+    model = acc.setdefault(response.model, dict.fromkeys(USAGE_FIELDS, 0))
+    for field in USAGE_FIELDS:
+        model[field] += getattr(response.usage, field, None) or 0
+
+
+def cost_usd(usage: dict[str, dict[str, int]]) -> float | None:
+    """Price of one page's usage; None if a model has no known price."""
+    total = 0.0
+    for model, tokens in usage.items():
+        if model not in PRICES:
+            return None
+        inp, out = PRICES[model]
+        total += (tokens["input_tokens"] * inp + tokens["cache_creation_input_tokens"] * inp * 1.25
+                  + tokens["cache_read_input_tokens"] * inp * 0.1 + tokens["output_tokens"] * out) / 1e6
+    return total
+
+
+def measured_costs() -> dict[str, tuple[int, float]]:
+    """Per stage: pages with recorded usage and their total cost in USD (from the cache)."""
+    out: dict[str, tuple[int, float]] = {}
+    for stage in ("classify", "extract", "lab"):
+        n, total = 0, 0.0
+        for path in (config.CACHE_DIR / stage).glob("*/*.json"):
+            usage = json.loads(path.read_text()).get("usage")
+            cost = cost_usd(usage) if usage else None
+            if cost is not None:
+                n, total = n + 1, total + cost
+        if n:
+            out[stage] = (n, total)
+    return out
 
 
 def _json_text(response) -> str:
@@ -219,6 +269,7 @@ def _call_json(model: str, effort: str, system: str, content: list[dict], out: t
             fallbacks="default",
         ) as stream:
             response = stream.get_final_message()
+        _record_usage(response)
         _check_stop(response)
         try:
             return out.model_validate_json(_json_text(response))
@@ -298,9 +349,17 @@ def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
         cached = json.loads(path.read_text())
         if cached.get("key") == key:
             return out.model_validate(cached["result"])
-    result = produce()
+    _usage.acc = {}
+    try:
+        result = produce()
+        usage = _usage.acc
+    finally:
+        _usage.acc = None
+    entry = {"key": key, "result": result.model_dump(mode="json")}
+    if usage:  # API backend only; the CLI backend reports no token counts
+        entry["usage"] = usage
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"key": key, "result": result.model_dump(mode="json")}, ensure_ascii=False))
+    path.write_text(json.dumps(entry, ensure_ascii=False))
     return result
 
 

@@ -23,7 +23,7 @@ from .assemble import LOG_KINDS, PageResult, assemble, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
 
-# Rough per-page API cost in USD (Opus 5.5 list price, measured once a key is available).
+# Rough per-page API cost in USD (Opus 5.5 list price). `estimate` also shows the cost measured on cached pages.
 COST_CLASSIFY, COST_EXTRACT = 0.008, 0.15
 
 
@@ -147,6 +147,8 @@ def cmd_estimate(args) -> None:
     n = sum(len(p) for p in rendered.values())
     print(f"{len(rendered)} documents, {n} pages")
     print(f"classification ≈ ${n * COST_CLASSIFY:.0f}; extraction of ~40% log pages ≈ ${n * 0.4 * COST_EXTRACT:.0f}")
+    for stage, (pages, usd) in llm.measured_costs().items():
+        print(f"measured {stage}: {pages} pages, ${usd:.2f} (${usd / pages:.4f} per page)")
 
 
 def cmd_run(args) -> None:
