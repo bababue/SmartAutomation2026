@@ -540,3 +540,19 @@ def test_document_with_conflicting_crs_statements_gets_none():
     pages.append(PageResult("d", "d.pdf", 3, "text", None, "Grid: MGA94 Zone 56"))
     pages.append(PageResult("d", "d.pdf", 4, "text", None, "Grid: MGA94 Zone 56"))
     assert "MGA94" in document_crs(pages)[0]
+
+
+def test_toughone_patterns():
+    from pipeline.assemble import extend_sampled_layers, hole_key
+    assert hole_key("Hull nr. 7", None) == hole_key("7", "borehole") == ("borehole", "7")
+    assert hole_key("CPT 1", None) == ("probe", "1") != hole_key("BH 1", None)
+    # Last row with no thickness: what the hand auger hit, not a layer.
+    sheets = _sheets([_xlayer(0, 0.8, "sandy CLAY", "clay"), _xlayer(0.8, 1.6, "silt", "silt"), _xlayer(1.6, 1.6, "Hard rock, refusal", "unknown")])
+    notes: list[str] = []
+    assert [(l.top_m, l.bottom_m) for l in _layers(sheets, final_depth=1.6, notes=notes)] == [(0, 0.8), (0.8, 1.6)]
+    assert notes and notes[0].startswith("reached at the final depth 1.6 m")
+    # Sample-wise description: 12.0-12.45 described, next description at 13.5.
+    bh = make(layers=[Layer(top_m=10.5, bottom_m=12.0, description_original="a", primary="clay"),
+                      Layer(top_m=12.0, bottom_m=12.45, description_original="b", primary="silt"),
+                      Layer(top_m=13.5, bottom_m=15.0, description_original="c", primary="silt")])
+    assert len(extend_sampled_layers(bh)) == 1 and bh.layers[1].bottom_m == 13.5

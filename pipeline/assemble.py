@@ -84,15 +84,20 @@ def _unique_ids(records: list[Borehole]) -> None:
 # so the type is part of the matching key and the word itself is not.
 _PIT_WORDS = re.compile(r"^\s*(?:test\s*pit|trial\s*pit|t\.?\s*p\.?|pit|calicata|cata|schurf)(?![a-z])\.?\s*"
                         r"(?:no\.?|nr\.?|n[º°]\.?)?\s*", re.I)
-_HOLE_WORDS = re.compile(r"^\s*(?:bore\s*hole|boring|bh|sondeo|drill\s*hole)(?![a-z])\.?\s*(?:no\.?|nr\.?|n[º°]\.?)?\s*",
+# Borehole words in the languages of the data ('Hull nr. 7' is Norwegian for hole no. 7).
+_HOLE_WORDS = re.compile(r"^\s*(?:bore\s*hole|boring|bh|sondeo|drill\s*hole|borhull|borehull|hull|bohrung|bohrloch|"
+                         r"kernbohrung|sondagem|furo|forage|sondage|sondaj)(?![a-z])\.?\s*(?:no\.?|nr\.?|n[º°]\.?)?\s*",
                          re.I)
+# Probings are other investigations than boreholes with the same number ('CPT 1' is not 'BH 1').
+_PROBE_WORDS = re.compile(r"^\s*(?:cptu?|dpsh|dpl|dph|dp|totalsondering|trykksondering|dreiesondering|sondering|"
+                          r"rammsondierung|sondierung|sonda)(?![a-z])\.?\s*(?:no\.?|nr\.?)?\s*", re.I)
 _KINDS = {"test_pit_log": "test_pit", "probe_log": "probe", "borehole_log": "borehole"}
 
 
 def hole_key(name: str, kind: str | None) -> tuple[str | None, str]:
     """(type, number) for matching logs, tables and lab rows: 'Test Pit No. 2' and 'T.P. 2' are the test pit
     '2', 'BH-2' is the borehole '2'. `kind` (from the page or the model) applies when the name has no type word."""
-    for words, word_kind in ((_PIT_WORDS, "test_pit"), (_HOLE_WORDS, "borehole")):
+    for words, word_kind in ((_PIT_WORDS, "test_pit"), (_PROBE_WORDS, "probe"), (_HOLE_WORDS, "borehole")):
         rest = words.sub("", name, count=1)
         if rest != name and re.search(r"\d", rest):
             return word_kind, norm_name(rest)
@@ -278,8 +283,14 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
     if notes is not None:
         notes.extend(inferred)
     layers: list[Layer] = []
-    for (x, src), top, bottom in zip(flat, tops, bottoms):
+    for index, ((x, src), top, bottom) in enumerate(zip(flat, tops, bottoms)):
         if top is None or bottom is None:
+            continue
+        if index == len(flat) - 1 and abs(bottom - top) < 0.01 and (final_depth is None or abs(final_depth - top) < 0.01):
+            # The last row describes what was hit at the end (a pit or hand auger stopped on rock).
+            if notes is not None:
+                notes.append(f"reached at the final depth {top:g} m, thickness unknown: "
+                             f"{' '.join(x.description_original.split())[:80]}")
             continue
         if (layers and not _same_page(src, layers[-1].source) and top < layers[-1].bottom_m < bottom
                 and any(abs(l.top_m - top) < 0.05 and (l.primary == x.primary or Lithology.unknown in (l.primary, x.primary))
@@ -339,6 +350,21 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
             continue
         layers.append(layer)
     return layers
+
+
+def extend_sampled_layers(bh: Borehole, sample_max: float = 0.6, gap_max: float = 1.6) -> list[str]:
+    """Logs that describe the soil at each sample (SPT 0.45 m, then nothing until the next sample) leave
+    gaps between samples. A short described interval followed by a gap of at most `gap_max` to the next
+    layer is extended to it, as an inferred boundary (never released without a look)."""
+    notes = []
+    layers = sorted(bh.layers, key=lambda layer: layer.top_m)
+    for a, b in zip(layers, layers[1:]):
+        gap = b.top_m - a.bottom_m
+        if a.top_m > 0 and a.bottom_m - a.top_m <= sample_max and 0.1 < gap <= gap_max:  # a top layer is no sample
+            notes.append(f"boundary inferred: layer {a.top_m:g}–{a.bottom_m:g} m (a sample) extended to the next "
+                         f"description at {b.top_m:g} m")
+            a.bottom_m = b.top_m
+    return notes
 
 
 def fill_core_loss(bh: Borehole, tol: float = 0.05) -> list[str]:
@@ -543,6 +569,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
         sources=[src for _, src in logs],
     )
     layer_notes += fill_core_loss(bh)
+    layer_notes += extend_sampled_layers(bh)
     issues = bh.validate_log() + layer_notes + geo.issues + unit_findings(xs)
     unreadable = [u for x in xs for u in x.unreadable]
     issues += [f"unreadable: {u}" for u in unreadable[:5]]
@@ -578,6 +605,10 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
                 if k not in coord_rows or (coord_rows[k].is_planned and not row.is_planned):
                     coord_rows[k] = row
             for log in r.extraction.logs:
+                if r.kind not in LOG_KINDS and log.layers:
+                    # A summary or coordinate table ('depth to rock: 40 m') is no layer sequence: it adds
+                    # coordinates and header values to the hole, not layers.
+                    log = log.model_copy(update={"layers": []})
                 if log.layers or log.coords_raw or r.kind in LOG_KINDS:
                     k = hole_key(log.name, log.investigation_type if log.investigation_type in ("borehole", "test_pit", "probe")
                                  else _KINDS.get(r.kind))
