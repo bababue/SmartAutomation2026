@@ -25,9 +25,7 @@ function useCorrection(boreholeId: string, onChange: (update: DetailUpdate) => v
       for (const it of items) onChange(await postCorrection(boreholeId, it.kind, it.payload, reviewer, it.scope ?? 'borehole'))
       return true
     } catch (e) {
-      const text = (e as Error).message
-      const detail = text.match(/"detail":\s*"([^"]+)"/)?.[1]
-      setError(`Correction not saved: ${detail ?? text}`)
+      setError(`Correction not saved: ${(e as Error).message}`)
       return false
     } finally {
       setBusy(false)

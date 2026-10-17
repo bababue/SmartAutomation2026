@@ -156,7 +156,9 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
+  const moreRequest = useRef<AbortController | null>(null)
   useEffect(() => {
+    moreRequest.current?.abort()
     const ctrl = new AbortController()
     setLoading(true)
     Promise.all([fetchBoreholes(filters, 0, 200, ctrl.signal), fetchMapPoints(filters, ctrl.signal)])
@@ -167,19 +169,26 @@ export default function App() {
   }, [filters, refresh, remember])
 
   const loadMore = useCallback(() => {
+    const ctrl = new AbortController()
+    moreRequest.current = ctrl
     setLoadingMore(true)
-    fetchBoreholes(filters, data.features.length, 200)
+    fetchBoreholes(filters, data.features.length, 200, ctrl.signal)
       .then((page) => { setData((d) => ({ ...page, features: [...d.features, ...page.features] })); remember(page.features) })
-      .catch((e) => setError(`Could not load more boreholes (${e.message}).`))
+      .catch((e) => e.name !== 'AbortError' && setError(`Could not load more boreholes (${e.message}).`))
       .finally(() => setLoadingMore(false))
   }, [filters, data.features.length, remember])
 
+  // The queue is loading until a response for the current request has landed.
+  const queueKey = `${refresh}|${blockingOnly}|${auditOnly}`
+  const [queueLoadedKey, setQueueLoadedKey] = useState<string | null>(null)
   useEffect(() => {
     const ctrl = new AbortController()
-    fetchQueue(blockingOnly, ctrl.signal, 200, auditOnly).then(({ items, total }) => { setQueue(items); setQueueTotal(total) }).catch(() => undefined)
+    fetchQueue(blockingOnly, ctrl.signal, 200, auditOnly)
+      .then(({ items, total }) => { setQueue(items); setQueueTotal(total); setQueueLoadedKey(queueKey) })
+      .catch((e) => { if (e.name !== 'AbortError') setQueueLoadedKey(queueKey) })
     fetchStats().then(setStats).catch(() => undefined)
     return () => ctrl.abort()
-  }, [refresh, blockingOnly, auditOnly])
+  }, [queueKey, blockingOnly, auditOnly])
 
   // Only the response for the currently selected borehole may land in state.
   useEffect(() => {
@@ -248,6 +257,7 @@ export default function App() {
     setSelectedId(null)
     setRouteHoleIds([])
     setBlockingOnly(false)
+    setAuditOnly(false)
     setListOpen(true)
     setFilters(start.filters)
     setQuery('')
@@ -422,8 +432,8 @@ export default function App() {
           />
         )}
         {view === 'review' && (
-          <ReviewQueue items={queue} total={queueTotal} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9}
-            blockingOnly={blockingOnly} onBlockingOnly={setBlockingOnly} onSelect={setSelectedId}
+          <ReviewQueue items={queue} total={queueTotal} loading={queueLoadedKey !== queueKey} selectedId={selectedId}
+            threshold={stats?.threshold ?? 0.9} auditOnly={auditOnly} blockingOnly={blockingOnly} onBlockingOnly={setBlockingOnly} onSelect={setSelectedId}
             onChanged={() => setRefresh((n) => n + 1)} onClose={() => setView('map')} />
         )}
         {view === 'stats' && (

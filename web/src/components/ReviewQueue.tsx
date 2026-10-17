@@ -11,6 +11,8 @@ interface Props {
   loading: boolean
   selectedId: string | null
   threshold: number
+  /** The release audit sample instead of the waiting records. */
+  auditOnly: boolean
   blockingOnly: boolean
   onBlockingOnly: (on: boolean) => void
   onSelect: (id: string) => void
@@ -73,31 +75,44 @@ function CrsConfirmations({ refreshKey, onChanged }: { refreshKey: unknown; onCh
 }
 
 /** Everything that was not released automatically, weakest first. */
-export function ReviewQueue({ items, total, loading, selectedId, threshold, blockingOnly, onBlockingOnly, onSelect, onChanged, onClose }: Props) {
+export function ReviewQueue({ items, total, loading, selectedId, threshold, auditOnly, blockingOnly, onBlockingOnly, onSelect, onChanged, onClose }: Props) {
   return (
     <div className="queue">
       <header className="queue-head">
         <div className="queue-title">
-          <h2>Review queue</h2>
+          <h2>{auditOnly ? 'Release audit' : 'Review queue'}</h2>
           <button className="btn" onClick={onClose}>Back to map</button>
         </div>
-        <p className="muted">
-          Records below a score of {scoreText(threshold)}, or with findings that need a person, wait here. Open one,
-          compare it with the source page, then approve or reject it.
-        </p>
-        <label className="check queue-filter">
-          <input type="checkbox" checked={blockingOnly} onChange={(e) => onBlockingOnly(e.target.checked)} />
-          Only records with blocking findings{blockingOnly && total != null ? ` (${total.toLocaleString('en')})` : ''}
-        </label>
+        {auditOnly ? (
+          <p className="muted">
+            A random sample of automatically released records, drawn for a person to check. Open one, compare it with
+            the source page, then approve it, correct it or reject it.
+          </p>
+        ) : (
+          <>
+            <p className="muted">
+              Records below a score of {scoreText(threshold)}, or with findings that need a person, wait here. Open one,
+              compare it with the source page, then approve or reject it.
+            </p>
+            <label className="check queue-filter">
+              <input type="checkbox" checked={blockingOnly} onChange={(e) => onBlockingOnly(e.target.checked)} />
+              Only records with blocking findings{blockingOnly && total != null ? ` (${total.toLocaleString('en')})` : ''}
+            </label>
+          </>
+        )}
       </header>
-      <CrsConfirmations refreshKey={items} onChanged={onChanged} />
+      {!auditOnly && <CrsConfirmations refreshKey={items} onChanged={onChanged} />}
       {total != null && total > items.length && (
-        <p className="muted">Showing the {items.length} weakest of {total.toLocaleString('en')} waiting records; approving them brings up the next.</p>
+        <p className="muted">{auditOnly
+          ? `Showing ${items.length} of ${total.toLocaleString('en')} sampled records.`
+          : `Showing the ${items.length} weakest of ${total.toLocaleString('en')} waiting records; approving them brings up the next.`}</p>
       )}
       {!loading && !items.length ? (
-        <p className="empty">{blockingOnly
-          ? 'No waiting record has a blocking finding.'
-          : 'Nothing waits for review. New extractions appear here when they are not released automatically.'}</p>
+        <p className="empty">{auditOnly
+          ? 'No audit sample drawn yet: run python -m pipeline eval audit.'
+          : blockingOnly
+            ? 'No waiting record has a blocking finding.'
+            : 'Nothing waits for review. New extractions appear here when they are not released automatically.'}</p>
       ) : (
         <table className="queue-table" aria-busy={loading}>
           <thead>
