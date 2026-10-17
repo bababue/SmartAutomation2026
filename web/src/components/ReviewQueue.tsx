@@ -15,6 +15,7 @@ interface Props {
   onBlockingOnly: (on: boolean) => void
   onSelect: (id: string) => void
   onChanged: () => void
+  onClose: () => void
 }
 
 /** One card per document whose waiting holes share an inferred coordinate system. */
@@ -72,11 +73,14 @@ function CrsConfirmations({ refreshKey, onChanged }: { refreshKey: unknown; onCh
 }
 
 /** Everything that was not released automatically, weakest first. */
-export function ReviewQueue({ items, total, loading, selectedId, threshold, blockingOnly, onBlockingOnly, onSelect, onChanged }: Props) {
+export function ReviewQueue({ items, total, loading, selectedId, threshold, blockingOnly, onBlockingOnly, onSelect, onChanged, onClose }: Props) {
   return (
     <div className="queue">
       <header className="queue-head">
-        <h2>Review queue</h2>
+        <div className="queue-title">
+          <h2>Review queue</h2>
+          <button className="btn" onClick={onClose}>Back to map</button>
+        </div>
         <p className="muted">
           Records below a score of {scoreText(threshold)}, or with findings that need a person, wait here. Open one,
           compare it with the source page, then approve or reject it.

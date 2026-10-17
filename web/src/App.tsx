@@ -13,8 +13,18 @@ import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueIt
 import { readUrl, writeUrl, type View } from './url'
 import { SheetResizer } from './components/SheetResizer'
 import { FilterBar } from './components/FilterBar'
+import { AppMenu } from './components/AppMenu'
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
+const THEME_KEY = 'borehole-atlas.theme'
+
+function loadDark(): boolean {
+  try {
+    const saved = localStorage.getItem(THEME_KEY)
+    if (saved) return saved === 'dark'
+  } catch { /* storage blocked */ }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+}
 
 export default function App() {
   const [initial] = useState(() => readUrl(window.location.search))
@@ -56,6 +66,12 @@ export default function App() {
   const [uploadNote, setUploadNote] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
+  const [dark, setDark] = useState(loadDark)
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+    try { localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light') } catch { /* private mode: the choice lasts this visit */ }
+  }, [dark])
 
   useEffect(() => {
     const t = setTimeout(() => setFilters((f) => ({ ...f, q: query })), 250)
@@ -157,8 +173,6 @@ export default function App() {
     setRefresh((n) => n + 1)
   }, [])
 
-  const pending = stats?.status.pending_review ?? queue.length
-
   // Position in the review queue, for "approve and next" and arrow-key navigation.
   const nav: QueueNav | null = useMemo(() => {
     const i = queue.findIndex((q) => q.id === selectedId)
@@ -185,6 +199,19 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [nav])
+
+  // The start page: map view, default filters, nothing open; the reload fits the map to all matches.
+  const goHome = useCallback(() => {
+    const start = readUrl('')
+    setView(start.view)
+    setSelectedId(null)
+    setSectionIds([])
+    setBlockingOnly(false)
+    setListOpen(true)
+    setFilters(start.filters)
+    setQuery('')
+    setRefresh((n) => n + 1)
+  }, [])
 
   const toggleSection = useCallback(
     (id: string) => setSectionIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])),
@@ -264,14 +291,10 @@ export default function App() {
       <svg width={0} height={0} style={{ position: 'absolute' }} aria-hidden="true"><LithologyPatterns /></svg>
 
       <header className="topbar">
-        <BrandLogo />
-        {stats?.demo && <span className="demo-flag" title="The API serves data/demo.sqlite: synthetic records without source pages">Synthetic demo data</span>}
-        <nav className="tabs" aria-label="Views">
-          <button className={`tab${view === 'map' ? ' tab-on' : ''}`} aria-current={view === 'map'} onClick={() => setView('map')}>Map</button>
-          <button className={`tab${view === 'review' ? ' tab-on' : ''}`} aria-current={view === 'review'} onClick={() => setView('review')}>
-            Review queue {pending > 0 && <span className="tab-count">{pending}</span>}
-          </button>
-        </nav>
+        <div className="topbar-side">
+          <BrandLogo onHome={goHome} />
+          {stats?.demo && <span className="demo-flag" title="The API serves data/demo.sqlite: synthetic records without source pages">Synthetic demo data</span>}
+        </div>
         <label className="search">
           <span className="visually-hidden">Search boreholes</span>
           <input
@@ -281,19 +304,20 @@ export default function App() {
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
-        <button className="btn" onClick={() => fileInput.current?.click()} disabled={uploading}
-          title="Or drop a file anywhere on the page">
-          {uploading ? 'Processing…' : 'Upload document'}
-        </button>
-        <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx" className="visually-hidden"
-          onChange={onFileChosen} aria-label="Upload a borehole log" />
-        {uploadNote && <p className="upload-note" role="status" title={uploadNote}>{uploadNote}</p>}
-        {stats && (
-          <p className="stats">
-            <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes,{' '}
-            <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> released
-          </p>
-        )}
+        <div className="topbar-side topbar-end">
+          <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx" className="visually-hidden"
+            onChange={onFileChosen} aria-label="Upload a borehole log" />
+          {uploadNote && <p className="upload-note" role="status" title={uploadNote}>{uploadNote}</p>}
+          {stats && (
+            <p className="stats">
+              <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes,{' '}
+              <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> released
+            </p>
+          )}
+          <AppMenu inReview={view === 'review'} uploading={uploading} dark={dark}
+            onToggleReview={() => setView(view === 'review' ? 'map' : 'review')}
+            onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} />
+        </div>
       </header>
 
       <button className="edge-tab list-toggle" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} aria-controls="sidebar"
@@ -304,12 +328,6 @@ export default function App() {
         <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies} />
         <div className="result-head">
           <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
-          <span className="export-links">
-            Export released:{' '}
-            <a href="/api/export.xlsx" className="link" title="Released records in Herrenknecht's BoreholeDataFormat">Excel</a>
-            {' · '}
-            <a href="/api/export.csv" className="link" title="Released records, one row per layer">CSV</a>
-          </span>
         </div>
         {error && <p className="error" role="alert">{error}</p>}
         <ResultList features={data.features} selectedId={selectedId} onSelect={setSelectedId} loading={loading} sectionIds={sectionIds} onToggleSection={toggleSection} />
@@ -321,7 +339,7 @@ export default function App() {
       </aside>
 
       <main className={`map-wrap${sectionFeatures.length ? ' map-wrap-section' : ''}`}>
-        <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} sheetWidth={detail ? sheetWidth : null} />
+        <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} sheetWidth={detail ? sheetWidth : null} dark={dark} />
         <div className="legend" aria-label="Map legend">
           <span><i className="dot dot-high" /> released</span>
           <span><i className="dot dot-medium" /> waiting for review</span>
@@ -341,7 +359,7 @@ export default function App() {
         {view === 'review' && (
           <ReviewQueue items={queue} total={queueTotal} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9}
             blockingOnly={blockingOnly} onBlockingOnly={setBlockingOnly} onSelect={setSelectedId}
-            onChanged={() => setRefresh((n) => n + 1)} />
+            onChanged={() => setRefresh((n) => n + 1)} onClose={() => setView('map')} />
         )}
       </main>
 
