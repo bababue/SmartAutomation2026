@@ -7,7 +7,7 @@ a person steps in. Module names refer to `pipeline/`.
 
 ```mermaid
 flowchart TD
-    A[PDF / scan / image / DOCX] --> B[Render every page<br/>ingest.py]
+    A[PDF / scan / image /<br/>DOCX / XLSX / TXT] --> B[Render every page<br/>ingest.py]
     B --> C{Classify page<br/>thumbnail, vision LLM}
     C -->|log, test pit, probe| D[Extract log<br/>full resolution, vision LLM]
     C -->|coordinate table| D

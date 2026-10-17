@@ -7,13 +7,6 @@ export const STATUS_LABEL: Record<ReviewStatus, string> = {
   rejected: 'Rejected',
 }
 
-export const STATUS_COLOR: Record<ReviewStatus, string> = {
-  auto_approved: '#2F7D4F',
-  approved: '#2F7D4F',
-  pending_review: '#B7791F',
-  rejected: '#B33A3A',
-}
-
 export const scoreText = (score: number | null) => (score == null ? '–' : String(Math.round(score * 100)))
 
 const REVIEWER_KEY = 'borehole-atlas-reviewer'

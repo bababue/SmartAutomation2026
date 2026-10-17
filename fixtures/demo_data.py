@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import random
 
-from pipeline import store
+from pipeline import config, store
 from pipeline.scoring import score
 from schema.borehole import (
     SPT,
@@ -133,6 +133,9 @@ def build(seed: int = 7) -> list[Borehole]:
 
 
 def main() -> None:
+    if not config.DB_PATH.name.startswith("demo"):  # reset() would replace the real records
+        raise SystemExit(f"refusing to write demo data into {config.DB_PATH}; "
+                         "run with DB_PATH=data/demo.sqlite")
     con = store.connect()
     store.reset(con)
     for bh in build():

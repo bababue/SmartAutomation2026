@@ -130,7 +130,7 @@ class UploadQueue:
             con.close()
 
     def _work(self, job_id: str) -> None:
-        from .__main__ import run
+        from .runner import run
 
         con = store.connect(self.db_path)
         try:

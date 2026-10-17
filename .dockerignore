@@ -1,0 +1,11 @@
+# The challenge dataset and everything derived from it stay out of the image.
+temp/
+data/
+.env
+.venv/
+**/node_modules/
+web/dist/
+**/__pycache__/
+.pytest_cache/
+.git/
+.claude/

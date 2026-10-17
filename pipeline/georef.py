@@ -26,8 +26,6 @@ from schema.borehole import GeorefMethod, Location
 
 from . import gazetteer
 
-# --- CRS knowledge -----------------------------------------------------------------
-
 # A CRS is an EPSG code, or 'AUTH:code' for a local grid that has none.
 Crs = int | str
 
@@ -40,8 +38,6 @@ CRS_HINTS: list[tuple[str, list[Crs]]] = [
     (r"mt\.? ?eden", [2105]),
     (r"nztm|nzgd ?2000 ?/ ?new zealand", [2193]),
     (r"osgb|ordnance survey|british national grid", [27700]),
-    (r"mga ?94.*?(4[89]|5[0-6])|(4[89]|5[0-6]) ?[a-z]? ?mga ?94", []),  # zone handled below
-    (r"mga ?2020", []),
     (r"etrs ?89.*utm ?32|utm32e89|euref89.*32", [25832]),
     (r"etrs ?89.*utm ?33|utm33e89", [25833]),
     (r"gauss|krüger|kruger|\bgk\b", [31466, 31467, 31468, 31469]),
@@ -131,12 +127,10 @@ def crs_from_hint(crs_raw: str | None) -> list[Crs]:
             else:
                 out.append((32700 if south else 32600) + zone)
     for pattern, epsgs in CRS_HINTS:
-        if epsgs and re.search(pattern, text):
+        if re.search(pattern, text):
             out.extend(epsgs)
     return list(dict.fromkeys(out))
 
-
-# --- number parsing -----------------------------------------------------------------
 
 # 'ØV-koordinat' and 'NS-koordinat' are Norwegian for the east-west and north-south coordinate.
 LABEL = (
@@ -312,9 +306,6 @@ def _sexagesimal(token: Token) -> list[tuple[float, bool]]:
     return out
 
 
-# --- scoring ------------------------------------------------------------------------
-
-
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dp, dl = p2 - p1, math.radians(lon2 - lon1)
@@ -335,7 +326,7 @@ class Candidate:
     distance_km: float | None = None
 
 
-def _pairs(tokens: list[Token]) -> list[tuple[Token, Token, bool]]:
+def pairs(tokens: list[Token]) -> list[tuple[Token, Token, bool]]:
     """(northing-ish, easting-ish, labelled) pairs to try; both orders when labels are unclear."""
     if len(tokens) < 2:
         return []
@@ -371,9 +362,8 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
     epsgs = list(dict.fromkeys(epsgs))
 
     out: list[Candidate] = []
-    for north_t, east_t, labelled in _pairs(tokens):
+    for north_t, east_t, labelled in pairs(tokens):
         swap_note = "" if labelled else " (axes as guessed)"
-        # Geographic: decimal degrees and sexagesimal notations
         lats = [(v, False) for v in north_t.values if abs(v) <= 90] + _sexagesimal(north_t)
         lons = [(v, False) for v in east_t.values if abs(v) <= 180] + _sexagesimal(east_t)
         for lat, lat_alt in lats:
@@ -381,7 +371,6 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
                 if abs(lat) <= 90 and abs(lon) <= 180 and (abs(lat) > 1 or abs(lon) > 1):
                     note = "geographic" + (" (alternative notation)" if lat_alt or lon_alt else "") + swap_note
                     out.append(Candidate(lat, lon, "EPSG:4326", GEOGRAPHIC, lon, lat, note, False))
-        # Projected metres
         for n in north_t.values:
             for e in east_t.values:
                 if abs(n) < 1000 and abs(e) < 1000:
@@ -510,7 +499,7 @@ def _georeference(
         best = cands[0]
         # A coarse place (e.g. only the country) cannot reject printed coordinates 300 km from its centre.
         if best.distance_km is not None and best.distance_km <= max(200.0, 2 * precision):
-            _apply(loc, best, GeorefMethod.stated_coordinates)
+            apply_reading(loc, best)
             explicit = best.hinted or (best.epsg == GEOGRAPHIC and "guessed" not in best.note)
             loc.confidence = _confidence(best.distance_km, precision, explicit)
             loc.accuracy_m = 10.0 if loc.confidence >= 0.7 else best.distance_km * 1000
@@ -548,7 +537,7 @@ def _georeference(
         hinted = [c for c in cands if c.hinted] or [c for c in cands if c.epsg == GEOGRAPHIC and "guessed" not in c.note]
         if hinted:
             best = hinted[0]
-            _apply(loc, best, GeorefMethod.stated_coordinates)
+            apply_reading(loc, best)
             distinct = [c for c in hinted[1:] if haversine_km(c.lat, c.lon, best.lat, best.lon) > 1.0]
             if distinct:
                 # Several readings of the printed text are possible and nothing tells them apart.
@@ -583,9 +572,17 @@ def resolve_with(coords_raw: str, epsg: int, near: tuple[float, float] | None = 
     return min(cands, key=lambda c: ("guessed" in c.note, "alternative" in c.note, c.distance_km or 0.0))
 
 
-def _apply(loc: Location, c: Candidate, method: GeorefMethod) -> None:
+def apply_reading(loc: Location, c: Candidate) -> None:
+    """Position `loc` at the reading `c` of its printed coordinates; coordinates from a summary table stay
+    marked as such."""
     loc.lat, loc.lon = round(c.lat, 7), round(c.lon, 7)
     loc.easting, loc.northing = c.easting, c.northing
     loc.crs_epsg = c.epsg
     loc.crs_proj = c.crs if c.epsg is None else None
-    loc.method = method
+    if loc.method != GeorefMethod.linked_table:
+        loc.method = GeorefMethod.stated_coordinates
+
+
+def is_precise(loc: Location) -> bool:
+    """A position read from printed coordinates, on the log or in a summary table."""
+    return loc.lat is not None and loc.method in (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)

@@ -139,18 +139,18 @@ def arm_reference(name: str) -> dict[str, dict]:
         con.close()
 
 
-def compare_arms(reference_path: Path = evaluate.REFERENCE_PATH, against: str | None = None) -> str:
+def compare_arms(against: str | None = None) -> str:
     names = arms()
     if not names:
         return "no experiment results yet: run `python -m pipeline experiment baseline` first"
     head = proxy_report(names)
-    reference = arm_reference(against) if against else evaluate.load_reference(reference_path)
+    reference = arm_reference(against) if against else evaluate.load_reference()
     if not reference and against:
         return "\n".join(head + [f"arm {against!r} has no records"])
     if not reference:
         return "\n".join(head + ["no reference yet: approve records in the review UI, then run "
                                  "`python -m pipeline eval snapshot`"])
-    holdout = evaluate.load_holdout(reference_path)
+    holdout = evaluate.load_holdout()
     scores = {name: arm_scores(name, reference) for name in names}
     rule = "-" * len(evaluate.HEADER)
     title = f"agreement with arm {against!r} (hints only, not accuracy):" if against else "against the reference:"

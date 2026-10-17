@@ -12,7 +12,6 @@ from pipeline import config, store, uploads
 def db_path(tmp_path, monkeypatch):
     path = tmp_path / "uploads.sqlite"
     monkeypatch.setattr(config, "DB_PATH", path)
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
     monkeypatch.setattr(config, "MAX_UPLOAD_WORKERS", 1)
     monkeypatch.setattr(config, "MAX_UPLOAD_JOBS", 2)
     return path
@@ -46,7 +45,7 @@ def test_queue_limits_workers_and_admitted_jobs(db_path, monkeypatch):
         started.set()
         assert release.wait(3)
 
-    monkeypatch.setattr("pipeline.__main__.run", run)
+    monkeypatch.setattr("pipeline.runner.run", run)
     queue = uploads.UploadQueue(db_path)
     try:
         queue.submit(task("one"))
@@ -68,7 +67,7 @@ def test_queue_limits_workers_and_admitted_jobs(db_path, monkeypatch):
 
 
 def test_results_and_interrupted_state_survive_restart(db_path, monkeypatch):
-    monkeypatch.setattr("pipeline.__main__.run", lambda *args, **kwargs: None)
+    monkeypatch.setattr("pipeline.runner.run", lambda *args, **kwargs: None)
     con = store.connect(db_path)
     with con:
         for name, state in (("interrupted", "processing"), ("waiting", "queued")):
@@ -88,7 +87,7 @@ def test_processing_failure_is_persisted(db_path, monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("synthetic extraction failed")
 
-    monkeypatch.setattr("pipeline.__main__.run", fail)
+    monkeypatch.setattr("pipeline.runner.run", fail)
     queue = uploads.UploadQueue(db_path)
     queue.submit(task("failed"))
     queue.close()

@@ -1,14 +1,10 @@
 import { useRef, useState } from 'react'
-import { routeFromGeoJson, routeLength, type RoutePoint, type TunnelRoute } from '../tunnelRoute'
-
-export interface RouteCandidate {
-  id: string
-  name: string
-  chainageM: number
-  offsetM: number
-}
+import { fmtDistance, parseDecimal } from '../format'
+import { routeFromGeoJson, routeLength, type RouteCandidate, type RoutePoint, type TunnelRoute } from '../tunnelRoute'
 
 interface Props {
+  name: string
+  project: string | null
   route: TunnelRoute | null
   draft: RoutePoint[] | null
   candidates: RouteCandidate[]
@@ -16,6 +12,7 @@ interface Props {
   loading: boolean
   error: string | null
   onChange: (route: TunnelRoute) => void
+  onRename: (name: string) => void
   onImport: (route: TunnelRoute) => void
   onStartDrawing: () => void
   onUndo: () => void
@@ -27,10 +24,7 @@ interface Props {
   onClose: () => void
 }
 
-const formatMetres = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(2)} km` : `${Math.round(value)} m`
-const numberOrNull = (value: string) => value === '' ? null : Number(value)
-
-export function RoutePanel({ route, draft, candidates, selectedIds, loading, error, onChange, onImport,
+export function RoutePanel({ name, project, route, draft, candidates, selectedIds, loading, error, onChange, onRename, onImport,
   onStartDrawing, onUndo, onFinishDrawing, onCancelDrawing, onSelectNearby, onToggleHole, onDelete, onClose }: Props) {
   const fileInput = useRef<HTMLInputElement>(null)
   const [importError, setImportError] = useState<string | null>(null)
@@ -48,36 +42,39 @@ export function RoutePanel({ route, draft, candidates, selectedIds, loading, err
   const set = (change: Partial<TunnelRoute>) => { if (route) onChange({ ...route, ...change }) }
 
   return (
-    <aside className="route-panel" aria-label="Tunnel route">
-      <header className="route-panel-head">
-        <div><h2>Tunnel route</h2><p className="muted">Longitudinal section along a planned alignment</p></div>
-        <button className="btn btn-icon" onClick={onClose} aria-label="Close tunnel route" title="Close route view">×</button>
+    <section className="tunnel-detail" aria-label="Tunnel details">
+      <header className="tunnel-detail-head">
+        <div><h2>{name || 'Tunnel'}</h2><p className="detail-sub">{project ? `Project: ${project}` : 'No project assigned'}</p></div>
+        <button className="btn btn-icon" onClick={onClose} aria-label="Close tunnel details" title="Close details">×</button>
       </header>
 
-      <div className="route-panel-scroll">
-        {route && <label className="route-field">Route name
-          <input value={route.name} onChange={(event) => set({ name: event.target.value })} aria-label="Route name" />
-        </label>}
-        <div className="route-actions">
-          {draft ? <>
-            <button className="btn" onClick={onUndo} disabled={!draft.length}>Undo point</button>
-            <button className="btn btn-primary" onClick={onFinishDrawing} disabled={draft.length < 2}>Finish route</button>
-            <button className="btn" onClick={onCancelDrawing}>Cancel</button>
-          </> : <>
-            <button className="btn btn-primary" onClick={onStartDrawing}>{route ? 'Redraw' : 'Draw on map'}</button>
-            <button className="btn" onClick={() => fileInput.current?.click()}>Import GeoJSON</button>
-            <input ref={fileInput} className="visually-hidden" type="file" accept=".geojson,.json,application/geo+json,application/json"
-              onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file) }}
-              aria-label="Import tunnel route GeoJSON" />
-          </>}
-        </div>
-        {draft && <p className="route-hint" role="status">Click the map to place vertices. {draft.length} point{draft.length === 1 ? '' : 's'} placed.</p>}
-        {importError && <p className="error" role="alert">{importError}</p>}
-        {!route && !draft && <p className="route-hint">Draw a line on the map or import a WGS84 GeoJSON LineString.</p>}
+      <div className="tunnel-detail-scroll">
+        <section className="tunnel-card">
+          <h3>Alignment</h3>
+          <label className="route-field">Tunnel name
+            <input value={name} onChange={(event) => onRename(event.target.value)} aria-label="Tunnel name" />
+          </label>
+          <div className="route-actions">
+            {draft ? <>
+              <button className="btn" onClick={onUndo} disabled={!draft.length}>Undo point</button>
+              <button className="btn btn-primary" onClick={onFinishDrawing} disabled={draft.length < 2}>Finish route</button>
+              <button className="btn" onClick={onCancelDrawing}>Cancel</button>
+            </> : <>
+              <button className="btn btn-primary" onClick={onStartDrawing}>{route ? 'Redraw' : 'Draw on map'}</button>
+              <button className="btn" onClick={() => fileInput.current?.click()}>Import GeoJSON</button>
+              <input ref={fileInput} className="visually-hidden" type="file" accept=".geojson,.json,application/geo+json,application/json"
+                onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file) }}
+                aria-label="Import tunnel route GeoJSON" />
+            </>}
+          </div>
+          {draft && <p className="route-hint" role="status">Click the map to place vertices. {draft.length} point{draft.length === 1 ? '' : 's'} placed.</p>}
+          {importError && <p className="error" role="alert">{importError}</p>}
+          {!route && !draft && <p className="route-hint">Draw a line on the map or import a WGS84 GeoJSON LineString.</p>}
+          {route && <p className="route-summary">{fmtDistance(routeLength(route.coordinates))} · {route.coordinates.length} vertices · saved in this browser</p>}
+        </section>
 
         {route && <>
-          <p className="route-summary">{formatMetres(routeLength(route.coordinates))} · {route.coordinates.length} vertices · saved in this browser</p>
-          <div className="route-divider" />
+          <section className="tunnel-card">
           <h3>Boreholes</h3>
           <label className="route-field">Distance from route, each side (m)
             <input type="number" min="1" max="5000" step="1" value={route.corridorM}
@@ -88,18 +85,18 @@ export function RoutePanel({ route, draft, candidates, selectedIds, loading, err
           </div>
           {loading && <p className="muted" role="status">Finding boreholes…</p>}
           {error && <p className="error" role="alert">{error}</p>}
-          {!loading && !error && candidates.length === 0 && <p className="route-hint">No boreholes in this corridor. Increase the distance or add one from the map or list.</p>}
+          {!loading && !error && candidates.length === 0 && <p className="route-hint">No boreholes in this corridor. Increase the distance from the route.</p>}
           {candidates.length > 0 && <ul className="route-candidates" aria-label="Boreholes near route">
             {candidates.map((candidate) => <li key={candidate.id}>
               <label><input type="checkbox" checked={selectedIds.includes(candidate.id)} onChange={() => onToggleHole(candidate.id)} />
                 <span className="route-candidate-name">{candidate.name}</span>
-                <span className="muted">{formatMetres(candidate.chainageM)} · {Math.round(candidate.offsetM)} m away</span>
+                <span className="muted">{fmtDistance(candidate.chainageM)} · {Math.round(candidate.offsetM)} m away</span>
               </label>
             </li>)}
           </ul>}
+          </section>
 
-          <div className="route-divider" />
-          <div className="route-profile">
+          <section className="tunnel-card route-profile">
             <h3>Planned tunnel profile</h3>
             <p className="route-hint">Optional. Enter design levels to place the tunnel in the section.</p>
             <label className="route-field">Vertical reference
@@ -110,25 +107,25 @@ export function RoutePanel({ route, draft, candidates, selectedIds, loading, err
             </label>
             {route.tunnelMode === 'depth' ? <label className="route-field">Axis depth (m)
               <input type="number" min="0" step="0.1" value={route.depthM ?? ''} placeholder="e.g. 15"
-                onChange={(event) => set({ depthM: numberOrNull(event.target.value) })} />
+                onChange={(event) => set({ depthM: parseDecimal(event.target.value) })} />
             </label> : <>
               <label className="route-field">Axis elevation at route start (m)
                 <input type="number" step="0.1" value={route.startElevationM ?? ''}
-                  onChange={(event) => set({ startElevationM: numberOrNull(event.target.value) })} />
+                  onChange={(event) => set({ startElevationM: parseDecimal(event.target.value) })} />
               </label>
               <label className="route-field">Axis elevation at route end (m)
                 <input type="number" step="0.1" value={route.endElevationM ?? ''}
-                  onChange={(event) => set({ endElevationM: numberOrNull(event.target.value) })} />
+                  onChange={(event) => set({ endElevationM: parseDecimal(event.target.value) })} />
               </label>
             </>}
             <label className="route-field">Tunnel diameter (m, optional)
               <input type="number" min="0" step="0.1" value={route.diameterM ?? ''}
-                onChange={(event) => set({ diameterM: numberOrNull(event.target.value) })} />
+                onChange={(event) => set({ diameterM: parseDecimal(event.target.value) })} />
             </label>
-          </div>
-          <button className="route-delete" onClick={onDelete}>Delete saved route</button>
+          </section>
         </>}
+        <button className="route-delete" onClick={onDelete}>Delete tunnel</button>
       </div>
-    </aside>
+    </section>
   )
 }

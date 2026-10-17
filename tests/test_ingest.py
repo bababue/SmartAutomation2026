@@ -24,7 +24,7 @@ def test_docx_uses_pdf_export_when_present(tmp_path, monkeypatch):
         pdf.new_page().insert_text((72, 72), text)
     pdf.save(converted / "report.pdf")
 
-    pages = ingest.render(doc, dataset)  # new source → rendered again without force
+    pages = ingest.render(doc, dataset)  # new source → rendered again
     assert [p.page for p in pages] == [1, 2]
     assert "Sheet 2 of 2" in pages[1].text
     assert ingest.render(doc, dataset) == pages  # cached now

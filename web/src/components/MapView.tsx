@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { GeoJSONSource, LngLat, LngLatBounds, Map as MapLibre, NavigationControl, Popup, ScaleControl, setWorkerUrl, type LngLatLike, type MapLayerMouseEvent, type TransformConstrainFunction } from 'maplibre-gl'
-import type { Feature as GeoJSONFeature, Polygon } from 'geojson'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { fetchLayerStrips } from '../api'
 import { tooltipContent } from '../boreholeTooltip'
+import { cssColor, detailSheetRect, el } from '../dom'
 import { LITHOLOGY, lithStyle, patternId } from '../lithology'
-import { STATUS_COLOR as STATUS_COLORS, STATUS_LABEL } from '../review'
+import { STATUS_LABEL } from '../review'
 import type { BoreholeSummary, FeatureCollection, ReviewStatus } from '../types'
+import { COLUMN_MIN_ZOOM, circlePolygon, statusColors, updateColumns, type ColumnSpread } from '../mapColumns'
 import type { RoutePoint, TunnelRoute } from '../tunnelRoute'
 
 // MapLibre resolves its worker next to its own module, which does not exist in the production bundle.
@@ -17,15 +18,6 @@ setWorkerUrl(workerUrl)
 
 // Public vector basemap without API key. Tile requests reveal the viewed area, nothing else.
 const STYLE = { light: 'https://tiles.openfreemap.org/styles/liberty', dark: 'https://tiles.openfreemap.org/styles/dark' }
-
-const ACCENT = '#0E6F8E'
-// Point colour = release status (see review.ts); a ring instead of a dot = approximate position.
-const STATUS_COLOR: ExpressionSpecification = [
-  'match', ['get', 'review_status'],
-  ['auto_approved', 'approved'], '#2F7D4F',
-  'rejected', '#B33A3A',
-  '#B7791F',
-]
 
 interface Props {
   data: FeatureCollection
@@ -43,9 +35,7 @@ interface Props {
 }
 
 const CLUSTER_MAX_ZOOM = 14
-const COLUMN_MIN_ZOOM = 15
 const LAYER_PREFETCH_ZOOM = 14
-const COLUMN_RADIUS_M = 5
 const PITCH = 45
 
 function sectionLine(coords: [number, number][]) {
@@ -81,14 +71,8 @@ function updateRouteOverlay(m: MapLibre, state: { route: TunnelRoute | null; rou
 function fitRoute(m: MapLibre, coordinates: RoutePoint[]) {
   if (coordinates.length < 2) return
   const bounds = coordinates.reduce((box, point) => box.extend(point), new LngLatBounds(coordinates[0], coordinates[0]))
-  m.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 450 })
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string) {
-  const node = document.createElement(tag)
-  node.className = className
-  if (text != null) node.textContent = text  // textContent: names come from documents, never as HTML
-  return node
+  const right = Math.min(uncovered(m).right, m.getContainer().clientWidth * 0.55)
+  m.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 60 + right }, maxZoom: 15, duration: 450 })
 }
 
 function pickerList(items: BoreholeSummary[], onPick: (id: string) => void) {
@@ -105,17 +89,6 @@ function pickerList(items: BoreholeSummary[], onPick: (id: string) => void) {
   })
   root.append(list)
   return root
-}
-
-function circlePolygon(lon: number, lat: number, radiusM: number, segments = 64) {
-  const coords: [number, number][] = []
-  for (let i = 0; i <= segments; i++) {
-    const a = (i / segments) * 2 * Math.PI
-    const dLat = (radiusM / 111_320) * Math.sin(a)
-    const dLon = (radiusM / (111_320 * Math.max(0.01, Math.cos((lat * Math.PI) / 180)))) * Math.cos(a)
-    coords.push([lon + dLon, lat + dLat])
-  }
-  return { type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [coords] } }
 }
 
 async function lithologyImage(key: string): Promise<ImageData> {
@@ -139,211 +112,6 @@ async function lithologyImage(key: string): Promise<ImageData> {
   return context.getImageData(0, 0, 32, 32)
 }
 
-interface Column {
-  lon: number
-  lat: number
-  to: Offset    // where the column belongs once fanned out
-  from: Offset  // where its current animation started
-  sections: GeoJSONFeature<Polygon>['properties'][]
-  props: BoreholeSummary
-}
-
-type Offset = readonly [east_m: number, north_m: number]
-
-/** What the fan-out animation needs between redraws, one per map. */
-interface ColumnSpread {
-  columns: Column[]
-  drawn: Map<string, Offset>  // offset each visible column was last drawn at
-  start: number
-  frame: number
-  show: boolean  // the 3D columns are switched on
-}
-
-const SPREAD_GAP_M = 3
-const SPREAD_SPACING_M = 2 * COLUMN_RADIUS_M + SPREAD_GAP_M
-const SPREAD_MS = 1000
-const SPOT_CLEARANCE_M = 3  // free ground between the spot marker and the ring of columns around it
-const NO_OFFSET: Offset = [0, 0]
-
-function updateColumns(m: MapLibre, data: FeatureCollection, strips: Map<string, BoreholeSummary['strip']>, spread: ColumnSpread) {
-  const columns: Column[] = []
-  if (spread.show && m.getZoom() >= COLUMN_MIN_ZOOM) {
-    const bounds = m.getBounds()
-    const offsets = columnOffsets(data)
-    for (const feature of data.features) {
-      const depth = feature.properties.depth
-      if (depth == null || !Number.isFinite(depth) || depth <= 0) continue
-      const [lon, lat] = feature.geometry.coordinates
-      if (![lon - 360, lon, lon + 360].some((wrappedLon) => bounds.contains([wrappedLon, lat]))) continue
-      const sections: Column['sections'] = []
-      const addSection = (top: number, bottom: number, color: string, lithology?: string) => {
-        if (bottom <= top) return
-        sections.push({
-          ...feature.properties, base_m: depth - bottom,
-          height_m: depth - top,
-          color, ...(lithology ? { layer_top: top, layer_bottom: bottom, layer_lithology: lithology,
-            pattern: patternId(lithology in LITHOLOGY ? lithology : 'unknown') } : {}),
-        })
-      }
-      const strip = strips.get(feature.properties.id)
-      if (!strip?.length) {
-        addSection(0, depth, STATUS_COLORS[feature.properties.review_status])
-      } else {
-        let covered = 0
-        for (const [rawTop, rawBottom, lithology] of [...strip].sort((a, b) => a[0] - b[0])) {
-          if (!Number.isFinite(rawTop) || !Number.isFinite(rawBottom)) continue
-          const top = Math.max(covered, Math.min(depth, rawTop))
-          const bottom = Math.min(depth, rawBottom)
-          if (top > covered) addSection(covered, top, lithStyle('unknown').fill, 'unknown')
-          if (bottom > top) addSection(top, bottom, lithStyle(lithology).fill, lithology)
-          covered = Math.max(covered, bottom)
-        }
-        if (covered < depth) addSection(covered, depth, lithStyle('unknown').fill, 'unknown')
-        sections.push({
-          ...feature.properties, base_m: depth,
-          height_m: depth + 0.5, color: STATUS_COLORS[feature.properties.review_status],
-        })
-      }
-      const to = offsets.get(feature.properties.id) ?? NO_OFFSET
-      columns.push({ lon, lat, to, from: to, sections, props: feature.properties })
-    }
-  }
-  // Columns slide out when they first appear and when their layout changes. A column panned into view
-  // keeps the position it would have had anyway, and panning never restarts a running slide.
-  const now = performance.now()
-  const appearing = spread.drawn.size === 0
-  const previous = new Map(spread.columns.map((c) => [c.props.id, c]))
-  const changed = columns.some((c) => {
-    const before = previous.get(c.props.id)
-    return appearing ? c.to !== NO_OFFSET : !!before && !sameOffset(before.to, c.to)
-  })
-  if (changed) {
-    for (const c of columns) c.from = appearing ? NO_OFFSET : spread.drawn.get(c.props.id) ?? c.to
-    spread.start = now
-  } else {
-    for (const c of columns) c.from = previous.get(c.props.id)?.from ?? c.to
-  }
-  spread.columns = columns
-  cancelAnimationFrame(spread.frame)
-  const step = () => {
-    if (!m.getSource('depth-markers')) return  // a style switch is under way
-    const t = REDUCED_MOTION.matches ? 1 : Math.min(1, (performance.now() - spread.start) / SPREAD_MS)
-    spread.drawn = drawColumns(m, spread.columns, 1 - (1 - t) ** 3)
-    if (t < 1) spread.frame = requestAnimationFrame(step)
-  }
-  step()
-}
-
-const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)')
-
-function sameOffset(a: Offset, b: Offset) {
-  return Math.abs(a[0] - b[0]) < 0.01 && Math.abs(a[1] - b[1]) < 0.01
-}
-
-const layouts = new WeakMap<FeatureCollection, Map<string, Offset>>()
-
-/**
- * Display offsets for holes whose columns would merge, by data set, so that panning never reshuffles them.
- * Holes at one spot (often a place centre standing in for unknown coordinates) stand on a ring around
- * it, leaving the spot itself free for its marker. Columns that still overlap are pushed apart only as
- * far as needed, which keeps every column next to its hole and lets a row of close holes stay a row.
- */
-function columnOffsets(data: FeatureCollection) {
-  const cached = layouts.get(data)
-  if (cached) return cached
-  const holes = data.features
-    .filter((f) => f.properties.depth != null && Number.isFinite(f.properties.depth) && f.properties.depth > 0)
-    .map((f) => {
-      const [lon, lat] = f.geometry.coordinates
-      return { id: f.properties.id, x: lon * 111_320 * Math.cos((lat * Math.PI) / 180), y: lat * 111_320 }
-    })
-  const spots = new Map<string, number[]>()
-  holes.forEach((h, i) => {
-    const key = `${Math.round(h.x)},${Math.round(h.y)}`
-    spots.set(key, [...(spots.get(key) ?? []), i])
-  })
-  const sx = holes.map((h) => h.x), sy = holes.map((h) => h.y)
-  for (const spot of spots.values()) {
-    if (spot.length < 2) continue
-    const ring = Math.max(SPREAD_SPACING_M / (2 * Math.sin(Math.PI / spot.length)), COLUMN_RADIUS_M + SPOT_CLEARANCE_M)
-    spot.sort((a, b) => holes[a].id.localeCompare(holes[b].id)).forEach((i, k) => {
-      const angle = Math.PI / 2 + (2 * Math.PI * k) / spot.length
-      sx[i] = holes[i].x + Math.cos(angle) * ring
-      sy[i] = holes[i].y + Math.sin(angle) * ring
-    })
-  }
-  const parent = holes.map((_, i) => i)
-  const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])))
-  const cells = new Map<string, number[]>()
-  const cell = (x: number, y: number) => `${Math.floor(x / SPREAD_SPACING_M)},${Math.floor(y / SPREAD_SPACING_M)}`
-  holes.forEach((_, i) => {
-    const cx = Math.floor(sx[i] / SPREAD_SPACING_M), cy = Math.floor(sy[i] / SPREAD_SPACING_M)
-    for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
-      for (const j of cells.get(`${cx + ox},${cy + oy}`) ?? []) {
-        if (Math.hypot(sx[j] - sx[i], sy[j] - sy[i]) < SPREAD_SPACING_M) parent[root(i)] = root(j)
-      }
-    }
-    const key = cell(sx[i], sy[i])
-    cells.set(key, [...(cells.get(key) ?? []), i])
-  })
-  const groups = new Map<number, number[]>()
-  holes.forEach((_, i) => groups.set(root(i), [...(groups.get(root(i)) ?? []), i]))
-  const offsets = new Map<string, Offset>()
-  holes.forEach((h, i) => { if (sx[i] !== h.x || sy[i] !== h.y) offsets.set(h.id, [sx[i] - h.x, sy[i] - h.y]) })
-  for (const group of groups.values()) {
-    if (group.length < 2) continue
-    const x = group.map((i) => sx[i]), y = group.map((i) => sy[i])
-    for (let round = 0; round < 120; round++) {
-      let overlap = false
-      for (let a = 0; a < group.length; a++) {
-        for (let b = a + 1; b < group.length; b++) {
-          let dx = x[b] - x[a], dy = y[b] - y[a]
-          const d = Math.hypot(dx, dy)
-          if (d >= SPREAD_SPACING_M - 0.01) continue
-          overlap = true
-          if (d < 0.01) {
-            dx = 1; dy = 0
-          } else {
-            dx /= d; dy /= d
-          }
-          const push = (SPREAD_SPACING_M - d) / 2
-          x[a] -= dx * push; y[a] -= dy * push
-          x[b] += dx * push; y[b] += dy * push
-        }
-      }
-      if (!overlap) break
-    }
-    group.forEach((i, k) => offsets.set(holes[i].id, [x[k] - holes[i].x, y[k] - holes[i].y]))
-  }
-  layouts.set(data, offsets)
-  return offsets
-}
-
-/** Draws each column `t` (0 to 1) of the way from its start to its target, with a leader line back to the hole. */
-function drawColumns(m: MapLibre, columns: Column[], t: number) {
-  const features: GeoJSONFeature<Polygon>[] = []
-  const leaders: GeoJSONFeature[] = []
-  const spots = new Map<string, GeoJSONFeature>()
-  const drawn = new Map<string, Offset>()
-  for (const c of columns) {
-    const east = c.from[0] + (c.to[0] - c.from[0]) * t
-    const north = c.from[1] + (c.to[1] - c.from[1]) * t
-    drawn.set(c.props.id, [east, north])
-    const lon = c.lon + east / (111_320 * Math.cos((c.lat * Math.PI) / 180))
-    const lat = c.lat + north / 111_320
-    const geometry = circlePolygon(lon, lat, COLUMN_RADIUS_M, 24).geometry
-    for (const properties of c.sections) features.push({ type: 'Feature', geometry, properties })
-    if (c.to !== NO_OFFSET) {
-      leaders.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[c.lon, c.lat], [lon, lat]] } })
-      spots.set(`${c.lon},${c.lat}`, { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [c.lon, c.lat] } })
-    }
-  }
-  leaders.push(...spots.values())
-  ;(m.getSource('depth-markers') as GeoJSONSource).setData({ type: 'FeatureCollection', features })
-  ;(m.getSource('column-leaders') as GeoJSONSource).setData({ type: 'FeatureCollection', features: leaders })
-  return drawn
-}
-
 function wrapLongitude(lon: number) {
   return ((lon + 180) % 360 + 360) % 360 - 180
 }
@@ -354,11 +122,14 @@ export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, foc
   const ready = useRef(false)
   const latest = useRef({ data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, columns3d })
   const layerStrips = useRef(new Map<string, BoreholeSummary['strip']>())
-  latest.current = { data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, columns3d }
   const [loaded, setLoaded] = useState(false)
   const routeCoordinates = route?.coordinates
   const shownDark = useRef(dark)  // the basemap currently on the map
   const spread = useRef<ColumnSpread>({ columns: [], drawn: new Map(), start: 0, frame: 0, show: columns3d })
+  // Map event handlers read the newest props; layout effects run before the effects below that use them too.
+  useLayoutEffect(() => {
+    latest.current = { data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, columns3d }
+  })
 
   useEffect(() => {
     const columnSpread = spread.current
@@ -585,9 +356,13 @@ function loadPatterns() {
 
 /** The borehole sources and layers on top of the basemap; a style switch drops them, so they are added again. */
 function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>>,
-  state: { data: FeatureCollection; route: TunnelRoute | null; routeDraft: RoutePoint[] | null; dark: boolean; columns3d: boolean }) {
+  state: { data: FeatureCollection; route: TunnelRoute | null; routeDraft: RoutePoint[] | null; columns3d: boolean }) {
   if (m.getSource('boreholes')) return
-  const ink = state.dark ? '#E2E7E5' : '#1D2528', paper = state.dark ? '#1B2225' : '#FFFFFF'
+  const accent = cssColor('--water'), ink = cssColor('--ink'), panel = cssColor('--panel')
+  const status = statusColors()
+  // Point colour = release status; a ring instead of a dot = approximate position.
+  const statusColor: ExpressionSpecification = ['match', ['get', 'review_status'],
+    ['auto_approved', 'approved'], status.approved, 'rejected', status.rejected, status.pending_review]
   for (const [key, image] of images) m.addImage(patternId(key), image, { pixelRatio: 2 })
   m.addSource('boreholes', { type: 'geojson', data: state.data, cluster: true, clusterRadius: 42, clusterMaxZoom: CLUSTER_MAX_ZOOM })
   m.addSource('depth-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
@@ -597,14 +372,14 @@ function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>
   m.addSource('tunnel-draft', { type: 'geojson', data: sectionLine(state.routeDraft ?? []) })
   m.addSource('tunnel-vertices', { type: 'geojson', data: routeVertices(state.routeDraft ?? []) })
   m.addLayer({ id: 'tunnel-corridor', type: 'line', source: 'tunnel-route', layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': ACCENT, 'line-opacity': 0.18, 'line-width': 1 } })
-  m.addLayer({ id: 'tunnel-line', type: 'line', source: 'tunnel-route', paint: { 'line-color': ACCENT, 'line-width': 3 } })
-  m.addLayer({ id: 'tunnel-draft-line', type: 'line', source: 'tunnel-draft', paint: { 'line-color': ACCENT, 'line-width': 3, 'line-dasharray': [2, 2] } })
+    paint: { 'line-color': accent, 'line-opacity': 0.18, 'line-width': 1 } })
+  m.addLayer({ id: 'tunnel-line', type: 'line', source: 'tunnel-route', paint: { 'line-color': accent, 'line-width': 3 } })
+  m.addLayer({ id: 'tunnel-draft-line', type: 'line', source: 'tunnel-draft', paint: { 'line-color': accent, 'line-width': 3, 'line-dasharray': [2, 2] } })
   m.addLayer({ id: 'tunnel-draft-vertices', type: 'circle', source: 'tunnel-vertices',
-    paint: { 'circle-color': ACCENT, 'circle-radius': 5, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 2 } })
+    paint: { 'circle-color': accent, 'circle-radius': 5, 'circle-stroke-color': panel, 'circle-stroke-width': 2 } })
   updateRouteOverlay(m, state)
-  m.addLayer({ id: 'uncertainty-fill', type: 'fill', source: 'uncertainty', paint: { 'fill-color': ACCENT, 'fill-opacity': 0.08 } })
-  m.addLayer({ id: 'uncertainty-line', type: 'line', source: 'uncertainty', paint: { 'line-color': ACCENT, 'line-width': 1.2, 'line-dasharray': [3, 2] } })
+  m.addLayer({ id: 'uncertainty-fill', type: 'fill', source: 'uncertainty', paint: { 'fill-color': accent, 'fill-opacity': 0.08 } })
+  m.addLayer({ id: 'uncertainty-line', type: 'line', source: 'uncertainty', paint: { 'line-color': accent, 'line-width': 1.2, 'line-dasharray': [3, 2] } })
   m.addLayer({
     id: 'column-leaders', type: 'line', source: 'column-leaders', minzoom: COLUMN_MIN_ZOOM, filter: ['==', ['geometry-type'], 'LineString'],
     layout: { 'line-cap': 'round' },
@@ -613,7 +388,7 @@ function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>
   // The true spot of the fanned-out holes: a target, so it never reads as a borehole point.
   m.addLayer({
     id: 'column-spots', type: 'circle', source: 'column-leaders', minzoom: COLUMN_MIN_ZOOM, filter: ['==', ['geometry-type'], 'Point'],
-    paint: { 'circle-color': paper, 'circle-radius': 8, 'circle-stroke-color': ink, 'circle-stroke-width': 2.5, 'circle-pitch-alignment': 'map' },
+    paint: { 'circle-color': panel, 'circle-radius': 8, 'circle-stroke-color': ink, 'circle-stroke-width': 2.5, 'circle-pitch-alignment': 'map' },
   })
   m.addLayer({
     id: 'column-spot-dots', type: 'circle', source: 'column-leaders', minzoom: COLUMN_MIN_ZOOM, filter: ['==', ['geometry-type'], 'Point'],
@@ -634,38 +409,38 @@ function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>
   m.addLayer({
     id: 'clusters', type: 'circle', source: 'boreholes', filter: ['has', 'point_count'],
     paint: {
-      'circle-color': ACCENT,
+      'circle-color': accent,
       'circle-opacity': 0.88,
       'circle-radius': ['step', ['get', 'point_count'], 13, 10, 17, 50, 22, 200, 28],
-      'circle-stroke-color': '#F6F7F4',
+      'circle-stroke-color': cssColor('--paper'),
       'circle-stroke-width': 2,
     },
   })
   m.addLayer({
     id: 'cluster-count', type: 'symbol', source: 'boreholes', filter: ['has', 'point_count'],
     layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['Noto Sans Regular'], 'text-size': 12 },
-    paint: { 'text-color': '#FFFFFF' },
+    paint: { 'text-color': cssColor('--on-accent') },
   })
   m.addLayer({
     id: 'points', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM,
     filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'loc_method'], 'geocoded_place']],
-    paint: { 'circle-color': STATUS_COLOR, 'circle-radius': 6, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5 },
+    paint: { 'circle-color': statusColor, 'circle-radius': 6, 'circle-stroke-color': panel, 'circle-stroke-width': 1.5 },
   })
   m.addLayer({
     id: 'points-no-depth', type: 'circle', source: 'boreholes', minzoom: COLUMN_MIN_ZOOM,
     filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'loc_method'], 'geocoded_place'],
       ['!', ['>', ['coalesce', ['get', 'depth'], 0], 0]]],
-    paint: { 'circle-color': STATUS_COLOR, 'circle-radius': 6, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5 },
+    paint: { 'circle-color': statusColor, 'circle-radius': 6, 'circle-stroke-color': panel, 'circle-stroke-width': 1.5 },
   })
   m.addLayer({
     id: 'points-approx', type: 'circle', source: 'boreholes',
     filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'loc_method'], 'geocoded_place']],
-    paint: { 'circle-color': '#FFFFFF', 'circle-stroke-color': STATUS_COLOR, 'circle-stroke-width': 2.5 },
+    paint: { 'circle-color': panel, 'circle-stroke-color': statusColor, 'circle-stroke-width': 2.5 },
   })
   m.addLayer({
     // Below column zoom only: at column zoom the centred 3D column marks the selection.
     id: 'selected', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM, filter: ['==', ['get', 'id'], ''],
-    paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 11, 'circle-stroke-color': ACCENT, 'circle-stroke-width': 3 },
+    paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 11, 'circle-stroke-color': accent, 'circle-stroke-width': 3 },
   })
   showColumns(m, state.columns3d)
 }
@@ -732,7 +507,7 @@ function recenter(m: MapLibre, focus: Props['focus']) {
 /** Padding that keeps the centre in the part of the map the detail sheet leaves visible. */
 function uncovered(m: MapLibre) {
   const map = m.getContainer().getBoundingClientRect()
-  const sheet = document.querySelector('.detail')?.getBoundingClientRect()
+  const sheet = detailSheetRect()
   const right = sheet && sheet.left > map.left ? Math.max(0, map.right - sheet.left) : 0
   return { left: 0, right, top: 0, bottom: 0 }
 }

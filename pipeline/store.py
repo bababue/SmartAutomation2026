@@ -166,7 +166,8 @@ def _migrate_v4(con: sqlite3.Connection) -> None:
         con.execute("PRAGMA user_version = 4")
 
 
-def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
+def connect(path: Path | None = None) -> sqlite3.Connection:
+    path = path or config.DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path, check_same_thread=False, timeout=30)
     con.row_factory = sqlite3.Row
@@ -206,7 +207,8 @@ def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
 
 
 def reset(con: sqlite3.Connection) -> None:
-    for table in ("boreholes", "boreholes_rtree", "boreholes_fts", "review_events", "layers", "lab_values",
+    """Remove all records; the review log stays, it holds human decisions."""
+    for table in ("boreholes", "boreholes_rtree", "boreholes_fts", "layers", "lab_values",
                   "findings", "record_sources", "borehole_aliases", "record_versions"):
         con.execute(f"DELETE FROM {table}")
     con.commit()
@@ -253,20 +255,6 @@ def content_hash(bh: Borehole) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def extracted_summary(bh: Borehole) -> dict:
-    """What the model produced, kept before reviewer corrections are applied, in the form `eval` compares.
-    `key` (the natural key) matches the same hole when a variant names it differently. A lab value is
-    [parameter, value, top_m, qualifier, name, unit, value_upper]; name and unit tell chemistry rows apart."""
-    from .assemble import _lab_name
-    loc = bh.location
-    return {"key": natural_key(bh),
-            "layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
-            "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg, "depth_m": bh.depth_m,
-            "groundwater": sorted(gw.depth_m for gw in bh.groundwater if gw.depth_m is not None),
-            "lab": [[r.parameter.value, r.value, r.top_m, r.qualifier, *_lab_name(r), r.value_upper]
-                    for r in bh.lab_results]}
-
-
 def _delete(con: sqlite3.Connection, borehole_id: str) -> dict | None:
     row = con.execute("SELECT rid, content_hash, data, extracted, uid, review_revision FROM boreholes WHERE id = ?",
                       (borehole_id,)).fetchone()
@@ -291,37 +279,60 @@ def delete_document_boreholes(con: sqlite3.Connection, doc_id: str) -> dict[str,
 def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, previous: dict | None = None,
                   extracted: dict | None = None) -> None:
     """Insert or replace a record. `previous` is the earlier row if it was already deleted. `extracted` is the
-    uncorrected model output (see `extracted_summary`); without it the previous row's is kept."""
+    uncorrected model output (see `evaluate.extracted_summary`); without it the previous row's is kept."""
     digest = content_hash(bh)
     previous = _delete(con, bh.borehole_id) or previous
     extracted_json = as_json(extracted) if extracted is not None else (previous or {}).get("extracted")
     revision = (previous or {}).get("review_revision") or 0
-    if previous and previous.get("data"):
-        old = Borehole.model_validate_json(previous["data"])
-        old_digest = content_hash(old)
-        if old.review_status in HUMAN:
-            new_blocking = _new_blocking(old, bh) if old.review_status == ReviewStatus.approved else []
-            if old_digest == digest and not new_blocking:
-                # Same content: the human decision stands.
-                bh.review_status, bh.reviewed_by = old.review_status, old.reviewed_by
-                bh.reviewed_at, bh.review_comment = old.reviewed_at, old.review_comment
-            elif old_digest == digest:
-                revision += 1  # same hash: only the revision stops a review screen opened before from approving
-                bh.review_status = ReviewStatus.pending_review
-                bh.score_reasons = [f"New blocking finding since the approval by {old.reviewed_by or 'a reviewer'}: "
-                                    + "; ".join(new_blocking)] + bh.score_reasons
-            else:
-                bh.review_status = ReviewStatus.pending_review
-                bh.score_reasons = [f"Data changed since the {old.review_status.value} decision by "
-                                    f"{old.reviewed_by or 'a reviewer'}"] + bh.score_reasons
     uid = (previous or {}).get("uid") or _resolve_uid(con, bh) or uuid.uuid4().hex
     if con.execute("SELECT 1 FROM boreholes WHERE uid = ? AND id != ?", (uid, bh.borehole_id)).fetchone():
         uid = uuid.uuid4().hex  # another current record is that hole: never share an identity
+    if previous and previous.get("data"):
+        old = Borehole.model_validate_json(previous["data"])
+        decision = (old, content_hash(old))
+    else:  # stored under another id before: the decision follows the uid, as corrections do
+        decision = _logged_decision(con, uid)
+    if decision and decision[0].review_status in HUMAN:
+        revision = _carry_decision(bh, *decision, digest, revision)
     version_id = _version(con, uid, digest, bh.model_dump_json())
     _insert(con, bh, digest, extracted_json, uid, version_id, revision)
     _remember_aliases(con, bh, uid)
     if commit:
         con.commit()
+
+
+def _logged_decision(con: sqlite3.Connection, uid: str) -> tuple[Borehole, str] | None:
+    """The latest review of this hole as (record as reviewed, its content hash). The hash is recomputed from the
+    stored version, so a field dropped from the model is not a data change. Without a stored version the
+    reviewer counts as having seen no findings."""
+    event = con.execute("SELECT decision, reviewer, comment, at, content_hash, version_id FROM review_events "
+                        "WHERE uid = ? ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
+    if not event:
+        return None
+    version = con.execute("SELECT data FROM record_versions WHERE id = ?", (event["version_id"],)).fetchone()
+    old = Borehole.model_validate_json(version["data"]) if version else Borehole.model_construct(issues=[])
+    old.review_status, old.reviewed_by = ReviewStatus(event["decision"]), event["reviewer"]
+    old.reviewed_at = datetime.fromisoformat(event["at"]) if event["at"] else None
+    old.review_comment = event["comment"]
+    return old, content_hash(old) if version else event["content_hash"]
+
+
+def _carry_decision(bh: Borehole, old: Borehole, old_digest: str, digest: str, revision: int) -> int:
+    """Carry the human decision on `old` over to `bh`; returns the review revision."""
+    new_blocking = _new_blocking(old, bh) if old.review_status == ReviewStatus.approved else []
+    if old_digest == digest and not new_blocking:
+        bh.review_status, bh.reviewed_by = old.review_status, old.reviewed_by
+        bh.reviewed_at, bh.review_comment = old.reviewed_at, old.review_comment
+    elif old_digest == digest:
+        revision += 1  # same hash: only the revision stops a review screen opened before from approving
+        bh.review_status = ReviewStatus.pending_review
+        bh.score_reasons = [f"New blocking finding since the approval by {old.reviewed_by or 'a reviewer'}: "
+                            + "; ".join(new_blocking)] + bh.score_reasons
+    else:
+        bh.review_status = ReviewStatus.pending_review
+        bh.score_reasons = [f"Data changed since the {old.review_status.value} decision by "
+                            f"{old.reviewed_by or 'a reviewer'}"] + bh.score_reasons
+    return revision
 
 
 def _new_blocking(old: Borehole, bh: Borehole) -> list[str]:
@@ -400,10 +411,10 @@ def _write_lab_values(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
                      for i, r in enumerate(bh.lab_results)])
 
 
-def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str | None = None, uid: str | None = None,
-            version_id: int | None = None, review_revision: int = 0) -> None:
+def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str | None, uid: str, version_id: int,
+            review_revision: int) -> None:
     loc = bh.location
-    doc_id = bh.borehole_id.split(":", 1)[0]
+    doc_id = doc_of(bh.borehole_id)
     lithologies = sorted({layer.primary.value for layer in bh.layers})
     cur = con.execute(
         """INSERT INTO boreholes (id, name, doc_id, project, location_name, country, lat, lon, depth, elevation,
@@ -481,8 +492,12 @@ def record_review(con: sqlite3.Connection, borehole_id: str, decision: ReviewSta
     return bh
 
 
+def doc_of(borehole_id: str) -> str:
+    return borehole_id.split(":", 1)[0]
+
+
 def document_group(borehole_id: str) -> str:
-    return borehole_id.split(":", 1)[0].split("__")[0]
+    return doc_of(borehole_id).split("__")[0]
 
 
 def add_correction(con: sqlite3.Connection, scope: str, target: str, kind: str, payload: dict, reviewer: str,

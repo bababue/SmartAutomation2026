@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useEffectEvent, useState, type ReactNode } from 'react'
 import { postReview } from '../api'
+import { isTyping } from '../dom'
 import { STATUS_LABEL, fmtDateTime, loadReviewer, saveReviewer, scoreText } from '../review'
 import type { Detail, DetailUpdate, ReviewStatus } from '../types'
 
@@ -15,15 +16,12 @@ export interface QueueNav {
 interface Props {
   detail: Detail
   onChange: (update: DetailUpdate) => void
-  nav?: QueueNav | null
+  nav: QueueNav | null
   /** Shown next to the summary heading. */
   children?: ReactNode
   /** Findings shown in the summary below the score reasons. */
   findings?: ReactNode
 }
-
-const typing = (el: EventTarget | null) =>
-  el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
 
 /** Release status, why it needs a human, and the decision controls. */
 export function ReviewBox({ detail, onChange, nav, children, findings }: Props) {
@@ -61,14 +59,13 @@ export function ReviewBox({ detail, onChange, nav, children, findings }: Props) 
   }
 
   // Keyboard: A approves, R rejects (not while typing in a field).
-  const decideRef = useRef(decide)
-  decideRef.current = decide
+  const onShortcut = useEffectEvent((decision: ReviewStatus) => decide(decision))
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return
+      if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return
       const key = e.key.toLowerCase()
-      if (key === 'a') { e.preventDefault(); decideRef.current('approved') }
-      if (key === 'r') { e.preventDefault(); decideRef.current('rejected') }
+      if (key === 'a') { e.preventDefault(); onShortcut('approved') }
+      if (key === 'r') { e.preventDefault(); onShortcut('rejected') }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

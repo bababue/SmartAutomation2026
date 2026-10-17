@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Feature, GroupFacet } from '../types'
 import { STATUS_LABEL, scoreText } from '../review'
+import { fmtMetres } from '../format'
 import { CoreStrip } from './Profile'
 
 interface Props {
@@ -14,8 +15,6 @@ interface Props {
   onSelect: (id: string) => void
   loading: boolean
 }
-
-const fmtDepth = (d: number | null) => (d == null ? '–' : `${d.toLocaleString('en', { maximumFractionDigits: 1 })} m`)
 
 export function ResultList({ features, groups, activeGroup, onShowGroup, selectedId, onSelect, loading }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -86,7 +85,7 @@ export function ResultList({ features, groups, activeGroup, onShowGroup, selecte
                       aria-current={p.id === selectedId}
                     >
                       <span className="result-name">{p.name}</span>
-                      <span className="result-depth">{fmtDepth(p.depth)}</span>
+                      <span className="result-depth">{fmtMetres(p.depth)}</span>
                       <span className="result-place">{p.location_name ?? p.project ?? 'Unnamed site'}{p.country ? `, ${p.country}` : ''}</span>
                       <CoreStrip strip={p.strip} depth={p.depth} />
                       <span className="result-flags">

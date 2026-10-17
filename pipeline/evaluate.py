@@ -26,16 +26,30 @@ from pathlib import Path
 from schema.borehole import Borehole, ReviewStatus
 
 from . import config, store
+from .assemble import _lab_name
 from .georef import haversine_km
 
 REFERENCE_PATH = config.DATA_DIR / "eval" / "reference.json"
 AUDIT_PATH = config.DATA_DIR / "eval" / "audit.json"
-DEPTH_TOLERANCE_M = 0.1
+EVAL_DEPTH_TOLERANCE_M = 0.1
+
+
+def extracted_summary(bh: Borehole) -> dict:
+    """What the model produced, kept before reviewer corrections are applied, in the form `eval` compares.
+    `key` (the natural key) matches the same hole when a variant names it differently. A lab value is
+    [parameter, value, top_m, qualifier, name, unit, value_upper]; name and unit tell chemistry rows apart."""
+    loc = bh.location
+    return {"key": store.natural_key(bh),
+            "layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
+            "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg, "depth_m": bh.depth_m,
+            "groundwater": sorted(gw.depth_m for gw in bh.groundwater if gw.depth_m is not None),
+            "lab": [[r.parameter.value, r.value, r.top_m, r.qualifier, *_lab_name(r), r.value_upper]
+                    for r in bh.lab_results]}
 
 
 def entry(bh: Borehole) -> dict:
     """The parts of a record the evaluation compares (final values)."""
-    return {"doc_id": bh.borehole_id.split(":", 1)[0], **store.extracted_summary(bh)}
+    return {"doc_id": store.doc_of(bh.borehole_id), **extracted_summary(bh)}
 
 
 def _records(con: sqlite3.Connection, where: str = "", params: tuple = ()) -> dict[str, Borehole]:
@@ -96,7 +110,7 @@ def set_holdout(groups: list[str], path: Path = REFERENCE_PATH) -> set[str]:
     return set(data["holdout"])
 
 
-def match_boundaries(reference: list[float], current: list[float], tol: float = DEPTH_TOLERANCE_M) -> int:
+def match_boundaries(reference: list[float], current: list[float], tol: float = EVAL_DEPTH_TOLERANCE_M) -> int:
     """Reference boundaries with a current boundary within `tol`, each current one used at most once."""
     remaining = sorted(current)
     matched = 0
@@ -134,7 +148,7 @@ def lithology_metres(reference: list[list], current: list[list]) -> float:
     return same
 
 
-def compare_layers(reference: list[list], current: list[list], tol: float = DEPTH_TOLERANCE_M) -> dict:
+def compare_layers(reference: list[list], current: list[list], tol: float = EVAL_DEPTH_TOLERANCE_M) -> dict:
     """Boundary matches, and for reference layers whose top and bottom both match a current layer,
     how many have the same primary lithology."""
     ref_b, cur_b = _boundaries(reference), _boundaries(current)
@@ -162,7 +176,7 @@ def _same_lab(reference: list, current: list, tol: float) -> bool:
     return reference[3] == current[3] and same_upper and (parameter != "other" or reference[4:6] == current[4:6])
 
 
-def match_lab(reference: list[list], current: list[list], tol: float = DEPTH_TOLERANCE_M) -> int:
+def match_lab(reference: list[list], current: list[list], tol: float = EVAL_DEPTH_TOLERANCE_M) -> int:
     """Reference lab values found with the same parameter, value, qualifier and sample depth, catch-all
     values also with the same printed name and unit; each current one once."""
     remaining = list(current)
@@ -286,7 +300,7 @@ def compare(reference: dict[str, dict], current: dict[str, dict],
         s.crs_changed += ref.get("crs_epsg") != cur.get("crs_epsg")
         if ref.get("depth_m") is not None and "depth_m" in cur:
             s.depths += 1
-            s.depths_ok += cur["depth_m"] is not None and abs(cur["depth_m"] - ref["depth_m"]) <= DEPTH_TOLERANCE_M
+            s.depths_ok += cur["depth_m"] is not None and abs(cur["depth_m"] - ref["depth_m"]) <= EVAL_DEPTH_TOLERANCE_M
         if "groundwater" in ref and "groundwater" in cur:
             s.groundwater += len(ref["groundwater"])
             s.groundwater_matched += match_boundaries(ref["groundwater"], cur["groundwater"])
@@ -320,7 +334,7 @@ HEADER = (f"{'':<24} {'holes':>5} {'miss':>4} {'extra':>5} {'bounds':>7} {'prec'
           f"{'med m':>8} {'max m':>8} {'no pos':>6} {'crs≠':>4} {'depth':>7} {'gw':>7} {'lab':>7} {'corr':>4}")
 
 LEGEND = [
-    f"bounds: reference layer boundaries matched within {DEPTH_TOLERANCE_M} m (missing records count as unmatched); "
+    f"bounds: reference layer boundaries matched within {EVAL_DEPTH_TOLERANCE_M} m (missing records count as unmatched); "
     "prec: share of the model's boundaries that are in the reference.",
     "lith: same primary lithology on layers whose top and bottom both match; lith m: share of the reference "
     "log length with the same lithology at the same depth.",
@@ -355,8 +369,6 @@ def report(scores: dict[str, Score], holdout: set[str] = frozenset()) -> str:
         lines.append("missing: " + ", ".join(missing))
     return "\n".join(lines)
 
-
-# --- release audit: how often is an automatic release wrong? -------------------------------------------------
 
 def draw_audit(con: sqlite3.Connection, size: int, seed: int, path: Path = AUDIT_PATH) -> list[str]:
     """A reproducible random sample of automatically released records not yet in the reference, for a person to

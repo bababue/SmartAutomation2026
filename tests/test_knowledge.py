@@ -5,7 +5,7 @@ import math
 import pytest
 from pyproj import Transformer
 
-from pipeline import config, corrections, knowledge, store
+from pipeline import corrections, knowledge, store
 from pipeline.knowledge import fit_grid, grid_position
 from pipeline.georef import haversine_km
 from pipeline.scoring import score
@@ -53,16 +53,6 @@ def hole(bid, ll, coords, project="Line 2"):
                                      "position from place name only"]
     score(bh, {}, 0)
     return bh
-
-
-@pytest.fixture()
-def con(tmp_path, monkeypatch):
-    path = tmp_path / "k.sqlite"
-    monkeypatch.setattr(config, "DB_PATH", path)
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
-    c = store.connect(path)
-    yield c
-    c.close()
 
 
 def test_apply_all_uses_grid_terms_and_corrections_win(con):

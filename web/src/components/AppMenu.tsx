@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { exportUrl } from '../api'
 
 interface Props {
   inReview: boolean
@@ -8,6 +9,7 @@ interface Props {
   columns3d: boolean
   onToggleReview: () => void
   onToggleStats: () => void
+  onCreateTunnel: () => void
   onUpload: () => void
   onToggleDark: () => void
   onToggleColumns: () => void
@@ -26,27 +28,29 @@ const ICON = {
   file: 'M5 2.5h5.5l3 3v10H5zM10.5 2.5v3h3',
   chevron: 'M7 4.5 11.5 9 7 13.5',
   stats: 'M3 15V9.5M7.5 15V4M12 15v-7M16 15H2',
+  tunnel: 'M2 14.5V11a7 7 0 0 1 14 0v3.5M5 14.5V11a4 4 0 0 1 8 0v3.5M2 14.5h14',
 }
 
 function Icon({ d }: { d: string }) {
   return <svg className="menu-icon" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d={d} /></svg>
 }
 
-export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggleReview, onToggleStats, onUpload, onToggleDark, onToggleColumns }: Props) {
+export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggleReview, onToggleStats,
+  onCreateTunnel, onUpload, onToggleDark, onToggleColumns }: Props) {
   const [open, setOpen] = useState(false)
   const [sub, setSub] = useState<Sub | null>(null)
   const root = useRef<HTMLDivElement>(null)
   const button = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    if (!open) { setSub(null); return }
+    if (!open) return
     root.current?.querySelector<HTMLElement>('[role^="menuitem"]')?.focus()
-    const onDown = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false) }
+    const onDown = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) { setOpen(false); setSub(null) } }
     document.addEventListener('pointerdown', onDown)
     return () => document.removeEventListener('pointerdown', onDown)
   }, [open])
 
-  const close = () => { setOpen(false); button.current?.focus() }
+  const close = () => { setOpen(false); setSub(null); button.current?.focus() }
   const pick = (action: () => void) => () => { action(); close() }
 
   // Submenus open to the left, because the menu sits at the right edge of the window.
@@ -94,7 +98,7 @@ export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggl
   return (
     <div className="app-menu" ref={root} onKeyDown={onKeyDown}>
       <button ref={button} className="btn btn-icon menu-button" aria-haspopup="menu" aria-expanded={open}
-        aria-label="Menu" onClick={() => setOpen(!open)}>
+        aria-label="Menu" onClick={() => { setOpen(!open); setSub(null) }}>
         <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 5h12M3 9h12M3 13h12" /></svg>
       </button>
       {open && (
@@ -109,16 +113,19 @@ export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggl
             title="Files chosen together are read as one batch. Or drop them anywhere on the page.">
             <Icon d={ICON.upload} /><span className="menu-text">{uploading ? 'Upload more documents' : 'Upload documents'}</span>
           </button>
+          <button role="menuitem" className="app-menu-item" onClick={pick(onCreateTunnel)} onMouseEnter={() => setSub(null)}>
+            <Icon d={ICON.tunnel} /><span className="menu-text">New tunnel</span>
+          </button>
           <div className="menu-sub" onMouseEnter={() => setSub('export')}>
             {subTrigger('export', 'Export released', ICON.export)}
             {sub === 'export' && (
               <div className="menu-flyout" id="menu-export">
                 <div className="app-menu-list" role="menu" aria-label="Export released records">
-                  <a role="menuitem" className="app-menu-item" href="/api/export.xlsx" onClick={close}
+                  <a role="menuitem" className="app-menu-item" href={exportUrl('xlsx')} onClick={close}
                     title="Released records in Herrenknecht's BoreholeDataFormat">
                     <Icon d={ICON.table} /><span className="menu-text">Excel</span>
                   </a>
-                  <a role="menuitem" className="app-menu-item" href="/api/export.csv" onClick={close}
+                  <a role="menuitem" className="app-menu-item" href={exportUrl('csv')} onClick={close}
                     title="Released records, one row per layer">
                     <Icon d={ICON.file} /><span className="menu-text">CSV</span>
                   </a>

@@ -5,7 +5,7 @@ import json
 import pytest
 
 from pipeline import config, store
-from pipeline import __main__ as cli
+from pipeline import runner
 from pipeline.extraction_models import LogRef, PageClassification, PageExtraction
 from pipeline.ingest import PageImage, SourceDoc
 from pipeline.scoring import finding_severity
@@ -14,14 +14,9 @@ from tests.test_assemble import _log
 from tests.test_store import record
 
 
-@pytest.fixture()
-def con(tmp_path, monkeypatch):
-    path = tmp_path / "publish.sqlite"
+@pytest.fixture(autouse=True)
+def pages_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
-    connection = store.connect(path)
-    yield connection
-    connection.close()
 
 
 def inputs(doc_id="report", names=("BH1",)):
@@ -44,22 +39,22 @@ def test_incomplete_inventory_preserves_records_and_decisions(con, monkeypatch, 
         import pipeline.assemble as assembly
         build = assembly.build_borehole
 
-        def fail_second(doc_id, source, logs, *args):
+        def fail_second(doc_id, logs, *args):
             if logs[0][0].name == "BH2":
                 raise ValueError("unreadable synthetic result")
-            return build(doc_id, source, logs, *args)
+            return build(doc_id, logs, *args)
 
         monkeypatch.setattr(assembly, "build_borehole", fail_second)
     else:
         args[3][("report", 1)].logs = args[3][("report", 1)].logs[:0 if missing == "empty" else 1]
-    assert cli._store(con, *args) == set()
+    assert runner._store(con, *args) == set()
     assert store.load_borehole(con, "report:BH1").review_status == ReviewStatus.approved
     assert store.load_borehole(con, "report:BH2") is not None
 
 
 def test_complete_inventory_replaces_document(con):
     store.save_borehole(con, record(bid="report:old", name="old"))
-    assert cli._store(con, *inputs()) == {"report"}
+    assert runner._store(con, *inputs()) == {"report"}
     assert store.load_borehole(con, "report:old") is None
     assert store.load_borehole(con, "report:BH1") is not None
 
@@ -71,7 +66,7 @@ def test_partial_document_holds_back_its_group(con):
     rendered.update(other[1])
     classes.update(other[2])
     extractions.update(other[3])
-    assert cli._store(con, docs, rendered, classes, extractions, incomplete_docs={"folder__b"}) == set()
+    assert runner._store(con, docs, rendered, classes, extractions, incomplete_docs={"folder__b"}) == set()
     assert con.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 0
 
 
@@ -80,18 +75,18 @@ def test_page_cap_preserves_records_from_omitted_pages(con, monkeypatch, command
     docs, rendered, classes, extractions = inputs()
     rendered["report"].append(PageImage("report", 2, "", "", "", 1, 1))
     store.save_borehole(con, record(bid="report:BH2", name="BH2"))
-    monkeypatch.setattr(cli, "_missing_credentials", lambda: None)
-    monkeypatch.setattr(cli, "_ingest", lambda *args: rendered)
-    monkeypatch.setattr(cli.ingest, "render", lambda *args: rendered["report"])
-    monkeypatch.setattr(cli, "_parallel", lambda fn, pages, label, progress=None: classes if label == "classify" else {})
-    monkeypatch.setattr(cli, "_extract", lambda *args, **kwargs: (extractions, 0))
-    monkeypatch.setattr(cli, "cached_inputs", lambda *args: (classes, {}))
-    monkeypatch.setattr(cli.llm, "cached_extraction", lambda *args: extractions[("report", 1)])
+    monkeypatch.setattr(runner, "missing_credentials", lambda: None)
+    monkeypatch.setattr(runner, "_ingest", lambda *args: rendered)
+    monkeypatch.setattr(runner.ingest, "render", lambda *args: rendered["report"])
+    monkeypatch.setattr(runner, "_parallel", lambda fn, pages, label, progress=None: classes if label == "classify" else {})
+    monkeypatch.setattr(runner, "_extract", lambda *args, **kwargs: (extractions, 0))
+    monkeypatch.setattr(runner, "cached_inputs", lambda *args: (classes, {}))
+    monkeypatch.setattr(runner.llm, "cached_extraction", lambda *args: extractions[("report", 1)])
     if command == "run":
         with pytest.raises(RuntimeError, match="incomplete"):
-            cli.run(docs, max_pages=1)
+            runner.run(docs, max_pages=1)
     else:
-        cli.rebuild(docs, max_pages=1)
+        runner.rebuild(docs, max_pages=1)
     assert store.load_borehole(con, "report:BH2") is not None
 
 
@@ -109,8 +104,8 @@ def test_a_reviewed_record_takes_in_its_unreviewed_copy(con, monkeypatch):
     store.add_correction(con, "borehole", b.borehole_id, "layer",
                          {"orig_top": 0, "orig_bottom": 4.5, "primary": "fine_sand"}, "Ana", None)
     con.commit()
-    monkeypatch.setattr(cli, "assemble", lambda *args, **kwargs: [a, b])
-    cli._store(con, docs, rendered, classes, extractions)
+    monkeypatch.setattr(runner, "assemble", lambda *args, **kwargs: [a, b])
+    runner._store(con, docs, rendered, classes, extractions)
     kept = store.load_borehole(con, b.borehole_id)
     assert kept.layers[0].primary.value == "fine_sand"
     assert {s.file for s in kept.sources} >= {s.file for s in a.sources}
@@ -208,15 +203,15 @@ def test_independent_document_groups_keep_their_own_identity(con, monkeypatch):
     rendered.update(other[1])
     classes.update(other[2])
     extractions.update(other[3])
-    monkeypatch.setattr(cli, "assemble", lambda *args, **kwargs: [record(bid="a:BH1"), record(bid="b:BH1")])
-    cli._store(con, docs, rendered, classes, extractions)
+    monkeypatch.setattr(runner, "assemble", lambda *args, **kwargs: [record(bid="a:BH1"), record(bid="b:BH1")])
+    runner._store(con, docs, rendered, classes, extractions)
     assert con.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 2
 
 
 @pytest.mark.parametrize("max_pages", [0, -1])
 def test_invalid_page_cap_is_rejected_before_processing(monkeypatch, max_pages):
-    monkeypatch.setattr(cli, "_missing_credentials", lambda: pytest.fail("credentials should not be checked"))
-    for command in (cli.run, cli.rebuild):
+    monkeypatch.setattr(runner, "missing_credentials", lambda: pytest.fail("credentials should not be checked"))
+    for command in (runner.run, runner.rebuild):
         with pytest.raises(ValueError, match="positive"):
             command([], max_pages=max_pages)
 
@@ -224,7 +219,7 @@ def test_invalid_page_cap_is_rejected_before_processing(monkeypatch, max_pages):
 def test_fresh_database_stores_a_lost_log_page_as_one_blocking_placeholder(con):
     args = inputs(names=("BH1", "BH2"))
     args[3][("report", 1)].logs = args[3][("report", 1)].logs[:1]
-    assert cli._store(con, *args) == {"report"}
+    assert runner._store(con, *args) == {"report"}
     # BH1 was read from the page that came back short: it may hold the lost hole's layers.
     assert any(finding_severity(i) == "blocking" for i in store.load_borehole(con, "report:BH1").issues)
     lost = store.load_borehole(con, "report:p1-not-extracted")
@@ -244,13 +239,13 @@ def test_fresh_database_stores_a_hole_that_failed_to_assemble_as_a_blocking_plac
     import pipeline.assemble as assembly
     build = assembly.build_borehole
 
-    def fail_second(doc_id, source, logs, *args):
+    def fail_second(doc_id, logs, *args):
         if logs[0][0].name == "BH2":
             raise ValueError("unreadable synthetic result")
-        return build(doc_id, source, logs, *args)
+        return build(doc_id, logs, *args)
 
     monkeypatch.setattr(assembly, "build_borehole", fail_second)
-    assert cli._store(con, *inputs(names=("BH1", "BH2"))) == {"report"}
+    assert runner._store(con, *inputs(names=("BH1", "BH2"))) == {"report"}
     assert store.load_borehole(con, "report:BH1").layers
     failed = store.load_borehole(con, "report:BH2-p1-not-assembled")
     assert not failed.layers and any(i.startswith("log not assembled: BH2") for i in failed.issues)
@@ -266,8 +261,8 @@ def test_eval_snapshot_keeps_lab_values_merged_from_a_duplicate(con, monkeypatch
     extractions.update(other[3])
     a = record(bid="folder__a:BH1", name="BH1", ucs=42.0)
     b = record(bid="folder__b:BH1", name="BH1", ucs=17.0)
-    monkeypatch.setattr(cli, "assemble", lambda *args, **kwargs: [a, b])
-    cli._store(con, docs, rendered, classes, extractions)
+    monkeypatch.setattr(runner, "assemble", lambda *args, **kwargs: [a, b])
+    runner._store(con, docs, rendered, classes, extractions)
     (kept, extracted), = con.execute("SELECT id, extracted FROM boreholes").fetchall()
     assert sorted(value for _, value, *_ in json.loads(extracted)["lab"]) == [17.0, 42.0]
 
@@ -278,7 +273,7 @@ def test_last_sheet_with_notes_only_is_not_a_lost_log(con):
     classes[("report", 2)] = classes[("report", 1)]
     end_sheet = _log("BH1", "E 412000 N 5320000", 300, [])
     extractions[("report", 2)] = PageExtraction(logs=[end_sheet], coordinate_rows=[])
-    assert cli._store(con, docs, rendered, classes, extractions) == {"report"}
+    assert runner._store(con, docs, rendered, classes, extractions) == {"report"}
     assert not any(i.startswith("log not extracted") for i in store.load_borehole(con, "report:BH1").issues)
 
 
@@ -291,13 +286,13 @@ def test_a_document_cancelled_during_a_run_leaves_nothing_behind(con, monkeypatc
     extractions.update(other[3])
     for d in docs:
         store.save_document(con, d.doc_id, d.path, d.kind, [])  # registered when the run ingested it
-    monkeypatch.setattr(cli, "_missing_credentials", lambda: None)
-    monkeypatch.setattr(cli, "_ingest", lambda *args: rendered)
-    monkeypatch.setattr(cli, "_parallel", lambda fn, pages, label, progress=None: classes if label == "classify" else {})
-    monkeypatch.setattr(cli, "_extract", lambda *args, **kwargs: (extractions, 0))
-    monkeypatch.setattr(cli.coordcheck, "readings", lambda *args: {})
-    cli.run(docs, guard=cli.llm.CallGuard(cancelled=lambda doc_id: doc_id == "upload-x__b"))
+    monkeypatch.setattr(runner, "missing_credentials", lambda: None)
+    monkeypatch.setattr(runner, "_ingest", lambda *args: rendered)
+    monkeypatch.setattr(runner, "_parallel", lambda fn, pages, label, progress=None: classes if label == "classify" else {})
+    monkeypatch.setattr(runner, "_extract", lambda *args, **kwargs: (extractions, 0))
+    monkeypatch.setattr(runner.coordcheck, "readings", lambda *args: {})
+    runner.run(docs, guard=runner.llm.CallGuard(cancelled=lambda doc_id: doc_id == "upload-x__b"))
     assert [r[0] for r in con.execute("SELECT DISTINCT doc_id FROM boreholes")] == ["upload-x__a"]
     assert [r[0] for r in con.execute("SELECT doc_id FROM documents")] == ["upload-x__a"]
-    with pytest.raises(cli.llm.Cancelled):
-        cli.run(docs, guard=cli.llm.CallGuard(cancelled=lambda doc_id: True))
+    with pytest.raises(runner.llm.Cancelled):
+        runner.run(docs, guard=runner.llm.CallGuard(cancelled=lambda doc_id: True))

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
+import { parseDecimal, words } from '../format'
 import { lithStyle, patternId } from '../lithology'
+import { DEFAULT_FILTERS, hasFilters } from '../url'
 import type { Filters, RangeFilter, StatusFilter } from '../types'
 
 const STATUS: [StatusFilter, string][] = [
@@ -10,7 +12,7 @@ const LAB: [string, string, string][] = [
   ['ucs', 'UCS', 'MPa'], ['cai', 'CAI', ''], ['tensile_strength', 'Tensile strength', 'MPa'],
   ['point_load_index', 'Point load Is50', 'MPa'], ['water_content', 'Water content', '%'],
 ]
-const labName = (key: string) => LAB.find(([k]) => k === key)?.[1] ?? key.replaceAll('_', ' ')
+const labName = (key: string) => LAB.find(([k]) => k === key)?.[1] ?? words(key)
 const labUnit = (key: string) => LAB.find(([k]) => k === key)?.[2] ?? ''
 
 type Menu = 'status' | 'position' | 'lithology' | 'lab' | 'ground'
@@ -33,11 +35,6 @@ const materialText = (m: string) => {
   return `${group[0].toUpperCase()}${group.slice(1)} ≥ ${metres} m in ${from}–${to} m`
 }
 
-const toNumber = (v: string) => {
-  const n = Number(v.replace(',', '.'))
-  return v.trim() === '' || !Number.isFinite(n) ? null : n
-}
-
 /** Decimal input that keeps what is typed ("2.", "1,5") while passing the parsed number on. */
 function NumberField({ value, onChange, placeholder, label }: {
   value: number | null; onChange: (v: number | null) => void; placeholder: string; label: string
@@ -46,11 +43,11 @@ function NumberField({ value, onChange, placeholder, label }: {
   const [seen, setSeen] = useState(value)
   if (value !== seen) {  // changed from outside, e.g. Reset or browser Back
     setSeen(value)
-    if (toNumber(text) !== value) setText(value == null ? '' : String(value))
+    if (parseDecimal(text) !== value) setText(value == null ? '' : String(value))
   }
   return (
     <input inputMode="decimal" value={text} placeholder={placeholder} aria-label={label}
-      onChange={(e) => { setText(e.target.value); setSeen(toNumber(e.target.value)); onChange(toNumber(e.target.value)) }} />
+      onChange={(e) => { setText(e.target.value); setSeen(parseDecimal(e.target.value)); onChange(parseDecimal(e.target.value)) }} />
   )
 }
 
@@ -97,10 +94,11 @@ interface Props {
   lithologies: [string, number][]
   /** Name of the document group the filter narrows to: its project, else the group itself. */
   groupLabel: string | null
+  onShowTunnels: () => void
 }
 
 /** Filter pills; each opens a dropdown below the row. */
-export function FilterBar({ filters, setFilters, lithologies, groupLabel }: Props) {
+export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShowTunnels }: Props) {
   const [open, setOpen] = useState<Menu | null>(null)
   const [top, setTop] = useState(0)
   const root = useRef<HTMLDivElement>(null)
@@ -118,8 +116,7 @@ export function FilterBar({ filters, setFilters, lithologies, groupLabel }: Prop
   const { lithology: liths, lab } = filters
   const lithName = (key: string) => lithStyle(key).label
   const ground = filters.rockMax != null || filters.waterMax != null || filters.material.length > 0
-  const active = filters.status !== 'all' || filters.minPosition != null || liths.length > 0 || lab.length > 0 ||
-    filters.group != null || ground
+  const active = hasFilters({ ...filters, q: '' })
   const [draft, setDraft] = useState({ group: 'sand', from: 0, to: 20, metres: 5 })
 
   function pill(menu: Menu, label: string, on: boolean) {
@@ -163,6 +160,7 @@ export function FilterBar({ filters, setFilters, lithologies, groupLabel }: Prop
         {lithologies.length > 0 && pill('lithology', liths.length ? summary(liths, lithName, false) : 'Lithology', liths.length > 0)}
         {pill('lab', lab.length ? summary(lab, labName, true) : 'Lab value', lab.length > 0)}
         {pill('ground', 'Ground', ground)}
+        <button className="pill" onClick={onShowTunnels}>Tunnels</button>
         {filters.rockMax != null && (
           <button className="pill pill-on" onClick={() => set({ rockMax: null })} aria-label={`Remove rock head at most ${filters.rockMax} m`}>
             Rock head ≤ {filters.rockMax} m <span aria-hidden="true">×</span>
@@ -187,7 +185,7 @@ export function FilterBar({ filters, setFilters, lithologies, groupLabel }: Prop
         )}
         {active && (
           <button className="pill-reset" onClick={() => {
-            set({ status: 'all', minPosition: null, lithology: [], lab: [], group: null, rockMax: null, waterMax: null, material: [] })
+            setFilters((f) => ({ ...DEFAULT_FILTERS, q: f.q }))
             setOpen(null)
           }}>Reset</button>
         )}

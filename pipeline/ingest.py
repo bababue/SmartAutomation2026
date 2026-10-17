@@ -52,7 +52,8 @@ def _docx_export(path: Path) -> bool:
     return path.suffix.lower() == ".pdf" and any(path.with_suffix(ext).exists() for ext in (".docx", ".DOCX"))
 
 
-def discover(dataset_dir: Path = config.DATASET_DIR) -> list[SourceDoc]:
+def discover(dataset_dir: Path | None = None) -> list[SourceDoc]:
+    dataset_dir = dataset_dir or config.DATASET_DIR
     docs, used = [], set()
     for path in sorted(dataset_dir.rglob("*")):
         if path.is_file() and path.suffix.lower() in SUPPORTED and not _docx_export(path):
@@ -98,10 +99,11 @@ def _docx_images(path: Path) -> list[tuple[bytes, str]]:
     return images
 
 
-def converted_pdf(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR) -> Path | None:
+def converted_pdf(doc: SourceDoc, dataset_dir: Path | None = None) -> Path | None:
     """PDF export of a DOCX: under CONVERTED_DIR, or saved next to the DOCX with the same name."""
     if doc.kind != "docx":
         return None
+    dataset_dir = dataset_dir or config.DATASET_DIR
     for path in (config.CONVERTED_DIR / Path(doc.path).with_suffix(".pdf"), (dataset_dir / doc.path).with_suffix(".pdf")):
         if path.exists():
             return path
@@ -154,7 +156,8 @@ def _text_pages(text: str) -> pymupdf.Document:
     return pymupdf.open(stream=buf.getvalue(), filetype="pdf")
 
 
-def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool = False) -> list[PageImage]:
+def render(doc: SourceDoc, dataset_dir: Path | None = None) -> list[PageImage]:
+    dataset_dir = dataset_dir or config.DATASET_DIR
     out_dir = config.PAGES_DIR / doc.doc_id
     manifest = out_dir / "manifest.json"
     src = dataset_dir / doc.path
@@ -167,11 +170,11 @@ def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool =
     marker = out_dir / "source.txt"
     if marker.exists():
         recorded = marker.read_text(encoding="utf-8").splitlines() + [""]
-        # Markers written before fingerprints only name the source.
+        # A marker without a fingerprint line names the source only.
         same_source = recorded[0] == source and (not recorded[1] or recorded[1] == fingerprint)
     else:
         same_source = converted is None
-    if manifest.exists() and same_source and not force:
+    if manifest.exists() and same_source:
         return [PageImage(**p) for p in json.loads(manifest.read_text(encoding="utf-8"))]
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("*.jpg"):

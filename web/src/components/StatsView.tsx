@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { fetchStatsDetail } from '../api'
+import { words } from '../format'
 import { lithStyle, patternId } from '../lithology'
+import { hasFilters } from '../url'
 import type { Filters, StatsDetail } from '../types'
 
 interface Props {
@@ -18,12 +20,6 @@ const SEVERITY: Record<StatsDetail['findings'][number]['severity'], string> = {
 const LITH_ROWS = 10
 const n = (v: number) => v.toLocaleString('en')
 const pct = (part: number, whole: number) => (whole ? Math.round((100 * part) / whole) : 0)
-const words = (code: string) => code.replace(/_/g, ' ')
-
-function filtered(f: Filters) {
-  return Boolean(f.q.trim() || f.lithology.length || f.lab.length || f.minPosition != null || f.status !== 'all' || f.group ||
-    f.rockMax != null || f.waterMax != null || f.material.length)
-}
 
 /** One stacked bar of shares, each part labelled with its count beside the bar (colour is never the only cue). */
 function Shares({ parts, label }: { parts: { key: string; label: string; value: number; color: string }[]; label: string }) {
@@ -87,7 +83,7 @@ export function StatsView({ filters, onShowGroup, onReviewAudit, onClose }: Prop
           <button className="btn" onClick={onClose}>Back to map</button>
         </div>
         <p className="muted">
-          {filtered(filters) ? 'For the records the current filters select' : 'All records in the database'}, holes without a
+          {hasFilters(filters) ? 'For the records the current filters select' : 'All records in the database'}, holes without a
           position included. Change the filters in the list to narrow it.
         </p>
       </header>

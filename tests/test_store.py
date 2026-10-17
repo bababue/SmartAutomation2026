@@ -27,16 +27,6 @@ def record(bid="rep:BH01", name="BH-01", top_clay=4.5, ucs=42.0):
     return bh
 
 
-@pytest.fixture()
-def con(tmp_path, monkeypatch):
-    path = tmp_path / "s.sqlite"
-    monkeypatch.setattr(config, "DB_PATH", path)
-    monkeypatch.setattr(store.connect, "__defaults__", (path,))
-    c = store.connect(path)
-    yield c
-    c.close()
-
-
 def test_projections_are_queryable(con):
     store.save_borehole(con, record())
     rid = con.execute("SELECT rid FROM boreholes").fetchone()[0]
@@ -67,6 +57,29 @@ def test_id_change_keeps_uid_corrections_and_review_history(con):
     assert con.execute("SELECT uid FROM boreholes WHERE id = 'rep:BH1'").fetchone()[0] == uid
     assert [e["decision"] for e in store.review_log(con, "rep:BH1")] == ["rejected"]
     assert store.orphan_corrections(con) == []
+    bh = store.load_borehole(con, "rep:BH1")  # the correction changed what the reviewer rejected
+    assert bh.review_status == ReviewStatus.pending_review
+    assert bh.score_reasons[0] == "Data changed since the rejected decision by Ana"
+
+
+@pytest.mark.parametrize("decision", [ReviewStatus.approved, ReviewStatus.rejected])
+def test_id_change_keeps_the_decision_on_unchanged_content(con, decision):
+    store.save_borehole(con, record())
+    store.record_review(con, "rep:BH01", decision, "Ana", "checked")
+    store.delete_document_boreholes(con, "rep")
+    store.save_borehole(con, record(bid="rep:BH1"))
+    bh = store.load_borehole(con, "rep:BH1")
+    assert (bh.review_status, bh.reviewed_by, bh.review_comment) == (decision, "Ana", "checked")
+    assert bh.reviewed_at is not None
+
+
+def test_id_change_keeps_a_reopened_record_open(con):
+    store.save_borehole(con, record())
+    store.record_review(con, "rep:BH01", ReviewStatus.rejected, "Ana", None)
+    store.record_review(con, "rep:BH01", ReviewStatus.pending_review, "Ben", None)
+    store.delete_document_boreholes(con, "rep")
+    store.save_borehole(con, record(bid="rep:BH1"))
+    assert store.load_borehole(con, "rep:BH1").review_status != ReviewStatus.rejected
 
 
 def test_versions_only_for_changed_content_and_review_revision(con):
@@ -161,3 +174,32 @@ def test_lab_projection_migration_preserves_reviews(con):
         assert store.load_borehole(migrated, bh.borehole_id).review_status == ReviewStatus.approved
     finally:
         migrated.close()
+
+
+def test_demo_data_refuses_the_real_database(con):
+    from fixtures import demo_data
+    store.save_borehole(con, record())
+    with pytest.raises(SystemExit, match="DB_PATH=data/demo.sqlite"):
+        demo_data.main()
+    assert con.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 1
+
+
+def test_reset_keeps_review_decisions(con):
+    store.save_borehole(con, record())
+    store.record_review(con, "rep:BH01", ReviewStatus.rejected, "Ana", None)
+    store.reset(con)
+    assert con.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 0
+    assert con.execute("SELECT decision FROM review_events").fetchone()[0] == "rejected"
+
+
+def test_share_package_without_git(con, tmp_path, monkeypatch):
+    import argparse
+    import subprocess
+    from pipeline.__main__ import cmd_share
+
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+    monkeypatch.setattr(subprocess, "run", no_git)
+    out = tmp_path / "pkg"
+    cmd_share(argparse.Namespace(out=str(out), no_pages=True, with_cache=False))
+    assert "commit unknown" in (out / "README.md").read_text()

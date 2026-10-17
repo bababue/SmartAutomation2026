@@ -32,6 +32,14 @@ def test_usage_of_all_rounds_is_cached_and_priced(tmp_path, monkeypatch):
     assert usd == pytest.approx((2_000 * 4 + 1_000 * 20 + 2_000 * 5 + 2_000 * 0.4) / 1e6)
 
 
+def test_measured_costs_include_retries_and_coordinate_readings(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
+    for stage in ("extract", "extract-retry", "coords"):
+        (tmp_path / stage / "d").mkdir(parents=True)
+        (tmp_path / stage / "d" / "0001.json").write_text(json.dumps({"usage": {"m": {"cost_usd": 0.5}}}))
+    assert llm.measured_costs() == {"extract": (1, 0.5), "extract-retry": (1, 0.5), "coords": (1, 0.5)}
+
+
 def test_unknown_model_has_no_price():
     tokens = dict.fromkeys(llm.USAGE_FIELDS, 10)
     assert llm.cost_usd({"some-other-model": tokens}) is None

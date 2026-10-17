@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { detailSheetRect } from '../dom'
 
 const MIN = 480
 
@@ -8,7 +9,7 @@ const clamp = (width: number) => Math.round(Math.max(MIN, Math.min(width, window
 export function SheetResizer({ onResize }: { onResize: (width: number) => void }) {
   const [active, setActive] = useState(false)
 
-  const width = () => document.querySelector('.detail')?.getBoundingClientRect().width ?? MIN
+  const width = () => detailSheetRect()?.width ?? MIN
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
     e.preventDefault()  // no text selection while dragging

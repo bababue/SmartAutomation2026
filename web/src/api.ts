@@ -1,5 +1,6 @@
 import { encodeRange } from './url'
-import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadStatus, DuplicateFile, LlmUsage } from './types'
+import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, LayerStrips, QueueItem,
+  QueuePage, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob, UploadStatus, LlmUsage } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -52,7 +53,7 @@ export function fetchBoreholesById(ids: string[], signal?: AbortSignal): Promise
   return request(`/api/boreholes?${params}`, { signal })
 }
 
-export function fetchLayerStrips(bbox: string, signal?: AbortSignal): Promise<{ items: { id: string; strip: BoreholeSummary['strip'] }[] }> {
+export function fetchLayerStrips(bbox: string, signal?: AbortSignal): Promise<LayerStrips> {
   const params = new URLSearchParams({ fields: 'layers', bbox })
   return request(`/api/boreholes?${params}`, { signal })
 }
@@ -65,7 +66,7 @@ export const fetchSimilar = (id: string, signal?: AbortSignal) =>
 export const fetchStats = () => request<Stats>('/api/stats')
 export const fetchStatsDetail = (f: Filters, signal?: AbortSignal) =>
   request<StatsDetail>(`/api/stats/detail?${filterParams(f)}`, { signal })
-export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200, audit = false): Promise<{ items: QueueItem[]; total: number }> {
+export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200, audit = false): Promise<QueuePage> {
   const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}${audit ? '&audit=true' : ''}`, { signal })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   const items = (await res.json()) as QueueItem[]
@@ -74,7 +75,7 @@ export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit 
 export const fetchCrsGroups = (signal?: AbortSignal) => request<CrsGroup[]>('/api/review-queue/crs-groups', { signal })
 
 export function postCorrection(id: string, kind: CorrectionKind, payload: Record<string, unknown>, reviewer: string,
-  scope: 'borehole' | 'document' = 'borehole') {
+  scope: CorrectionScope = 'borehole') {
   return request<DetailUpdate & { updated: string[] }>(`/api/boreholes/${enc(id)}/corrections`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -95,8 +96,7 @@ export function postReview(id: string, decision: ReviewStatus, reviewer: string,
 export function postUpload(files: File[]) {
   const body = new FormData()
   files.forEach((f) => body.append('files', f))
-  return request<{ job_id: string; pages: number; files: string[]; skipped: string[]; duplicates: DuplicateFile[] }>(
-    '/api/upload', { method: 'POST', body })
+  return request<UploadJob>('/api/upload', { method: 'POST', body })
 }
 
 /** files: paths as the upload reported them; none cancels the whole batch. */
@@ -108,3 +108,6 @@ export const cancelUpload = (jobId: string, files?: string[]) =>
 export const fetchLlmUsage = () => request<LlmUsage>('/api/llm/usage?limit=1')
 
 export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/upload/${enc(jobId)}`)
+
+/** Download link for the released records. */
+export const exportUrl = (format: 'xlsx' | 'csv') => `/api/export.${format}`
