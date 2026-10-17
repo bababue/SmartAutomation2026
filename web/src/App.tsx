@@ -299,7 +299,7 @@ export default function App() {
           <span className="visually-hidden">Search boreholes</span>
           <input
             type="search"
-            placeholder="Search names, projects, places or layer descriptions, e.g. granite"
+            placeholder="Search names, projects, places or layer descriptions"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -310,13 +310,13 @@ export default function App() {
           {uploadNote && <p className="upload-note" role="status" title={uploadNote}>{uploadNote}</p>}
           {stats && (
             <p className="stats">
-              <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes
+              <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> of{' '}
+              <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes released
               {stats.boreholes > stats.located && (
                 <span className="muted" title="Not on the map or in the list until a reviewer sets the position">
                   {' '}({(stats.boreholes - stats.located).toLocaleString('en')} without position)
                 </span>
-              )},{' '}
-              <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> released
+              )}
             </p>
           )}
           <AppMenu inReview={view === 'review'} uploading={uploading} dark={dark}
@@ -341,7 +341,7 @@ export default function App() {
           selectedId={selectedId} onSelect={setSelectedId} loading={loading} sectionIds={sectionIds} onToggleSection={toggleSection} />
         {!loading && data.total != null && data.features.length < data.total && (
           <button className="btn load-more" onClick={loadMore} disabled={loadingMore}>
-            {loadingMore ? 'Loading…' : `Show ${Math.min(200, data.total - data.features.length)} more (${data.features.length.toLocaleString('en')} of ${data.total.toLocaleString('en')} shown)`}
+            {loadingMore ? 'Loading…' : 'Show more'}
           </button>
         )}
       </aside>
@@ -353,7 +353,6 @@ export default function App() {
           <span><i className="dot dot-medium" /> waiting for review</span>
           <span><i className="dot dot-low" /> rejected</span>
           <span><i className="dot dot-ring" /> approximate position</span>
-          <span>3D columns: layer heights at 1:1 scale; patterns show lithology, top cap shows release state</span>
         </div>
         {sectionFeatures.length > 0 && (
           <SectionView
