@@ -99,15 +99,15 @@ interface Props {
   setFilters: Dispatch<SetStateAction<Filters>>
   /** Lithology keys with match counts, most frequent first. */
   lithologies: [string, number][]
-  /** Name of the document group the filter narrows to: its project, else the group itself. */
-  groupLabel: string | null
   onShowTunnels: () => void
+  onShowReview: () => void
+  onCloseReview?: () => void
   /** Review mode: only the filters of the waiting records, by position source and finding. */
   review?: { filters: ReviewFilters; onChange: (filters: ReviewFilters) => void; findings: FindingFacet[] }
 }
 
 /** Filter pills; each opens a dropdown below the row. */
-export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShowTunnels, review }: Props) {
+export function FilterBar({ filters, setFilters, lithologies, onShowTunnels, onShowReview, onCloseReview, review }: Props) {
   const [open, setOpen] = useState<Menu | null>(null)
   const [top, setTop] = useState(0)
   const root = useRef<HTMLDivElement>(null)
@@ -172,19 +172,25 @@ export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShow
     <div className="filters" ref={root}>
       {rf ? (
       <div className="filter-bar" role="group" aria-label="Review filters">
+        {onCloseReview && <button className="pill pill-on pill-mode" onClick={onCloseReview} aria-label="Close review and show boreholes">
+          Review <span aria-hidden="true">×</span>
+        </button>}
         {pill('position', rf.position == null ? 'Position' : POSITION.find(([p]) => p === rf.position)![1], rf.position != null)}
         {pill('findings', rf.finding ? findingLabel(rf.finding) : 'Findings', rf.finding != null)}
         {(rf.position != null || rf.finding != null) && (
           <button className="pill-reset" onClick={() => { setReview({ position: null, finding: null }); setOpen(null) }}>Reset</button>
         )}
       </div>
-      ) : (
+      ) : (<>
+      <div className="filter-bar filter-mode-row" role="group" aria-label="Views">
+        <button className="pill" onClick={onShowTunnels}>Tunnels</button>
+        <button className="pill" onClick={onShowReview}>Review</button>
+      </div>
       <div className="filter-bar" role="group" aria-label="Filters">
         {pill('status', `${statusLabel}${scoreLabel}`, filters.status !== 'all' || scored)}
         {lithologies.length > 0 && pill('lithology', liths.length ? summary(liths, lithName, false) : 'Lithology', liths.length > 0)}
         {pill('lab', lab.length ? summary(lab, labName, true) : 'Lab value', lab.length > 0)}
         {pill('ground', 'Ground', ground)}
-        <button className="pill" onClick={onShowTunnels}>Tunnels</button>
         {filters.rockMax != null && (
           <button className="pill pill-on" onClick={() => set({ rockMax: null })} aria-label={`Remove rock head at most ${filters.rockMax} m`}>
             Rock head ≤ {filters.rockMax} m <span aria-hidden="true">×</span>
@@ -201,12 +207,6 @@ export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShow
             {materialText(m)} <span aria-hidden="true">×</span>
           </button>
         ))}
-        {filters.group != null && (
-          <button className="pill pill-on" onClick={() => set({ group: null })} aria-label={`Show all projects, not only ${groupLabel}`}
-            title="Show all projects">
-            Project: {groupLabel} <span aria-hidden="true">×</span>
-          </button>
-        )}
         {active && (
           <button className="pill-reset" onClick={() => {
             setFilters((f) => ({ ...DEFAULT_FILTERS, q: f.q }))
@@ -214,7 +214,7 @@ export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShow
           }}>Reset</button>
         )}
       </div>
-      )}
+      </>)}
 
       {open && (
         <div className="filter-menu" id="filter-menu" style={{ top }}>

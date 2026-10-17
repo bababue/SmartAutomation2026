@@ -7,13 +7,14 @@ interface Props {
   boreholes: Map<string, Feature>
   selectedId: string | null
   onSelect: (id: string) => void
+  onCreate: () => void
   onShowBoreholes: () => void
 }
 
 const formatLength = (metres: number) => metres >= 1000 ? `${(metres / 1000).toFixed(2)} km` : `${Math.round(metres)} m`
 
-export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onShowBoreholes }: Props) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onCreate, onShowBoreholes }: Props) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const unassigned: SavedTunnel[] = []
   const byProject = new Map<string, SavedTunnel[]>()
   for (const tunnel of tunnels) {
@@ -28,7 +29,7 @@ export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onShowBor
   ]
 
   function toggle(group: string) {
-    setCollapsed((current) => {
+    setExpanded((current) => {
       const next = new Set(current)
       if (!next.delete(group)) next.add(group)
       return next
@@ -38,14 +39,15 @@ export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onShowBor
   return <>
     <div className="filters tunnel-tabs">
       <div className="filter-bar" role="group" aria-label="Map content">
-        <button className="pill pill-on" onClick={onShowBoreholes} aria-label="Close tunnels and show boreholes">
+        <button className="pill pill-on pill-mode" onClick={onShowBoreholes} aria-label="Close tunnels and show boreholes">
           Tunnels <span aria-hidden="true">×</span>
         </button>
+        <button className="pill mode-add" onClick={onCreate}>+ New tunnel</button>
       </div>
     </div>
     {tunnels.length ? <ul className="tunnel-results">
       {groups.map((group) => {
-        const open = group.tunnels.some((tunnel) => tunnel.id === selectedId) || !collapsed.has(group.key)
+        const open = group.tunnels.some((tunnel) => tunnel.id === selectedId) || expanded.has(group.key)
         return <li key={group.key} className="result-group">
           <div className="group-head">
             <button className="group-toggle" onClick={() => toggle(group.key)} aria-expanded={open}>
@@ -65,6 +67,6 @@ export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onShowBor
           </ul>}
         </li>
       })}
-    </ul> : <div className="empty"><p>No tunnels yet.</p><p className="muted">Choose New tunnel from the menu to draw an alignment.</p></div>}
+    </ul> : <div className="empty"><p>No tunnels yet.</p><p className="muted">Use the plus button above to draw an alignment.</p></div>}
   </>
 }
