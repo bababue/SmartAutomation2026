@@ -155,7 +155,15 @@ A different location works too: set `DATASET_DIR` (see Configuration).
 
 ### 5. Choose how the pipeline talks to Claude
 
-**Option A – Anthropic API key (recommended).** Create a key in the Claude Console (platform.claude.com →
+**Team setup.** The team runs Claude Haiku 5.5 via OpenRouter (Option C below): in a comparison on the
+same log pages it matched Opus on every layer boundary at about 3% of the cost. Copy the settings and add
+the OpenRouter key (from Marvin, never committed):
+
+```bash
+cp .env.example .env   # then replace sk-or-... with the key
+```
+
+**Option A – Anthropic API key.** Create a key in the Claude Console (platform.claude.com →
 API Keys; it starts with `sk-ant-api03-`) and put it into `.env`, which is git-ignored:
 
 ```bash
