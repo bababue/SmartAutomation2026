@@ -342,14 +342,15 @@ class Review(BaseModel):
     decision: Literal["approved", "rejected", "pending_review"]
     reviewer: str = Field(min_length=1, max_length=80)
     comment: str | None = Field(None, max_length=2000)
-    content_hash: str | None = Field(None, description="Version the reviewer saw; refused if it changed since")
-    review_revision: int | None = Field(None, description="Review state the reviewer saw; refused if another "
-                                        "decision was stored since")
+    content_hash: str = Field(min_length=1, description="Version the reviewer saw; refused if it changed since")
+    review_revision: int = Field(description="Review state the reviewer saw; refused if another decision was "
+                                 "stored since")
 
 
-def _content_hash(con: sqlite3.Connection, borehole_id: str) -> str | None:
-    row = con.execute("SELECT content_hash FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
-    return row["content_hash"] if row else None
+def _review_state(con: sqlite3.Connection, borehole_id: str) -> dict:
+    """What a client sends back with its next decision on this record."""
+    row = con.execute("SELECT content_hash, review_revision FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
+    return {"content_hash": row["content_hash"], "review_revision": row["review_revision"]}
 
 
 @app.post("/api/boreholes/{borehole_id:path}/review")
@@ -361,9 +362,8 @@ def review(borehole_id: str, body: Review, con: DB):
         raise HTTPException(409, "the record changed since you opened it; reload it and check again")
     if bh is None:
         raise HTTPException(404, "borehole not found")
-    revision = con.execute("SELECT review_revision FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()[0]
     return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
-            "content_hash": _content_hash(con, borehole_id), "review_revision": revision}
+            **_review_state(con, borehole_id)}
 
 
 class CrsFix(BaseModel):
@@ -523,7 +523,7 @@ def correct(borehole_id: str, body: Correction, con: DB):
     bh = store.load_borehole(con, borehole_id)
     return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
             "corrections": store.corrections_for(con, borehole_id), "blocking": _blocking(bh), "updated": updated,
-            "content_hash": _content_hash(con, borehole_id)}
+            **_review_state(con, borehole_id)}
 
 
 # After the sub-routes: the path converter would also match '<id>/similar'.
@@ -543,14 +543,15 @@ def get_borehole(borehole_id: str, con: DB):
         for f, p in sorted(pages, key=lambda x: (x[0], x[1] or 0))
         if f in docs and (docs[f], p) in stored
     ]
-    meta = con.execute("SELECT uid, version_id, review_revision FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
+    meta = con.execute("SELECT uid, version_id, content_hash, review_revision FROM boreholes WHERE id = ?",
+                       (borehole_id,)).fetchone()
     return {
         "borehole": bh.model_dump(mode="json"),
         "source_pages": source_pages,
         "review_log": store.review_log(con, borehole_id),
         "corrections": store.corrections_for(con, borehole_id, meta["uid"]),
         "blocking": _blocking(bh),
-        "content_hash": _content_hash(con, borehole_id),
+        "content_hash": meta["content_hash"],
         "uid": meta["uid"], "version_id": meta["version_id"], "review_revision": meta["review_revision"],
         "threshold": config.AUTO_APPROVE_THRESHOLD,
     }

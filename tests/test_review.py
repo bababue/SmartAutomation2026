@@ -182,13 +182,21 @@ def test_review_api(con):
     store.save_borehole(con, bh)
     client = TestClient(app)
     assert [r["id"] for r in client.get("/api/review-queue").json()["items"]] == ["demo:BH1"]
-    res = client.post("/api/boreholes/demo:BH1/review", json={"decision": "approved", "reviewer": "Anna"})
+    decision = {"decision": "approved", "reviewer": "Anna"}
+    assert client.post("/api/boreholes/demo:BH1/review", json=decision).status_code == 422  # not bound to a version
+    seen = client.get("/api/boreholes/demo:BH1").json()
+    stale = {**decision, "content_hash": seen["content_hash"], "review_revision": seen["review_revision"] + 1}
+    assert client.post("/api/boreholes/demo:BH1/review", json=stale).status_code == 409
+    res = client.post("/api/boreholes/demo:BH1/review", json={
+        **decision, "content_hash": seen["content_hash"], "review_revision": seen["review_revision"]})
     assert res.status_code == 200
+    assert res.json()["review_revision"] == seen["review_revision"] + 1
     assert res.json()["review_log"][0]["reviewer"] == "Anna"
     assert client.get("/api/review-queue").json() == {"items": [], "total": 0}
     released = client.get("/api/boreholes", params={"status": "released"}).json()["features"]
     assert [f["properties"]["id"] for f in released] == ["demo:BH1"]
-    assert client.post("/api/boreholes/missing/review", json={"decision": "approved", "reviewer": "A"}).status_code == 404
+    assert client.post("/api/boreholes/missing/review", json={**decision, "content_hash": "x",
+                                                               "review_revision": 0}).status_code == 404
 
 
 def test_lithology_carried_over_sheet_break_only():

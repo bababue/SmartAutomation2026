@@ -79,7 +79,7 @@ export function postCorrection(id: string, kind: CorrectionKind, payload: Record
 }
 
 export function postReview(id: string, decision: ReviewStatus, reviewer: string, comment: string | null,
-  contentHash: string | null = null, reviewRevision: number | null = null) {
+  contentHash: string, reviewRevision: number) {
   return request<DetailUpdate>(`/api/boreholes/${enc(id)}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

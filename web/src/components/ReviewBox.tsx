@@ -45,7 +45,7 @@ export function ReviewBox({ detail, onChange, nav, children, findings }: Props) 
     setError(null)
     try {
       saveReviewer(reviewer.trim())
-      onChange(await postReview(bh.borehole_id, decision, reviewer.trim(), comment.trim() || null, detail.content_hash ?? null, detail.review_revision ?? null))
+      onChange(await postReview(bh.borehole_id, decision, reviewer.trim(), comment.trim() || null, detail.content_hash, detail.review_revision))
       setComment('')
       if (nav && decision !== 'pending_review') nav.advance()
     } catch (e) {

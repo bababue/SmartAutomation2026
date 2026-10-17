@@ -214,14 +214,15 @@ export interface Detail {
   /** Findings that keep the record in the queue whatever its score. */
   blocking: string[]
   /** Version of the content shown; a decision on an outdated version is refused. */
-  content_hash: string | null
+  content_hash: string
   /** Review state the reviewer saw; a decision on an outdated state is refused. */
-  review_revision?: number
+  review_revision: number
   threshold: number
 }
 
 /** What a review decision or a correction changes in the open record. */
-export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log'> & Partial<Pick<Detail, 'corrections' | 'blocking' | 'content_hash' | 'review_revision'>>
+export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log' | 'content_hash' | 'review_revision'>
+  & Partial<Pick<Detail, 'corrections' | 'blocking'>>
 
 export interface Stats {
   boreholes: number
