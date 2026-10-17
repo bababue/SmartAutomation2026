@@ -178,3 +178,14 @@ def test_term_rule_does_not_override_a_named_main_material(con):
             "payload": {"term": "caliche", "primary": "limestone"}}
     knowledge.apply(bh, [rule])
     assert [l.primary.value for l in bh.layers] == ["sand", "limestone"]
+
+
+def test_term_rule_reads_the_main_material_after_a_core_run_offset(con):
+    src = SourceRef(file="r.pdf", page=1)
+    bh = Borehole(borehole_id="r:K1", borehole_name="K1", location=Location(),
+                  layers=[Layer(top_m=5, bottom_m=5.2, description_original="0 - 20 cm, FLINT, grey", primary="quartzite", source=src),
+                          Layer(top_m=5.2, bottom_m=6, description_original="20 - 100 cm, CHALK, some flint", primary="chalk", source=src)])
+    rule = {"kind": "term", "scope_type": "global", "scope_value": None, "confirmations": 1,
+            "payload": {"term": "flint", "primary": "limestone"}}
+    knowledge.apply(bh, [rule])
+    assert [l.primary.value for l in bh.layers] == ["limestone", "chalk"]

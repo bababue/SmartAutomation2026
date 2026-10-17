@@ -32,6 +32,7 @@ from schema.borehole import Borehole, GeorefMethod, Lithology
 
 from . import corrections, store
 from .georef import _apply, _pairs, haversine_km, parse_tokens, resolve_with
+from .scoring import RELATIVE_PIECE
 
 SCOPES = ("document", "project", "region", "global")
 KINDS = ("crs", "term", "note")
@@ -258,7 +259,9 @@ def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str
     terms = [k for k in items if k["kind"] == "term"]  # most specific scope first
     for layer in bh.layers:
         # The main material is named first ('CALICHE : grey, ...'); 'SAND, trace of caliche' stays sand.
-        leading = re.split(r"[:,;(]", layer.description_original.lstrip("*- "), maxsplit=1)[0]
+        # Core logs put the piece's offset in the run before it ('0 - 21 cm, FLINT, ...').
+        text = RELATIVE_PIECE.sub("", layer.description_original).lstrip("*-, ")
+        leading = re.split(r"[:,;(]", text, maxsplit=1)[0]
         for k in terms:
             term, target = k["payload"]["term"], Lithology(k["payload"]["primary"])
             pattern = re.compile(rf"(?<!\w){re.escape(term)}(?!\w)", re.I)
