@@ -1,5 +1,5 @@
 import { encodeRange } from './url'
-import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, LayerStrips, QueueItem,
+import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, LayerStrips, MapPoint,
   QueuePage, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob, UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -39,7 +39,7 @@ export function fetchBoreholes(f: Filters, offset = 0, limit = 200, signal?: Abo
 }
 
 /** Every match as a slim point for the map (no strips or ground models). */
-export function fetchMapPoints(f: Filters, signal?: AbortSignal): Promise<FeatureCollection> {
+export function fetchMapPoints(f: Filters, signal?: AbortSignal): Promise<FeatureCollection<MapPoint>> {
   const params = filterParams(f)
   params.set('fields', 'map')
   return request(`/api/boreholes?${params}`, { signal })
@@ -54,24 +54,19 @@ export function fetchBoreholesById(ids: string[], signal?: AbortSignal): Promise
 }
 
 export function fetchLayerStrips(bbox: string, signal?: AbortSignal): Promise<LayerStrips> {
-  const params = new URLSearchParams({ fields: 'layers', bbox })
-  return request(`/api/boreholes?${params}`, { signal })
+  return request(`/api/boreholes/strips?${new URLSearchParams({ bbox })}`, { signal })
 }
 
 const enc = (id: string) => encodeURIComponent(id)
 
-export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>(`/api/boreholes/${enc(id)}/detail`, { signal })
+export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>(`/api/boreholes/${enc(id)}`, { signal })
 export const fetchSimilar = (id: string, signal?: AbortSignal) =>
   request<SimilarGround>(`/api/boreholes/${enc(id)}/similar`, { signal })
 export const fetchStats = () => request<Stats>('/api/stats')
 export const fetchStatsDetail = (f: Filters, signal?: AbortSignal) =>
   request<StatsDetail>(`/api/stats/detail?${filterParams(f)}`, { signal })
-export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200, audit = false): Promise<QueuePage> {
-  const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}${audit ? '&audit=true' : ''}`, { signal })
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-  const items = (await res.json()) as QueueItem[]
-  return { items, total: Number(res.headers.get('X-Total-Count') ?? items.length) }
-}
+export const fetchQueue = (blocking: boolean, signal?: AbortSignal, limit = 200, audit = false) =>
+  request<QueuePage>(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}${audit ? '&audit=true' : ''}`, { signal })
 export const fetchCrsGroups = (signal?: AbortSignal) => request<CrsGroup[]>('/api/review-queue/crs-groups', { signal })
 
 export function postCorrection(id: string, kind: CorrectionKind, payload: Record<string, unknown>, reviewer: string,
@@ -84,7 +79,7 @@ export function postCorrection(id: string, kind: CorrectionKind, payload: Record
 }
 
 export function postReview(id: string, decision: ReviewStatus, reviewer: string, comment: string | null,
-  contentHash: string | null = null, reviewRevision: number | null = null) {
+  contentHash: string, reviewRevision: number) {
   return request<DetailUpdate>(`/api/boreholes/${enc(id)}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -96,10 +91,10 @@ export function postReview(id: string, decision: ReviewStatus, reviewer: string,
 export function postUpload(files: File[]) {
   const body = new FormData()
   files.forEach((f) => body.append('files', f))
-  return request<UploadJob>('/api/upload', { method: 'POST', body })
+  return request<UploadJob>('/api/uploads', { method: 'POST', body })
 }
 
-export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/upload/${enc(jobId)}`)
+export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/uploads/${enc(jobId)}`)
 
 /** Download link for the released records. */
 export const exportUrl = (format: 'xlsx' | 'csv') => `/api/export.${format}`

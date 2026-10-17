@@ -65,7 +65,7 @@ FIELDS = [  # (sheet, column, description) for the 'Fields' sheet
 
 
 @lru_cache(maxsize=None)
-def _crs_name(epsg: int) -> str:
+def crs_name(epsg: int) -> str:
     try:
         return f"EPSG:{epsg} ({CRS.from_epsg(epsg).name})"
     except CRSError:
@@ -98,7 +98,7 @@ def workbook(records: list[tuple[Borehole, str | None]]) -> bytes:
     meta, logs, samples, runs, spts, water, tests = [], [], [], [], [], [], []
     for bh, source_file in records:
         loc = bh.location
-        crs = _crs_name(loc.crs_epsg) if loc.crs_epsg else loc.crs_proj or (f"as printed: {loc.crs_raw}" if loc.crs_raw else None)
+        crs = crs_name(loc.crs_epsg) if loc.crs_epsg else loc.crs_proj or (f"as printed: {loc.crs_raw}" if loc.crs_raw else None)
         pages = sorted({s.page for s in bh.sources if s.page is not None and (not source_file or s.file == source_file)})
         meta.append([
             bh.borehole_id, bh.borehole_name, bh.location_name, bh.start_date, bh.end_date, bh.project_id,

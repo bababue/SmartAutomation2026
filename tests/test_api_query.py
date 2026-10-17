@@ -3,6 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from api import main
 from api.main import app
 from pipeline import config, store
 from pipeline.scoring import score
@@ -69,7 +70,7 @@ def test_bbox_across_the_antimeridian_and_on_its_edge(client):
 
 def test_map_points_are_slim_and_lists_are_paged(client):
     m = client.get("/api/boreholes?fields=map").json()
-    assert m["total"] == 3 and set(m["features"][0]["properties"]) == {"id", "name", "location_name", "depth", "review_status", "score", "loc_method"}
+    assert m["total"] == 3 and set(m["features"][0]["properties"]) == {"id", "name", "depth", "review_status", "loc_method"}
     page = client.get("/api/boreholes?limit=2&offset=0").json()
     assert page["total"] == 3 and len(page["features"]) == 2
     assert dict(map(tuple, page["facets"]["lithologies"]))["clay"] == 2
@@ -78,17 +79,26 @@ def test_map_points_are_slim_and_lists_are_paged(client):
 
 
 def test_layer_strips_are_limited_to_the_visible_bbox(client):
-    assert client.get("/api/boreholes?fields=layers").status_code == 422
-    result = client.get("/api/boreholes?fields=layers&bbox=179,9,-179,11").json()
+    assert client.get("/api/boreholes/strips").status_code == 422
+    result = client.get("/api/boreholes/strips?bbox=179,9,-179,11").json()
     assert {item["id"]: item["strip"] for item in result["items"]} == {
         "q:A": [[0.0, 12.0, "sand"], [12.0, 30.0, "clay"]],
         "q:B": [[0.0, 5.0, "clay"], [5.0, 20.0, "limestone"]],
     }
 
 
+def test_layer_strips_are_capped(client, monkeypatch):
+    monkeypatch.setattr(main, "STRIPS_LIMIT", 1)
+    assert len(client.get("/api/boreholes/strips?bbox=-180,-90,180,90").json()["items"]) == 1
+
+
 def test_review_queue_pages(client):
-    r = client.get("/api/review-queue?limit=1")
-    assert r.status_code == 200 and int(r.headers["X-Total-Count"]) >= len(r.json())
+    con = store.connect()
+    for bid in ("q:G1", "q:G2"):
+        store.save_borehole(con, hole(bid, 47.0, 8.0, [(0, 5, "sand"), (7, 10, "clay")]))  # gap: waits for review
+    con.close()
+    page = client.get("/api/review-queue?limit=1").json()
+    assert page["total"] == 2 and len(page["items"]) == 1
     assert client.get("/api/corrections/orphans").json() == []
 
 
@@ -96,9 +106,9 @@ def test_review_queue_blocking_only(client):
     con = store.connect()
     store.save_borehole(con, hole("q:G", 47.0, 8.0, [(0, 5, "sand"), (7, 10, "clay")]))  # gap: blocking
     con.close()
-    every = {item["id"] for item in client.get("/api/review-queue").json()}
-    r = client.get("/api/review-queue?blocking=true")
-    assert [item["id"] for item in r.json()] == ["q:G"] and r.headers["X-Total-Count"] == "1"
+    every = {item["id"] for item in client.get("/api/review-queue").json()["items"]}
+    page = client.get("/api/review-queue?blocking=true").json()
+    assert [item["id"] for item in page["items"]] == ["q:G"] and page["total"] == 1
     assert "q:G" in every
 
 
@@ -129,7 +139,7 @@ def test_required_name_cannot_be_cleared(client, value):
     response = client.post("/api/boreholes/q:A/corrections", json={"kind": "field", "reviewer": "Ana",
                             "payload": {"field": "borehole_name", "value": value}})
     assert response.status_code == 422
-    assert client.get("/api/boreholes/q:A/detail").json()["borehole"]["borehole_name"] == "A"
+    assert client.get("/api/boreholes/q:A").json()["borehole"]["borehole_name"] == "A"
 
 
 def test_holes_group_by_document_labelled_with_their_most_frequent_project(client):
@@ -141,8 +151,8 @@ def test_holes_group_by_document_labelled_with_their_most_frequent_project(clien
         store.save_borehole(con, bh)
     con.close()
     groups = {g["group"]: g for g in client.get("/api/boreholes").json()["facets"]["groups"]}
-    assert {g: (v["count"], v["project"], v["project_names"]) for g, v in groups.items()} == {
-        "folder": (4, "Harbour tunnel", 2), "q": (3, None, 0)}
+    assert {g: (v["count"], v["project"]) for g, v in groups.items()} == {
+        "folder": (4, "Harbour tunnel"), "q": (3, None)}
     assert groups["q"]["bbox"] == [-179.5, 10.0, 179.5, 48.0]
     assert ids(client.get("/api/boreholes", params={"group": "folder"})) == ["folder__a:D", "folder__b:E",
                                                                              "folder__b:F", "folder__b:G"]
@@ -165,3 +175,19 @@ def test_statistics_aggregate_the_filtered_records_including_those_without_a_pos
     clay = client.get("/api/stats/detail?lithology=clay:10:").json()
     assert clay["boreholes"] == 1 and dict(clay["lithology_m"])["clay"] == 18.0
     assert client.get("/api/stats/detail?material=sand:0:20:5").status_code == 200  # the ground filters apply too
+
+
+@pytest.mark.parametrize("path", ["q:dir/H", "q%3Adir%2FH"])
+def test_ids_with_colon_and_slash_reach_the_record_and_its_sub_routes(client, path):
+    con = store.connect()
+    store.save_borehole(con, hole("q:dir/H", 47.0, 8.0, [(0, 9, "gravel")]))
+    con.close()
+    assert client.get(f"/api/boreholes/{path}").json()["borehole"]["borehole_id"] == "q:dir/H"
+    assert "similar" in client.get(f"/api/boreholes/{path}/similar").json()
+    fix = {"kind": "field", "reviewer": "Ana", "payload": {"field": "notes", "value": "checked"}}
+    assert client.post(f"/api/boreholes/{path}/corrections", json=fix).status_code == 200
+    detail = client.get(f"/api/boreholes/{path}").json()
+    review = client.post(f"/api/boreholes/{path}/review", json={
+        "decision": "approved", "reviewer": "Ana", "content_hash": detail["content_hash"],
+        "review_revision": detail["review_revision"]})
+    assert review.json()["borehole"]["review_status"] == "approved"

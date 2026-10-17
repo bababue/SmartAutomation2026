@@ -14,14 +14,14 @@ import threading
 import uuid
 import zipfile
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import IO, Annotated, Literal
+from typing import IO, Annotated, Literal, NamedTuple
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from datetime import date as date_type
@@ -32,9 +32,9 @@ from pyproj import CRS
 from pyproj.exceptions import CRSError
 
 from pipeline import config, corrections, evaluate, export, ingest, scoring, store, uploads
-from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
+from schema.borehole import Borehole, LabParameter, Lithology, ReviewStatus
 
-from . import similar
+from . import models, similar
 
 
 @asynccontextmanager
@@ -67,17 +67,17 @@ DB = Annotated[sqlite3.Connection, Depends(db)]
 # otherwise), so it labels a group but does not form one.
 GROUP = "CASE WHEN instr(doc_id, '__') > 0 THEN substr(doc_id, 1, instr(doc_id, '__') - 1) ELSE doc_id END"
 
-LIGHT_COLUMNS = (
-    f"id, name, project, {GROUP} AS grp, location_name, country, lat, lon, depth, elevation, investigation_type, "
-    "confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues, lithologies, strip, ground, "
-    + "(SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file"
-)
+SOURCE_FILE = "(SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file"
+
+LIGHT_COLUMNS = (f"id, name, project, {GROUP} AS grp, location_name, country, lat, lon, depth, elevation, "
+                 "loc_method, score, review_status, strip, ground")
 
 STATUS_GROUPS = {
     "released": ("auto_approved", "approved"),
     "pending": ("pending_review",),
     "rejected": ("rejected",),
 }
+RELEASED = f"review_status IN ({', '.join(repr(s) for s in STATUS_GROUPS['released'])})"
 
 
 def _fts_query(q: str) -> str:
@@ -92,18 +92,17 @@ def _like_escape(value: str) -> str:
 def _group_facet(r: sqlite3.Row, projects: Counter) -> dict:
     """A document group among the matches, labelled with the project name its holes give most often."""
     return {"group": r["grp"], "project": projects.most_common(1)[0][0] if projects else None,
-            "project_names": len(projects), "count": r["total"], "released": r["released"],
+            "count": r["total"], "released": r["released"],
             "bbox": [r["west"], r["south"], r["east"], r["north"]]}
 
 
 def _feature(r: sqlite3.Row) -> dict:
-    props = {k: r[k] for k in r.keys() if k not in ("lat", "lon")}
-    props["strip"] = json.loads(r["strip"]) if r["strip"] else None
-    props["ground"] = json.loads(r["ground"]) if r["ground"] else None
+    props = {k: (json.loads(r[k]) if r[k] else None) if k in ("strip", "ground") else r[k]
+             for k in r.keys() if k not in ("lat", "lon")}
     return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]}, "properties": props}
 
 
-MAP_COLUMNS = "id, name, location_name, lat, lon, depth, review_status, score, loc_method"
+MAP_COLUMNS = "id, name, lat, lon, depth, review_status, loc_method"
 
 
 def _bbox_clause(bbox: str) -> tuple[str, list]:
@@ -140,16 +139,37 @@ def _conditions(values: list[str], name: str) -> list[tuple[str, float | None, f
     return out
 
 
-def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, ids,
-             group=None, located=True) -> tuple[list[str], list]:
-    """WHERE clauses of the list filters; `located`: only holes with a position (the map and the list)."""
-    where, params = ["lat IS NOT NULL"] if located else ["1"], []
+StatusFilter = Literal["all", "released", "pending", "rejected"]
+
+
+class Where(NamedTuple):
+    clauses: list[str]
+    params: list
+
+    def also(self, clause: str, params: Sequence = ()) -> Where:
+        return Where([*self.clauses, clause], [*self.params, *params])
+
+    def sql(self) -> str:
+        return " AND ".join(self.clauses) or "1"
+
+
+def list_filters(
+    q: str | None = None,
+    lithology: list[str] = Query(default_factory=list,
+                                 description="code[:from_m:to_m], e.g. clay:10:20 (a clay layer between 10 and 20 m)"),
+    lab: list[str] = Query(default_factory=list, description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
+    min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
+    status: StatusFilter = "all",
+    group: str | None = Query(None, description="only this document group (see the 'groups' facet)"),
+    rock_head_max: float | None = Query(None, description="rock head at most this deep (m)"),
+    groundwater_max: float | None = Query(None, description="groundwater at most this deep (m)"),
+    material: list[str] = Query(default_factory=list, description="group:from_m:to_m:metres, e.g. sand:0:20:5"),
+) -> Where:
+    """WHERE clauses of the filters the list, the map and the statistics share."""
+    where, params = [], []
     if group:
         where.append(f"{GROUP} = ?")
         params.append(group)
-    if ids:
-        where.append(f"id IN ({','.join('?' * len(ids))})")
-        params += ids
     if q and (fq := _fts_query(q)):
         # Text match, or every search word appears in the source document's file path (e.g. 'report').
         tokens = re.findall(r"\w+", q, flags=re.UNICODE)
@@ -157,13 +177,9 @@ def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, 
         where.append("(rid IN (SELECT rowid FROM boreholes_fts WHERE boreholes_fts MATCH ?) "
                      f"OR doc_id IN (SELECT doc_id FROM documents WHERE {path_match}))")
         params += [fq, *(f"%{_like_escape(t)}%" for t in tokens)]
-    if bbox:
-        clause, values = _bbox_clause(bbox)
-        where.append(clause)
-        params += values
     # Set lookups through the (code, depth) and (parameter, value) indexes. A correlated EXISTS per hole
     # would make SQLite scan every matching layer for every hole (171 s at 50,000 holes).
-    for code, depth_from, depth_to in lithology:  # each lithology somewhere in the hole, within its depth range
+    for code, depth_from, depth_to in _conditions(lithology, "lithology"):  # each within its depth range
         clause = "rid IN (SELECT rid FROM layers WHERE primary_code = ?"
         params.append(code)
         if depth_to is not None:
@@ -173,7 +189,7 @@ def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, 
             clause += " AND bottom_m > ?"
             params.append(depth_from)
         where.append(clause + ")")
-    for parameter, lab_min, lab_max in lab:  # each parameter measured at least once within its range
+    for parameter, lab_min, lab_max in _conditions(lab, "lab"):  # each measured at least once within its range
         clause = "rid IN (SELECT rid FROM lab_values WHERE parameter = ?"
         params.append(parameter)
         if lab_min is not None:
@@ -184,12 +200,6 @@ def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, 
                        "OR qualifier = 'range' AND value_upper >= value AND value_upper <= ?)")
             params += [lab_max, lab_max]
         where.append(clause + ")")
-    if country:
-        where.append("country = ?")
-        params.append(country.upper())
-    if min_depth is not None:
-        where.append("depth >= ?")
-        params.append(min_depth)
     if min_position is not None:
         where.append("loc_confidence >= ?")
         params.append(min_position)
@@ -197,51 +207,52 @@ def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, 
         values = STATUS_GROUPS[status]
         where.append(f"review_status IN ({','.join('?' * len(values))})")
         params += list(values)
-    return where, params
+    try:
+        materials = similar.material_conditions(material)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max, materials)
+    return Where(where + ground_where, params + ground_params)
+
+
+ListFilters = Annotated[Where, Depends(list_filters)]
+
+
+STRIPS_LIMIT = 5000  # the map asks from street zoom on; a wider box gets a part of its holes, not the database
+
+
+@app.get("/api/boreholes/strips")
+def layer_strips(con: DB, bbox: str = Query(description="minLon,minLat,maxLon,maxLat (min > max crosses the antimeridian)")
+                 ) -> models.LayerStrips:
+    """Depth strips of the holes in a map box, for the 3D columns."""
+    clause, params = _bbox_clause(bbox)
+    rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {clause} LIMIT ?", [*params, STRIPS_LIMIT])
+    return models.LayerStrips.model_validate(
+        {"items": [{"id": r["id"], "strip": json.loads(r["strip"]) if r["strip"] else None} for r in rows]})
 
 
 @app.get("/api/boreholes")
 def list_boreholes(
     con: DB,
-    q: str | None = None,
+    filters: ListFilters,
     bbox: str | None = Query(None, description="minLon,minLat,maxLon,maxLat (min > max crosses the antimeridian)"),
-    lithology: list[str] = Query(default_factory=list,
-                                 description="code[:from_m:to_m], e.g. clay:10:20 (a clay layer between 10 and 20 m)"),
-    lab: list[str] = Query(default_factory=list, description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
-    country: str | None = None,
-    min_depth: float | None = None,
-    min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
-    status: Literal["all", "released", "pending", "rejected"] = "all",
     id: list[str] = Query(default_factory=list, max_length=500, description="only these borehole ids"),
-    group: str | None = Query(None, description="only this document group (see the 'groups' facet)"),
-    rock_head_max: float | None = Query(None, description="rock head at most this deep (m)"),
-    groundwater_max: float | None = Query(None, description="groundwater at most this deep (m)"),
-    material: list[str] = Query(default_factory=list, description="group:from_m:to_m:metres, e.g. sand:0:20:5"),
-    fields: Literal["list", "map", "layers"] = Query("list", description="'map': slim points; 'layers': depth strips for visible columns"),
+    fields: Literal["list", "map"] = Query("list", description="'map': slim points of every match"),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
-):
-    """Filtered boreholes. 'map' returns slim GeoJSON points; 'layers' returns strips in a bbox;
-    'list' returns a GeoJSON page with the total, lithology counts and groups (document groups with their most
-    frequent project name, count, released count and bounding box) of all matches, ordered by group."""
-    if fields == "layers" and not bbox:
-        raise HTTPException(422, "bbox is required for layer strips")
-    where, params = _filters(q, bbox, _conditions(lithology, "lithology"), _conditions(lab, "lab"), country,
-                             min_depth, min_position, status, id, group)
-    ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max,
-                                                         similar.material_conditions(material))
-    where, params = where + ground_where, params + ground_params
-    sql_where = " AND ".join(where)
-    if fields == "layers":
-        rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {sql_where}", params).fetchall()
-        return {"items": [{"id": r["id"], "strip": json.loads(r["strip"]) if r["strip"] else None} for r in rows]}
+) -> models.ListPage | models.MapPoints:
+    """Filtered boreholes with a position. 'map' returns slim GeoJSON points of every match; 'list' returns a
+    GeoJSON page with the total, lithology counts and groups (document groups with their most frequent project
+    name, count, released count and bounding box) of all matches, ordered by group."""
+    where = filters.also("lat IS NOT NULL")
+    if bbox:
+        where = where.also(*_bbox_clause(bbox))
+    if id:
+        where = where.also(f"id IN ({','.join('?' * len(id))})", id)
+    sql_where, params = where.sql(), where.params
     if fields == "map":
         rows = con.execute(f"SELECT {MAP_COLUMNS} FROM boreholes WHERE {sql_where}", params).fetchall()
-        return {"type": "FeatureCollection", "total": len(rows), "features": [
-            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]},
-             "properties": {"id": r["id"], "name": r["name"], "location_name": r["location_name"], "depth": r["depth"],
-                            "review_status": r["review_status"], "score": r["score"], "loc_method": r["loc_method"]}}
-            for r in rows]}
+        return models.MapPoints.model_validate({"total": len(rows), "features": [_feature(r) for r in rows]})
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {sql_where}", params).fetchone()[0]
     rows = con.execute(f"SELECT {LIGHT_COLUMNS} FROM boreholes WHERE {sql_where} ORDER BY grp, name, id "
                        "LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
@@ -249,25 +260,26 @@ def list_boreholes(
         f"SELECT primary_code, COUNT(DISTINCT rid) n FROM layers WHERE rid IN (SELECT rid FROM boreholes WHERE {sql_where}) "
         "GROUP BY primary_code ORDER BY n DESC", params).fetchall()
     groups = con.execute(
-        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM(review_status IN ('approved', 'auto_approved')) released, "
+        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM({RELEASED}) released, "
         f"MIN(lon) west, MIN(lat) south, MAX(lon) east, MAX(lat) north FROM boreholes WHERE {sql_where} "
         "GROUP BY grp ORDER BY grp", params).fetchall()
     projects: dict[str, Counter] = {}
     for r in con.execute(f"SELECT {GROUP} AS grp, TRIM(project) AS project, COUNT(*) n FROM boreholes "
                          f"WHERE {sql_where} AND NULLIF(TRIM(project), '') IS NOT NULL GROUP BY grp, project", params):
         projects.setdefault(r["grp"], Counter())[r["project"]] = r["n"]
-    return {"type": "FeatureCollection", "total": total, "offset": offset, "limit": limit,
-            "facets": {"lithologies": [[r["primary_code"], r["n"]] for r in facets],
-                       "groups": [_group_facet(r, projects.get(r["grp"], Counter())) for r in groups]},
-            "features": [_feature(r) for r in rows]}
+    return models.ListPage.model_validate({
+        "total": total, "offset": offset, "limit": limit,
+        "facets": {"lithologies": [[r["primary_code"], r["n"]] for r in facets],
+                   "groups": [_group_facet(r, projects.get(r["grp"], Counter())) for r in groups]},
+        "features": [_feature(r) for r in rows]})
 
 
 @app.get("/api/review-queue")
 def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
                  blocking: bool = Query(False, description="only records with a blocking finding"),
-                 audit: bool = Query(False, description="the release audit sample instead (any status)")):
-    """Everything waiting for a human, weakest first (also records without a position), a page at a time.
-    The total is in the X-Total-Count header so the response stays a plain list."""
+                 audit: bool = Query(False, description="the release audit sample instead (any status)")
+                 ) -> models.QueuePage:
+    """Everything waiting for a human, weakest first (also records without a position), a page at a time."""
     where, params = "review_status = 'pending_review'" + (
         " AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = boreholes.rid AND f.severity = 'blocking')"
         if blocking else ""), []
@@ -276,14 +288,13 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
         where, params = f"uid IN ({','.join('?' * len(uids)) or 'NULL'})", uids
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}", params).fetchone()[0]
     rows = con.execute(
-        "SELECT id, name, project, location_name, country, score, confidence, loc_confidence, loc_method, "
-        "n_layers, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file, reasons "
+        f"SELECT id, name, project, location_name, country, score, n_layers, {SOURCE_FILE}, reasons "
         f"FROM boreholes WHERE {where} ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
         (*params, limit, offset),
     ).fetchall()
     items = [{**{k: r[k] for k in r.keys() if k != "reasons"}, "reasons": json.loads(r["reasons"] or "[]")}
              for r in rows]
-    return JSONResponse(items, headers={"X-Total-Count": str(total)})
+    return models.QueuePage.model_validate({"items": items, "total": total})
 
 
 @app.get("/api/review-queue/crs-groups")
@@ -292,13 +303,12 @@ def crs_groups(con: DB):
     for all of them at once (a document-wide CRS correction)."""
     groups: dict[tuple[str, int], dict] = {}
     rows = con.execute(
-        "SELECT b.id, f.epsg, (SELECT path FROM documents d WHERE d.doc_id = b.doc_id) AS source_file "
-        "FROM findings f JOIN boreholes b ON b.rid = f.rid "
-        "WHERE f.code = 'crs_inferred' AND b.review_status = 'pending_review' ORDER BY b.id"
+        f"SELECT boreholes.id, f.epsg, {SOURCE_FILE} FROM findings f JOIN boreholes ON boreholes.rid = f.rid "
+        "WHERE f.code = 'crs_inferred' AND boreholes.review_status = 'pending_review' ORDER BY boreholes.id"
     )
     for r in rows:
         key = (store.document_group(r["id"]), r["epsg"])
-        g = groups.setdefault(key, {"group": key[0], "epsg": r["epsg"], "name": export._crs_name(r["epsg"]),
+        g = groups.setdefault(key, {"group": key[0], "epsg": r["epsg"], "name": export.crs_name(r["epsg"]),
                                     "count": 0, "borehole_id": r["id"], "source_file": r["source_file"]})
         g["count"] += 1
     # One CRS per document only: if a document has several inferred systems, a person looks at each hole.
@@ -313,35 +323,6 @@ def crs_groups(con: DB):
 def orphan_corrections(con: DB):
     """Reviewer corrections of holes that no current record carries (renamed beyond recognition or gone)."""
     return store.orphan_corrections(con)
-
-
-@app.get("/api/boreholes/{borehole_id:path}/detail")
-def get_borehole(borehole_id: str, con: DB):
-    bh = store.load_borehole(con, borehole_id)
-    if bh is None:
-        raise HTTPException(404, "borehole not found")
-    pages = {(s.file, s.page) for s in bh.sources}
-    files = sorted({f for f, _ in pages})
-    marks = ",".join("?" * len(files))
-    docs = {r["path"]: r["doc_id"] for r in con.execute(f"SELECT doc_id, path FROM documents WHERE path IN ({marks})", files)}
-    stored = {(r["doc_id"], r["page"]) for r in con.execute(
-        f"SELECT doc_id, page FROM pages WHERE doc_id IN ({','.join('?' * len(docs))})", list(docs.values()))}
-    source_pages = [
-        {"file": f, "page": p, "url": f"/api/pages/{docs[f]}/{p}"}
-        for f, p in sorted(pages, key=lambda x: (x[0], x[1] or 0))
-        if f in docs and (docs[f], p) in stored
-    ]
-    meta = con.execute("SELECT uid, version_id, review_revision FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
-    return {
-        "borehole": bh.model_dump(mode="json"),
-        "source_pages": source_pages,
-        "review_log": store.review_log(con, borehole_id),
-        "corrections": store.corrections_for(con, borehole_id, meta["uid"]),
-        "blocking": _blocking(bh),
-        "content_hash": _content_hash(con, borehole_id),
-        "uid": meta["uid"], "version_id": meta["version_id"], "review_revision": meta["review_revision"],
-        "threshold": config.AUTO_APPROVE_THRESHOLD,
-    }
 
 
 @app.get("/api/boreholes/{borehole_id:path}/similar")
@@ -362,18 +343,23 @@ class Review(BaseModel):
     decision: Literal["approved", "rejected", "pending_review"]
     reviewer: str = Field(min_length=1, max_length=80)
     comment: str | None = Field(None, max_length=2000)
-    content_hash: str | None = Field(None, description="Version the reviewer saw; refused if it changed since")
-    review_revision: int | None = Field(None, description="Review state the reviewer saw; refused if another "
-                                        "decision was stored since")
+    content_hash: str = Field(min_length=1, description="Version the reviewer saw; refused if it changed since")
+    review_revision: int = Field(description="Review state the reviewer saw; refused if another decision was "
+                                 "stored since")
 
 
-def _content_hash(con: sqlite3.Connection, borehole_id: str) -> str | None:
-    row = con.execute("SELECT content_hash FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
-    return row["content_hash"] if row else None
+def _record(con: sqlite3.Connection, borehole_id: str) -> dict:
+    """The record with its review log and the state a client sends back with its next decision on it."""
+    row = con.execute("SELECT uid, data, content_hash, review_revision FROM boreholes WHERE id = ?",
+                      (borehole_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "borehole not found")
+    return {"borehole": Borehole.model_validate_json(row["data"]), "review_log": store.review_log(con, borehole_id),
+            "content_hash": row["content_hash"], "review_revision": row["review_revision"], "uid": row["uid"]}
 
 
 @app.post("/api/boreholes/{borehole_id:path}/review")
-def review(borehole_id: str, body: Review, con: DB):
+def review(borehole_id: str, body: Review, con: DB) -> models.ReviewResult:
     try:
         bh = store.record_review(con, borehole_id, ReviewStatus(body.decision), body.reviewer.strip(), body.comment,
                                  body.content_hash, body.review_revision)
@@ -381,9 +367,7 @@ def review(borehole_id: str, body: Review, con: DB):
         raise HTTPException(409, "the record changed since you opened it; reload it and check again")
     if bh is None:
         raise HTTPException(404, "borehole not found")
-    revision = con.execute("SELECT review_revision FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()[0]
-    return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
-            "content_hash": _content_hash(con, borehole_id), "review_revision": revision}
+    return models.ReviewResult.model_validate(_record(con, borehole_id))
 
 
 class CrsFix(BaseModel):
@@ -500,7 +484,7 @@ class Correction(BaseModel):
 
 
 @app.post("/api/boreholes/{borehole_id:path}/corrections")
-def correct(borehole_id: str, body: Correction, con: DB):
+def correct(borehole_id: str, body: Correction, con: DB) -> models.CorrectionResult:
     """Store a reviewer correction and apply it now; later runs re-apply it. A coordinate system can be
     set for all holes of the document at once (scope 'document')."""
     try:
@@ -540,14 +524,35 @@ def correct(borehole_id: str, body: Correction, con: DB):
             if country:
                 store.add_knowledge(con, "region", country, "crs", {"epsg": payload["epsg"]}, "derived",
                                     f"confirmed for {group}", item["reviewer"], evidence=f"document:{group}")
-    bh = store.load_borehole(con, borehole_id)
-    return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
-            "corrections": store.corrections_for(con, borehole_id), "blocking": _blocking(bh), "updated": updated,
-            "content_hash": _content_hash(con, borehole_id)}
+    record = _record(con, borehole_id)
+    return models.CorrectionResult.model_validate({
+        **record, "corrections": store.corrections_for(con, borehole_id, record["uid"]),
+        "blocking": _blocking(record["borehole"]), "updated": updated})
 
 
-@app.post("/api/upload")
-async def upload_documents(files: list[UploadFile] = File(...)):
+# After the sub-routes: the path converter would also match '<id>/similar'.
+@app.get("/api/boreholes/{borehole_id:path}")
+def get_borehole(borehole_id: str, con: DB) -> models.Detail:
+    record = _record(con, borehole_id)
+    bh = record["borehole"]
+    pages = {(s.file, s.page) for s in bh.sources}
+    files = sorted({f for f, _ in pages})
+    marks = ",".join("?" * len(files))
+    docs = {r["path"]: r["doc_id"] for r in con.execute(f"SELECT doc_id, path FROM documents WHERE path IN ({marks})", files)}
+    stored = {(r["doc_id"], r["page"]) for r in con.execute(
+        f"SELECT doc_id, page FROM pages WHERE doc_id IN ({','.join('?' * len(docs))})", list(docs.values()))}
+    source_pages = [
+        {"file": f, "page": p, "url": f"/api/pages/{docs[f]}/{p}"}
+        for f, p in sorted(pages, key=lambda x: (x[0], x[1] or 0))
+        if f in docs and (docs[f], p) in stored
+    ]
+    return models.Detail.model_validate({
+        **record, "source_pages": source_pages, "corrections": store.corrections_for(con, borehole_id, record["uid"]),
+        "blocking": _blocking(bh), "threshold": config.AUTO_APPROVE_THRESHOLD})
+
+
+@app.post("/api/uploads")
+async def upload_documents(files: list[UploadFile] = File(...)) -> models.UploadJob:
     """One batch of files, or zips of them, becomes one document group assembled in a single run, so
     records of one hole spread over several files are combined. Other files in the batch
     (e.g. GIS files) are skipped and reported, not a reason to reject the documents beside them."""
@@ -599,7 +604,7 @@ async def upload_documents(files: list[UploadFile] = File(...)):
         if isinstance(exc, uploads.QueueFull):
             raise HTTPException(503, "the upload queue is full; try again after a document finishes processing") from exc
         raise
-    return {"job_id": job_id, "pages": pages, "files": [Path(d.path).as_posix() for d in docs], "skipped": skipped}
+    return models.UploadJob(job_id=job_id, pages=pages, files=[Path(d.path).as_posix() for d in docs], skipped=skipped)
 
 
 class _ByteBudget:
@@ -705,7 +710,7 @@ def _check_page_count(pages: int) -> None:
         raise HTTPException(413, f"{pages} pages exceeds the {config.MAX_UPLOAD_PAGES}-page upload limit")
 
 
-@app.get("/api/upload/{job_id}")
+@app.get("/api/uploads/{job_id}")
 def upload_status(job_id: str, con: DB) -> uploads.UploadResult:
     job = uploads.result(con, job_id)
     if job is None:
@@ -727,25 +732,13 @@ def page_image(doc_id: str, page: int, con: DB):
 
 
 @app.get("/api/stats")
-def stats(con: DB):
-    total = con.execute("SELECT COUNT(*) n, SUM(lat IS NOT NULL) located, SUM(n_layers) layers FROM boreholes").fetchone()
+def stats(con: DB) -> models.Stats:
+    total = con.execute("SELECT COUNT(*) n, SUM(lat IS NOT NULL) located FROM boreholes").fetchone()
     by_status = {r["review_status"]: r["n"] for r in con.execute(
         "SELECT review_status, COUNT(*) n FROM boreholes GROUP BY review_status")}
-    countries = con.execute(
-        "SELECT country, COUNT(*) n FROM boreholes WHERE country IS NOT NULL GROUP BY country ORDER BY n DESC"
-    ).fetchall()
-    docs = con.execute("SELECT COUNT(*) n, SUM(pages) pages FROM documents").fetchone()
-    return {
-        "boreholes": total["n"],
-        "located": total["located"] or 0,
-        "layers": total["layers"] or 0,
-        "documents": docs["n"],
-        "pages": docs["pages"] or 0,
-        "countries": [dict(r) for r in countries],
-        "status": {s.value: by_status.get(s.value, 0) for s in ReviewStatus},
-        "threshold": config.AUTO_APPROVE_THRESHOLD,
-        "demo": config.DB_PATH.name.startswith("demo"),  # synthetic fixtures, no source pages
-    }
+    return models.Stats(boreholes=total["n"], located=total["located"] or 0,
+                        status={s: by_status.get(s.value, 0) for s in ReviewStatus},
+                        threshold=config.AUTO_APPROVE_THRESHOLD, demo=config.DB_PATH.name.startswith("demo"))
 
 
 # Final depths in the histogram: 5 m bins up to 50 m, everything deeper in one.
@@ -754,26 +747,11 @@ SEVERITY_ORDER = ("blocking", "needs_look", "warning", "info")
 
 
 @app.get("/api/stats/detail")
-def stats_detail(
-    con: DB,
-    q: str | None = None,
-    lithology: list[str] = Query(default_factory=list),
-    lab: list[str] = Query(default_factory=list),
-    min_position: float | None = None,
-    status: Literal["all", "released", "pending", "rejected"] = "all",
-    group: str | None = None,
-    rock_head_max: float | None = None,
-    groundwater_max: float | None = None,
-    material: list[str] = Query(default_factory=list),
-):
+def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
     """Aggregates for the statistics view over the records the list filters select, holes without a position
     included: key figures, release funnel, findings, logged metres per lithology, final depths and groups."""
-    where, params = _filters(q, None, _conditions(lithology, "lithology"), _conditions(lab, "lab"), None, None,
-                             min_position, status, [], group, located=False)
-    ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max,
-                                                         similar.material_conditions(material))
-    where, params = where + ground_where, params + ground_params
-    scope = f"SELECT rid FROM boreholes WHERE {' AND '.join(where)}"
+    params = filters.params
+    scope = f"SELECT rid FROM boreholes WHERE {filters.sql()}"
 
     def rows(sql: str) -> list[sqlite3.Row]:
         return con.execute(sql.replace("{scope}", scope), params).fetchall()
@@ -800,7 +778,7 @@ def stats_detail(
                   "FROM boreholes WHERE rid IN ({scope}) AND depth IS NOT NULL GROUP BY bin"):
         depths[r["bin"]] = r["n"]
     group_rows = rows(
-        f"SELECT {GROUP} grp, COUNT(*) n, SUM(review_status IN ('approved', 'auto_approved')) released "
+        f"SELECT {GROUP} grp, COUNT(*) n, SUM({RELEASED}) released "
         "FROM boreholes WHERE rid IN ({scope}) GROUP BY grp ORDER BY n DESC")
     top_finding: dict[str, dict] = {}  # most frequent finding that is no mere note, per group
     for r in rows(f"SELECT {GROUP} grp, f.code, COUNT(DISTINCT f.rid) n FROM findings f "
@@ -810,7 +788,7 @@ def stats_detail(
     crs = rows("SELECT json_extract(data, '$.location.crs_epsg') epsg, COUNT(*) n FROM boreholes "
                "WHERE rid IN ({scope}) AND json_extract(data, '$.location.crs_epsg') IS NOT NULL GROUP BY epsg "
                "ORDER BY n DESC")
-    return {
+    return models.StatsDetail.model_validate({
         "documents": totals["documents"], "pages": pages, "boreholes": totals["boreholes"], "layers": totals["layers"],
         "countries": totals["countries"],
         "status": {s.value: by_status.get(s.value, 0) for s in ReviewStatus},
@@ -829,12 +807,7 @@ def stats_detail(
                     "top_finding": top_finding.get(r["grp"])} for r in group_rows],
         "crs": [[r["epsg"], r["n"]] for r in crs],
         "audit": evaluate.audit_summary(con),  # the whole database: the sample is drawn from all releases
-    }
-
-
-@app.get("/api/lithologies")
-def lithologies():
-    return [{"key": lith.value, "label_de": DIN4023_LABEL_DE.get(lith)} for lith in Lithology]
+    })
 
 
 @app.get("/api/export.csv")
@@ -844,6 +817,11 @@ def export_csv(status: Literal["all", "released"] = "released"):
     record from its own connection, so memory stays flat however large the database is."""
     return StreamingResponse(_csv_rows(status), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=boreholes.csv"})
+
+
+def _export_rows(con: sqlite3.Connection, status: str) -> sqlite3.Cursor:
+    where = "" if status == "all" else f"WHERE {RELEASED}"
+    return con.execute(f"SELECT data, {SOURCE_FILE} FROM boreholes {where} ORDER BY id")
 
 
 def _csv_rows(status: str) -> Iterator[str]:
@@ -864,22 +842,16 @@ def _csv_rows(status: str) -> Iterator[str]:
         "GeologicAge", "Colour", "ReviewStatus", "ReviewedBy", "Score",
     ])
     yield flush()
-    where = "" if status == "all" else "WHERE review_status IN ('auto_approved', 'approved')"
     con = store.connect()
     try:
-        rows = con.execute(
-            f"SELECT data, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file "
-            f"FROM boreholes {where} ORDER BY id"
-        )
-        for row in rows:
+        for row in _export_rows(con, status):
             _csv_record(w, row)
             yield flush()
     finally:
         con.close()
 
 
-def _csv_record(w, row) -> None:
-    """The rows of one record (one per layer)."""
+def _csv_record(w, row: sqlite3.Row) -> None:
     bh = Borehole.model_validate_json(row["data"])
     loc = bh.location
     original_crs = f"EPSG:{loc.crs_epsg}" if loc.crs_epsg else loc.crs_proj or loc.crs_raw
@@ -902,12 +874,8 @@ def _csv_record(w, row) -> None:
 def export_xlsx(con: DB, status: Literal["all", "released"] = "released"):
     """Workbook in Herrenknecht's BoreholeDataFormat (metadata, log data, samples, core runs, SPT,
     groundwater, test results). Released records only by default, like the CSV."""
-    where = "" if status == "all" else "WHERE review_status IN ('auto_approved', 'approved')"
-    rows = con.execute(
-        f"SELECT data, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file "
-        f"FROM boreholes {where} ORDER BY id"
-    ).fetchall()
-    content = export.workbook([(Borehole.model_validate_json(r["data"]), r["source_file"]) for r in rows])
+    content = export.workbook([(Borehole.model_validate_json(r["data"]), r["source_file"])
+                               for r in _export_rows(con, status)])
     return StreamingResponse(
         iter([content]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=boreholes.xlsx"},

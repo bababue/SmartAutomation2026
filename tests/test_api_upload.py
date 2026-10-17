@@ -34,19 +34,19 @@ def _pdf_bytes(n_pages: int) -> bytes:
 
 
 def test_rejects_unsupported_file_type(client):
-    res = client.post("/api/upload", files={"files": ("notes.csv", b"hello", "text/csv")})
+    res = client.post("/api/uploads", files={"files": ("notes.csv", b"hello", "text/csv")})
     assert res.status_code == 415
 
 
 def test_rejects_file_over_the_page_cap(client):
-    res = client.post("/api/upload", files={"files": ("log.pdf", _pdf_bytes(3), "application/pdf")})
+    res = client.post("/api/uploads", files={"files": ("log.pdf", _pdf_bytes(3), "application/pdf")})
     assert res.status_code == 413
     assert "3 pages" in res.json()["detail"]
     assert not any(config.UPLOADS_DIR.iterdir())
 
 
 def test_rejects_unreadable_file_and_leaves_nothing_behind(client):
-    res = client.post("/api/upload", files={"files": ("log.pdf", b"not a pdf", "application/pdf")})
+    res = client.post("/api/uploads", files={"files": ("log.pdf", b"not a pdf", "application/pdf")})
     assert res.status_code == 422
     assert not any(config.UPLOADS_DIR.iterdir())
     assert not config.PAGES_DIR.exists() or not any(config.PAGES_DIR.iterdir())
@@ -54,20 +54,20 @@ def test_rejects_unreadable_file_and_leaves_nothing_behind(client):
 
 def test_rejects_upload_without_credentials_before_saving(client, monkeypatch):
     monkeypatch.setattr("pipeline.runner.missing_credentials", lambda: "No key")
-    res = client.post("/api/upload", files={"files": ("log.pdf", _pdf_bytes(1), "application/pdf")})
+    res = client.post("/api/uploads", files={"files": ("log.pdf", _pdf_bytes(1), "application/pdf")})
     assert res.status_code == 503
     assert not config.UPLOADS_DIR.exists()
 
 
 def test_rejects_file_over_the_byte_cap(client):
-    res = client.post("/api/upload", files={"files": ("log.pdf", _pdf_bytes(1) + b"\0" * 20_000, "application/pdf")})
+    res = client.post("/api/uploads", files={"files": ("log.pdf", _pdf_bytes(1) + b"\0" * 20_000, "application/pdf")})
     assert res.status_code == 413
     assert "MB upload limit" in res.json()["detail"]
 
 
 def test_strips_directory_components_from_the_filename(client, monkeypatch):
     monkeypatch.setattr("pipeline.runner.run", lambda *a, **k: None)
-    res = client.post("/api/upload", files={"files": ("../../evil.pdf", _pdf_bytes(1), "application/pdf")})
+    res = client.post("/api/uploads", files={"files": ("../../evil.pdf", _pdf_bytes(1), "application/pdf")})
     assert res.status_code == 200
     saved = list((config.UPLOADS_DIR / f"upload-{res.json()['job_id']}").iterdir())
     assert [p.name for p in saved] == ["evil.pdf"]  # no path components escaped the upload's own folder
@@ -80,14 +80,14 @@ def test_accepts_file_within_the_page_cap(client, monkeypatch):
         calls.append(docs)
 
     monkeypatch.setattr("pipeline.runner.run", fake_run)
-    res = client.post("/api/upload", files={"files": ("log.pdf", _pdf_bytes(2), "application/pdf")})
+    res = client.post("/api/uploads", files={"files": ("log.pdf", _pdf_bytes(2), "application/pdf")})
     assert res.status_code == 200
     job_id = res.json()["job_id"]
     assert res.json()["pages"] == 2
 
     status = {}
     for _ in range(50):
-        status = client.get(f"/api/upload/{job_id}").json()
+        status = client.get(f"/api/uploads/{job_id}").json()
         if status["status"] not in ("queued", "processing"):
             break
         time.sleep(0.05)
@@ -104,17 +104,17 @@ def test_uploaded_document_flows_through_review_and_export(client, monkeypatch):
     log = _log("BH1", "E 412000 N 5320000", 300, [(0, 9)]).model_copy(update={"final_depth_m": 9})
     monkeypatch.setattr("pipeline.llm.classify_page", lambda *args: classification)
     monkeypatch.setattr("pipeline.llm.extract_page", lambda *args: PageExtraction(logs=[log], coordinate_rows=[]))
-    response = client.post("/api/upload", files={"files": ("invented.pdf", _pdf_bytes(1), "application/pdf")})
+    response = client.post("/api/uploads", files={"files": ("invented.pdf", _pdf_bytes(1), "application/pdf")})
     assert response.status_code == 200
     job_id = response.json()["job_id"]
     for _ in range(100):
-        result = client.get(f"/api/upload/{job_id}").json()
+        result = client.get(f"/api/uploads/{job_id}").json()
         if result["status"] not in ("queued", "processing"):
             break
         time.sleep(0.01)
     assert result["status"] == "done" and len(result["boreholes"]) == 1
     bid = result["boreholes"][0]["id"]
-    detail = client.get(f"/api/boreholes/{bid}/detail").json()
+    detail = client.get(f"/api/boreholes/{bid}").json()
     assert len(detail["source_pages"]) == 1
     assert client.get(detail["source_pages"][0]["url"]).status_code == 200
     assert bid not in client.get("/api/export.csv").text
@@ -134,7 +134,7 @@ def _zip_bytes(entries: dict[str, bytes]) -> bytes:
 
 def _wait(client, job_id):
     for _ in range(200):
-        result = client.get(f"/api/upload/{job_id}").json()
+        result = client.get(f"/api/uploads/{job_id}").json()
         if result["status"] not in ("queued", "processing"):
             return result
         time.sleep(0.01)
@@ -158,7 +158,7 @@ def test_files_of_one_batch_form_one_document_group_in_one_run(client, monkeypat
     monkeypatch.setattr("pipeline.runner.run", recording_run)
     monkeypatch.setattr("pipeline.llm.classify_page", lambda *args: classification)
     monkeypatch.setattr("pipeline.llm.extract_page", lambda *args: PageExtraction(logs=[log], coordinate_rows=[]))
-    res = client.post("/api/upload", files=[("files", ("log.pdf", _pdf_bytes(1), "application/pdf")),
+    res = client.post("/api/uploads", files=[("files", ("log.pdf", _pdf_bytes(1), "application/pdf")),
                                             ("files", ("report.pdf", _pdf_bytes(1), "application/pdf"))])
     assert res.status_code == 200
     job_id = res.json()["job_id"]
@@ -174,7 +174,7 @@ def test_files_of_one_batch_form_one_document_group_in_one_run(client, monkeypat
 def test_zip_keeps_only_documents_and_skips_archive_metadata(client, monkeypatch):
     monkeypatch.setattr("pipeline.runner.run", lambda *a, **k: None)
     archive = _zip_bytes({"logs/a.pdf": _pdf_bytes(1), "notes.csv": b"x", "__MACOSX/logs/._a.pdf": b"meta"})
-    res = client.post("/api/upload", files={"files": ("batch.zip", archive, "application/zip")})
+    res = client.post("/api/uploads", files={"files": ("batch.zip", archive, "application/zip")})
     assert res.status_code == 200
     assert res.json()["files"] == ["logs/a.pdf"]
     assert res.json()["skipped"] == ["notes.csv"]
@@ -182,7 +182,7 @@ def test_zip_keeps_only_documents_and_skips_archive_metadata(client, monkeypatch
 
 def test_batch_skips_other_files_beside_its_documents(client, monkeypatch):
     monkeypatch.setattr("pipeline.runner.run", lambda *a, **k: None)
-    res = client.post("/api/upload", files=[("files", ("log.pdf", _pdf_bytes(1), "application/pdf")),
+    res = client.post("/api/uploads", files=[("files", ("log.pdf", _pdf_bytes(1), "application/pdf")),
                                             ("files", ("site.shp", b"x", "application/octet-stream")),
                                             ("files", ("site.gpkg", b"x", "application/octet-stream"))])
     assert res.status_code == 200
@@ -193,7 +193,7 @@ def test_batch_skips_other_files_beside_its_documents(client, monkeypatch):
 
 def test_rejects_zip_with_a_traversing_entry_and_leaves_nothing_behind(client):
     archive = _zip_bytes({"a.pdf": _pdf_bytes(1), "../escaped.pdf": _pdf_bytes(1)})
-    res = client.post("/api/upload", files={"files": ("batch.zip", archive, "application/zip")})
+    res = client.post("/api/uploads", files={"files": ("batch.zip", archive, "application/zip")})
     assert res.status_code == 400
     assert "unsafe path" in res.json()["detail"]
     assert not any(config.UPLOADS_DIR.iterdir())
@@ -201,7 +201,7 @@ def test_rejects_zip_with_a_traversing_entry_and_leaves_nothing_behind(client):
 
 
 def test_page_cap_applies_to_the_whole_batch(client):
-    res = client.post("/api/upload", files=[("files", ("a.pdf", _pdf_bytes(2), "application/pdf")),
+    res = client.post("/api/uploads", files=[("files", ("a.pdf", _pdf_bytes(2), "application/pdf")),
                                             ("files", ("b.pdf", _pdf_bytes(1), "application/pdf"))])
     assert res.status_code == 413
     assert "3 pages" in res.json()["detail"]
@@ -211,7 +211,7 @@ def test_page_cap_applies_to_the_whole_batch(client):
 def test_byte_cap_applies_to_the_extracted_zip(client):
     archive = _zip_bytes({"a.pdf": _pdf_bytes(1) + b"\0" * 50_000})  # compresses far below the cap
     assert len(archive) < config.MAX_UPLOAD_BYTES
-    res = client.post("/api/upload", files={"files": ("batch.zip", archive, "application/zip")})
+    res = client.post("/api/uploads", files={"files": ("batch.zip", archive, "application/zip")})
     assert res.status_code == 413
     assert not any(config.UPLOADS_DIR.iterdir())
 
@@ -227,10 +227,10 @@ def test_status_reports_the_running_stage(client, monkeypatch):
         assert release.wait(3)
 
     monkeypatch.setattr("pipeline.runner.run", fake_run)
-    job_id = client.post("/api/upload", files={"files": ("log.pdf", _pdf_bytes(1), "application/pdf")}).json()["job_id"]
+    job_id = client.post("/api/uploads", files={"files": ("log.pdf", _pdf_bytes(1), "application/pdf")}).json()["job_id"]
     assert reported.wait(3)
     try:
-        status = client.get(f"/api/upload/{job_id}").json()
+        status = client.get(f"/api/uploads/{job_id}").json()
         assert status["status"] == "processing"
         assert status["progress"] == {"stage": "extract", "done": 3, "total": 7}
     finally:

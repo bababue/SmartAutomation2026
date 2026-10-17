@@ -1,4 +1,4 @@
-// Mirrors schema/borehole.py (only the fields the UI uses).
+// Mirrors schema/borehole.py and the responses in api/models.py (only the fields the UI uses).
 
 export type Lithology = string
 
@@ -152,27 +152,29 @@ export interface BoreholeSummary {
   depth: number | null
   elevation: number | null
   loc_method: string | null
-  n_layers: number
   strip: [number, number, Lithology][] | null
   ground: Ground | null
   score: number | null
   review_status: ReviewStatus
 }
 
+/** A borehole on the map: the slim properties of every match. */
+export type MapPoint = Pick<BoreholeSummary, 'id' | 'name' | 'depth' | 'review_status' | 'loc_method'>
+
 /** Layer strips of the holes in a map box, for the 3D columns. */
 export interface LayerStrips {
   items: { id: string; strip: BoreholeSummary['strip'] }[]
 }
 
-export interface Feature {
+export interface Feature<P = BoreholeSummary> {
   type: 'Feature'
   geometry: { type: 'Point'; coordinates: [number, number] }
-  properties: BoreholeSummary
+  properties: P
 }
 
-export interface FeatureCollection {
+export interface FeatureCollection<P = BoreholeSummary> {
   type: 'FeatureCollection'
-  features: Feature[]
+  features: Feature<P>[]
   /** All matches (the features may be one page of them). */
   total?: number
   facets?: { lithologies: [string, number][]; groups: GroupFacet[] }
@@ -211,14 +213,15 @@ export interface Detail {
   /** Findings that keep the record in the queue whatever its score. */
   blocking: string[]
   /** Version of the content shown; a decision on an outdated version is refused. */
-  content_hash: string | null
+  content_hash: string
   /** Review state the reviewer saw; a decision on an outdated state is refused. */
-  review_revision?: number
+  review_revision: number
   threshold: number
 }
 
 /** What a review decision or a correction changes in the open record. */
-export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log'> & Partial<Pick<Detail, 'corrections' | 'blocking' | 'content_hash' | 'review_revision'>>
+export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log' | 'content_hash' | 'review_revision'>
+  & Partial<Pick<Detail, 'corrections' | 'blocking'>>
 
 export interface Stats {
   boreholes: number

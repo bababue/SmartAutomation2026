@@ -3,7 +3,7 @@ import type { Feature as GeoJSONFeature, Polygon } from 'geojson'
 import { cssColor } from './dom'
 import { LITHOLOGY, lithStyle, patternId } from './lithology'
 import { M_PER_DEG_LAT, M_PER_DEG_LON, offsetPoint } from './tunnelRoute'
-import type { BoreholeSummary, FeatureCollection, ReviewStatus } from './types'
+import type { BoreholeSummary, FeatureCollection, MapPoint, ReviewStatus } from './types'
 
 export const COLUMN_MIN_ZOOM = 15
 const COLUMN_RADIUS_M = 5
@@ -29,7 +29,7 @@ interface Column {
   to: Offset    // where the column belongs once fanned out
   from: Offset  // where its current animation started
   sections: GeoJSONFeature<Polygon>['properties'][]
-  props: BoreholeSummary
+  props: MapPoint
 }
 
 type Offset = readonly [east_m: number, north_m: number]
@@ -49,7 +49,7 @@ const SPREAD_MS = 1000
 const SPOT_CLEARANCE_M = 3  // free ground between the spot marker and the ring of columns around it
 const NO_OFFSET: Offset = [0, 0]
 
-export function updateColumns(m: MapLibre, data: FeatureCollection, strips: Map<string, BoreholeSummary['strip']>, spread: ColumnSpread) {
+export function updateColumns(m: MapLibre, data: FeatureCollection<MapPoint>, strips: Map<string, BoreholeSummary['strip']>, spread: ColumnSpread) {
   const columns: Column[] = []
   if (spread.show && m.getZoom() >= COLUMN_MIN_ZOOM) {
     const statusColor = statusColors()
@@ -125,7 +125,7 @@ function sameOffset(a: Offset, b: Offset) {
   return Math.abs(a[0] - b[0]) < 0.01 && Math.abs(a[1] - b[1]) < 0.01
 }
 
-const layouts = new WeakMap<FeatureCollection, Map<string, Offset>>()
+const layouts = new WeakMap<FeatureCollection<MapPoint>, Map<string, Offset>>()
 
 /**
  * Display offsets for holes whose columns would merge, by data set, so that panning never reshuffles them.
@@ -133,7 +133,7 @@ const layouts = new WeakMap<FeatureCollection, Map<string, Offset>>()
  * it, leaving the spot itself free for its marker. Columns that still overlap are pushed apart only as
  * far as needed, which keeps every column next to its hole and lets a row of close holes stay a row.
  */
-function columnOffsets(data: FeatureCollection) {
+function columnOffsets(data: FeatureCollection<MapPoint>) {
   const cached = layouts.get(data)
   if (cached) return cached
   const holes = data.features

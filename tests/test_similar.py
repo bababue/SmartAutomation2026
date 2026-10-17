@@ -29,3 +29,34 @@ def test_a_shallow_hole_matches_a_deep_one_only_on_the_bands_it_logs():
     deep, shallow = profile([(0, 20, "clay")]), profile([(0, 5, "clay")])
     assert distance(deep, shallow) == pytest.approx((0 + 0.5 + 0.5) / 3)  # bands 5-10 and 10-20 not logged
     assert distance(shallow, deep) == 0
+
+
+def test_similar_holes_leave_out_the_same_document_rejected_records_and_holes_without_layers(con):
+    from api.similar import similar
+    from pipeline import store
+    from schema.borehole import Borehole, GroundwaterObservation, Layer, Location, ReviewStatus, SourceRef
+
+    def hole(bid, layers, water=None, status="auto_approved"):
+        src = SourceRef(file="logs.pdf", page=1)
+        return Borehole(borehole_id=bid, borehole_name=bid.split(":")[1], review_status=status, sources=[src],
+                        layers=[Layer(top_m=t, bottom_m=b, description_original=c, primary=c, source=src)
+                                for t, b, c in layers],
+                        groundwater=[GroundwaterObservation(depth_m=water, kind="standing")] if water else [],
+                        location=Location(lat=51.5007, lon=-0.1246))  # Big Ben
+
+    for bh in [hole("A:T", [(0, 6, "clay"), (6, 15, "limestone")], water=2.0),
+               hole("A:SAME", [(0, 6, "clay"), (6, 15, "limestone")], water=2.0),
+               hole("B:CLOSE", [(0, 7, "boulder_clay"), (7, 15, "sandstone")], water=3.0),
+               hole("B:SAND", [(0, 25, "medium_sand")]),
+               hole("C:REJECTED", [(0, 6, "clay"), (6, 15, "limestone")], status=ReviewStatus.rejected),
+               hole("C:EMPTY", []),
+               hole("D:DEEP", [(0, 45, "clay"), (45, 50, "limestone")])]:
+        store.save_borehole(con, bh)
+
+    found = similar(con, "A:T", limit=5)
+    assert found["ground"] == "rock from 6 m, mostly clay above; water at 2 m"
+    assert [(s["id"], s["similarity"], s["reason"]) for s in found["similar"]] == [
+        ("B:CLOSE", 0.91, "rock from 7 m, mostly clay above; water at 3 m"),
+        ("D:DEEP", 0.4, "rock from 45 m, mostly clay above"),
+        ("B:SAND", 0.0, "mostly sand, no rock reached")]
+    assert similar(con, "missing") is None
