@@ -103,20 +103,20 @@ def test_review_queue_blocking_only(client):
     assert "q:G" in every
 
 
-@pytest.mark.parametrize("qualifier,value,upper,query,expected", [
-    ("<", 5, None, "lab_min=4.5", False), ("<", 5, None, "lab_max=5", True),
-    (">", 5, None, "lab_max=6", False), (">", 5, None, "lab_min=5", True),
-    ("range", 5, 10, "lab_min=4&lab_max=11", True),
-    ("range", 5, 10, "lab_min=6", False), ("range", 5, 10, "lab_max=9", False),
-    (None, 5, None, "lab_min=5&lab_max=5", True),
+@pytest.mark.parametrize("qualifier,value,upper,bounds,expected", [
+    ("<", 5, None, "4.5:", False), ("<", 5, None, ":5", True),
+    (">", 5, None, ":6", False), (">", 5, None, "5:", True),
+    ("range", 5, 10, "4:11", True),
+    ("range", 5, 10, "6:", False), ("range", 5, 10, ":9", False),
+    (None, 5, None, "5:5", True),
 ])
-def test_lab_filters_require_the_whole_value_to_match(client, qualifier, value, upper, query, expected):
+def test_lab_filters_require_the_whole_value_to_match(client, qualifier, value, upper, bounds, expected):
     bh = hole("q:qualified", 48.0, 8.0, [(0, 9, "gravel")])
     bh.lab_results = [LabResult(parameter="ucs", value=value, value_upper=upper, qualifier=qualifier, top_m=2)]
     con = store.connect()
     store.save_borehole(con, bh)
     con.close()
-    response = client.get(f"/api/boreholes?id=q:qualified&lab=ucs&{query}")
+    response = client.get(f"/api/boreholes?id=q:qualified&lab=ucs:{bounds}")
     assert ids(response) == (["q:qualified"] if expected else [])
 
 
