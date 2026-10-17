@@ -46,8 +46,9 @@ the spread of a plain re-extraction), not with `baseline` (the reference was app
   `CRS ambiguous`). Not caused by item 12: `v4-prep2` (item 12 narrowed) shows exactly the same, and so do
   earlier arms without items 10 and 12. On that document's coordinate-table page the model sometimes returns
   header-only logs next to the table rows and sometimes the rows only; whenever it returns the rows only, the
-  holes take the grid-less coordinates of their log sheets. That is an assembly weakness, independent of the
-  prompt (follow-up in assembly: link coordinate-table rows to holes without header logs on the table page).
+  holes take the coordinates printed on their log sheets, and a parsing bug there (a zone statement read as a
+  value, local axis labels not known) left them without a position. Fixed in georeferencing; re-stored, both
+  arms have the same coordinate findings as v3.
 - Items 10, 12 (narrowed to hole name, place and date; `coords_raw`, `crs_raw` and `elevation_raw` verbatim) and
   13 (`v4-prep2`, 36 records, 70 pages): boundaries 94.6 % against 95.2 %, lithology metres 96.0 % against
   94.4 %, groundwater and lab equal or better, final depth 91.7 % against 97.2 % and precision 86.6 % against
