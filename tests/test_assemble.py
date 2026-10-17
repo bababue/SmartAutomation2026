@@ -1,9 +1,13 @@
 """Joining sheets into holes (invented page results)."""
 
+import pytest
+from pyproj import Transformer
+
 from pipeline.assemble import PageResult, _layers, assemble
-from pipeline.extraction_models import PageExtraction, XLayer, XLog
+from pipeline.extraction_models import PageExtraction, XCoordinateRow, XLayer, XLog
+from pipeline.georef import haversine_km
 from pipeline.scoring import finding_severity
-from schema.borehole import Borehole, SourceRef
+from schema.borehole import Borehole, GeorefMethod, SourceRef
 
 
 def _log(name: str, coords: str, elevation: float, layers: list[tuple[float, float]]) -> XLog:
@@ -273,3 +277,23 @@ def test_only_unreadable_items_outside_the_header_and_tests_lower_the_extraction
     # Doubts about the position or the ground level count under any field name.
     assert confidence(*["header: datum illegible", "header: coordinate uncertain", "header: ground level faint",
                         "tests: UTM zone cut off"]) < clean
+
+
+@pytest.mark.parametrize("header_logs", [False, True])
+def test_a_coordinate_table_with_or_without_header_logs_gives_the_same_position(header_logs):
+    # The model returns a table page sometimes as rows only, sometimes also as a header-only log per hole; the
+    # hole's own sheet prints UTM, the table Oslo's local grid. Holmenkollen ski jump stands in for the hole.
+    lat, lon = 59.9636, 10.6676
+    e, n = Transformer.from_crs(4326, 32632, always_xy=True).transform(lon, lat)
+    ly, lx = Transformer.from_crs(4326, "ESRI:102138", always_xy=True).transform(lon, lat)
+    table = f"X-koordinat {lx:.1f} Y-koordinat {ly:.1f}".replace(".", ",")
+    place = {"place_lat": 59.91, "place_lon": 10.75, "place_precision_km": 10.0, "country": "NO"}
+    sheet = _log("BH1", f"UTM Sone: 32 ØV-koordinat: {e:.0f} NS-koordinat: {n:.0f}", 10.0, [(0, 4), (4, 9)])
+    sheet = sheet.model_copy(update={"crs_raw": "Kartdatum WGS 84, UTM Sone 32", **place})
+    header = _log("BH1", table, 10.0, []).model_copy(update={"crs_raw": "Oslo lokal", **place})
+    row = XCoordinateRow(name="BH1", coords_raw=table, crs_raw="Oslo lokal", elevation_raw=None, is_planned=False)
+    [bh] = assemble([PageResult("t", "t.pdf", 1, "coordinate_table",
+                                PageExtraction(logs=[header] if header_logs else [], coordinate_rows=[row])),
+                     PageResult("t", "t.pdf", 2, "borehole_log", PageExtraction(logs=[sheet], coordinate_rows=[]))])
+    assert bh.location.method != GeorefMethod.geocoded_place and bh.location.confidence >= 0.9
+    assert haversine_km(bh.location.lat, bh.location.lon, lat, lon) < 0.005
