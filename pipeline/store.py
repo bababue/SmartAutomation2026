@@ -272,7 +272,7 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
 
 def _logged_decision(con: sqlite3.Connection, uid: str) -> tuple[Borehole, str] | None:
     """The latest review of this hole as (record as reviewed, its content hash). Without a stored version
-    (decisions logged before versions existed) the reviewer counts as having seen no findings."""
+    the reviewer counts as having seen no findings."""
     event = con.execute("SELECT decision, reviewer, comment, at, content_hash, version_id FROM review_events "
                         "WHERE uid = ? ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
     if not event:

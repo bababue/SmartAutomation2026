@@ -2,7 +2,7 @@
 
 The place a document names is looked up here instead of trusting the extraction model's own estimate, which
 can be a guess for small or ambiguous places. Without the index (not downloaded) every lookup returns
-nothing and georeferencing uses the model's estimate as before.
+nothing and georeferencing uses the model's estimate.
 
     python -m pipeline.gazetteer download    # fetch cities1000.zip and the region names, build data/gazetteer.sqlite
 """
