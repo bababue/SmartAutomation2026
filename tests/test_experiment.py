@@ -17,13 +17,13 @@ def test_arm_uses_its_own_cache_and_a_key_from_its_prompt(tmp_path, monkeypatch)
     main_key, main_path = llm._extract_key(page, "borehole_log", ""), llm.cache_path("extract", page)
 
     prompt = experiment.init("try-units")
-    assert prompt.read_text() == llm.EXTRACT_SYSTEM
+    assert prompt.read_text(encoding="utf-8") == llm.EXTRACT_SYSTEM
     experiment.use_prompt("try-units")
     same_text_key = llm._extract_key(page, "borehole_log", "")
     assert llm.cache_path("extract", page) != main_path and main_path.parent.parent.parent == tmp_path / "cache"
     assert same_text_key != main_key  # never reads a page extracted under the main prompt version
 
-    prompt.write_text(prompt.read_text() + "\n- One more rule.")
+    prompt.write_text(prompt.read_text(encoding="utf-8") + "\n- One more rule.", encoding="utf-8")
     experiment.use_prompt("try-units")
     assert llm.EXTRACT_SYSTEM.endswith("One more rule.") and llm._extract_key(page, "borehole_log", "") != same_text_key
 
