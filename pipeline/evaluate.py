@@ -111,14 +111,19 @@ def _metres(layers: list[list]) -> float:
 
 def lithology_metres(reference: list[list], current: list[list]) -> float:
     """Metres of the reference log where the current log has the same primary lithology at the same depth.
-    Unlike the per-layer check, this does not drop layers a variant segmented differently."""
+    Unlike the per-layer check, this does not drop layers a variant segmented differently. Overlapping current
+    layers count each metre once."""
     same = 0.0
     for top, bottom, primary in reference:
         if top is None or bottom is None:
             continue
-        for c_top, c_bottom, c_primary in current:
-            if c_primary == primary and c_top is not None and c_bottom is not None:
-                same += max(0.0, min(bottom, c_bottom) - max(top, c_top))
+        hits = sorted((max(top, c_top), min(bottom, c_bottom)) for c_top, c_bottom, c_primary in current
+                      if c_primary == primary and c_top is not None and c_bottom is not None)
+        end = top
+        for start, stop in hits:
+            if stop > max(start, end):
+                same += stop - max(start, end)
+                end = stop
     return same
 
 

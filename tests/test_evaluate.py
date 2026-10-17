@@ -165,3 +165,9 @@ def test_database_without_extracted_column_is_migrated(tmp_path):
     con = store.connect(path)
     assert con.execute("SELECT id, extracted FROM boreholes").fetchone()[:] == ("A:B", None)
     con.close()
+
+
+def test_lithology_metres_counts_overlapping_layers_once():
+    reference = [[0.0, 4.0, "clay"]]
+    current = [[0.0, 3.0, "clay"], [2.0, 4.0, "clay"], [1.0, 2.0, "sand"]]
+    assert evaluate.lithology_metres(reference, current) == 4.0
