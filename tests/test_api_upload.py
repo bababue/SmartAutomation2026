@@ -35,7 +35,7 @@ def _pdf_bytes(n_pages: int) -> bytes:
 
 
 def test_rejects_unsupported_file_type(client):
-    res = client.post("/api/upload", files={"files": ("notes.txt", b"hello", "text/plain")})
+    res = client.post("/api/upload", files={"files": ("notes.csv", b"hello", "text/csv")})
     assert res.status_code == 415
 
 
@@ -174,21 +174,21 @@ def test_files_of_one_batch_form_one_document_group_in_one_run(client, monkeypat
 
 def test_zip_keeps_only_documents_and_skips_archive_metadata(client, monkeypatch):
     monkeypatch.setattr("pipeline.__main__.run", lambda *a, **k: None)
-    archive = _zip_bytes({"logs/a.pdf": _pdf_bytes(1), "notes.txt": b"x", "__MACOSX/logs/._a.pdf": b"meta"})
+    archive = _zip_bytes({"logs/a.pdf": _pdf_bytes(1), "notes.csv": b"x", "__MACOSX/logs/._a.pdf": b"meta"})
     res = client.post("/api/upload", files={"files": ("batch.zip", archive, "application/zip")})
     assert res.status_code == 200
     assert res.json()["files"] == ["logs/a.pdf"]
-    assert res.json()["skipped"] == ["notes.txt"]
+    assert res.json()["skipped"] == ["notes.csv"]
 
 
 def test_batch_skips_other_files_beside_its_documents(client, monkeypatch):
     monkeypatch.setattr("pipeline.__main__.run", lambda *a, **k: None)
     res = client.post("/api/upload", files=[("files", ("log.pdf", _pdf_bytes(1), "application/pdf")),
                                             ("files", ("layers.xlsx", b"x", "application/octet-stream")),
-                                            ("files", ("export.txt", b"x", "text/plain"))])
+                                            ("files", ("site.gpkg", b"x", "application/octet-stream"))])
     assert res.status_code == 200
     assert res.json()["files"] == ["log.pdf"]
-    assert res.json()["skipped"] == ["layers.xlsx", "export.txt"]
+    assert res.json()["skipped"] == ["layers.xlsx", "site.gpkg"]
     assert [p.name for p in (config.UPLOADS_DIR / f"upload-{res.json()['job_id']}").iterdir()] == ["log.pdf"]
 
 

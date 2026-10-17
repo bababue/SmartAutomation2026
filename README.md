@@ -32,7 +32,7 @@ input files ──► page classification ──► extraction (vision LLM, stru
               world map + search ◄── database ◄── normalisation & georeferencing ◄── validation
 ```
 
-1. **Ingest** – PDF (text, scanned, vector-only), JPG/PNG, DOCX. Every page is rendered to an image; text layers are used only as a hint because many are scrambled or bad OCR.
+1. **Ingest** – PDF (text, scanned, vector-only), JPG/PNG, DOCX, plain text (TXT, laid out on A4 pages). Every page is rendered to an image; text layers are used only as a hint because many are scrambled or bad OCR.
    DOCX logs are often laid out from several image strips in table cells, so a DOCX needs a PDF export
    (e.g. *Save as PDF* in Word), either next to the DOCX with the same name or at
    `data/converted/<same relative path>.pdf`; without it only the embedded images are used and the run prints

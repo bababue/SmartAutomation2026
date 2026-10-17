@@ -7,6 +7,8 @@ hint for the model and for keyword search.
 
 from __future__ import annotations
 
+import html
+import io
 import json
 import re
 import sys
@@ -18,14 +20,14 @@ import pymupdf
 
 from . import config
 
-SUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".docx"}
+SUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".docx", ".txt"}
 
 
 @dataclass
 class SourceDoc:
     doc_id: str
     path: str  # relative to the dataset dir
-    kind: str  # pdf | image | docx
+    kind: str  # pdf | image | docx | text
 
 
 @dataclass
@@ -54,7 +56,7 @@ def discover(dataset_dir: Path = config.DATASET_DIR) -> list[SourceDoc]:
     for path in sorted(dataset_dir.rglob("*")):
         if path.is_file() and path.suffix.lower() in SUPPORTED and not _docx_export(path):
             rel = path.relative_to(dataset_dir)
-            kind = "pdf" if path.suffix.lower() == ".pdf" else "docx" if path.suffix.lower() == ".docx" else "image"
+            kind = {".pdf": "pdf", ".docx": "docx", ".txt": "text"}.get(path.suffix.lower(), "image")
             doc_id = doc_id_for(rel)
             if doc_id in used:  # e.g. 'X.pdf' and 'X.jpg': never share pages, cache and records
                 doc_id = f"{doc_id}-{path.suffix.lower().lstrip('.')}"
@@ -104,6 +106,27 @@ def converted_pdf(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR) -> Pat
     return None
 
 
+def text_pdf(path: Path) -> pymupdf.Document:
+    """A plain-text log (e.g. a layer data export) laid out on A4 pages, long lines wrapped. PyMuPDF's own text
+    reader takes the bytes as Latin-1; these files come as UTF-8 or Windows-1252."""
+    raw = path.read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")
+    story = pymupdf.Story(html='<pre style="font-family: monospace; font-size: 9pt; white-space: pre-wrap">'
+                               f"{html.escape(text)}</pre>")
+    page, buf = pymupdf.paper_rect("a4"), io.BytesIO()
+    writer, more = pymupdf.DocumentWriter(buf), True
+    while more:
+        device = writer.begin_page(page)
+        more, _ = story.place(page + (40, 40, -40, -40))
+        story.draw(device)
+        writer.end_page()
+    writer.close()
+    return pymupdf.open(stream=buf.getvalue(), filetype="pdf")
+
+
 def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool = False) -> list[PageImage]:
     out_dir = config.PAGES_DIR / doc.doc_id
     manifest = out_dir / "manifest.json"
@@ -136,13 +159,13 @@ def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool =
         sources = [pymupdf.open(stream=blob, filetype=ext) for blob, ext in _docx_images(src)]
         pdf_pages = [(d[0], "") for d in sources]
     else:
-        d = pymupdf.open(src)
-        pdf_pages = [(p, p.get_text() if doc.kind == "pdf" else "") for p in d]
+        d = text_pdf(src) if doc.kind == "text" else pymupdf.open(src)
+        pdf_pages = [(p, p.get_text() if doc.kind in ("pdf", "text") else "") for p in d]
 
     pages = []
     for i, (page, text) in enumerate(pdf_pages, start=1):
         full, thumb = out_dir / f"{i:04d}.jpg", out_dir / f"{i:04d}.thumb.jpg"
-        upscale = doc.kind == "pdf"  # raster sources gain nothing from upscaling
+        upscale = doc.kind in ("pdf", "text")  # raster sources gain nothing from upscaling
         w, h = _save(page, config.EXTRACT_LONG_EDGE, full, upscale)
         _save(page, config.THUMB_LONG_EDGE, thumb, upscale)
         pages.append(

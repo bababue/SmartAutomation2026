@@ -16,7 +16,7 @@ from . import config, ingest, store
 class UploadDoc(BaseModel):
     doc_id: str
     path: str  # relative to the batch folder
-    kind: Literal["pdf", "docx", "image"]
+    kind: Literal["pdf", "docx", "image", "text"]
 
 
 class UploadTask(BaseModel):

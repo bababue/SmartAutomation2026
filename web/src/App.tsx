@@ -248,7 +248,7 @@ export default function App() {
     >
       {dragging && (
         <div className="drop-overlay" aria-hidden="true">
-          Drop borehole logs to add them (PDF, image, DOCX or ZIP). Files dropped together are read as one batch.
+          Drop borehole logs to add them (PDF, image, DOCX, TXT or ZIP). Files dropped together are read as one batch.
         </div>
       )}
       <svg width={0} height={0} style={{ position: 'absolute' }} aria-hidden="true"><LithologyPatterns /></svg>
@@ -268,7 +268,7 @@ export default function App() {
           />
         </label>
         <div className="topbar-side topbar-end">
-          <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx,.zip" multiple
+          <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx,.txt,.zip" multiple
             className="visually-hidden" onChange={onFileChosen} aria-label="Upload borehole logs" />
           <UploadQueue batches={uploads.batches} onDismiss={uploads.dismiss} />
           {stats && (

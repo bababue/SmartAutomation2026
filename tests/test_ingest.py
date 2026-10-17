@@ -1,4 +1,4 @@
-"""DOCX ingestion: a PDF export under CONVERTED_DIR replaces the embedded-image fallback (synthetic files)."""
+"""Ingestion of DOCX and plain-text logs (synthetic files)."""
 
 import docx
 import pymupdf
@@ -66,3 +66,15 @@ def test_replaced_export_is_rendered_again(tmp_path, monkeypatch):
     export(2)  # corrected export saved over the old one
     os.utime(tmp_path / "r.pdf", ns=(1, 2_000_000_000_000_000_000))
     assert len(ingest.render(doc, tmp_path)) == 2
+
+
+def test_text_log_keeps_umlauts_and_wraps_long_lines(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
+    line = "0.00 - 1.20 Lehm, br\u00e4unlich, schluffig \u00b1 " + "Kies " * 40
+    (tmp_path / "layers.txt").write_bytes(("B 1\n" + line + "\n").encode("cp1252"))  # not UTF-8
+    (doc,) = ingest.discover(tmp_path)
+    assert doc.kind == "text"
+    pages = ingest.render(doc, tmp_path)
+    assert len(pages) == 1
+    assert "br\u00e4unlich" in pages[0].text and "\u00b1" in pages[0].text
+    assert pages[0].text.count("Kies") == 40  # wrapped, not cut at the page edge
