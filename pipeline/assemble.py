@@ -619,9 +619,9 @@ def _unique_groundwater(observations) -> list[GroundwaterObservation]:
 
 FEET = re.compile(r"\b(?:ft|feet|foot)\b|^\s*'\s*$", re.I)
 # The model reports a conversion from feet in its notes and may give the unit as "m" afterwards. In free text
-# "foot"/"Fuß" also means the foot of a slope, and an apostrophe after a number also marks arc minutes.
-NOTES_FEET = re.compile(r"(?:\b|(?<=\d))(?:ft|feet)\b|(?:\d\s*|\b(?:from|in|von|aus)\s+)(?:foot|fu(?:ß|ss))\b"
-                        r"|(?<![°\d.,])\d+(?:[.,]\d+)?\s?'(?!\s*\d|')", re.I)
+# "foot"/"Fuß" also means the foot of a slope. An apostrophe is no unit here: the notes quote printed text in
+# single quotes ('Bore Hole: 5').
+NOTES_FEET = re.compile(r"(?:\b|(?<=\d))(?:ft|feet)\b|(?:\d\s*|\b(?:from|in|von|aus)\s+)(?:foot|fu(?:ß|ss))\b", re.I)
 
 
 def unit_findings(xs: list[XLog]) -> list[str]:

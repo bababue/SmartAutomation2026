@@ -302,7 +302,8 @@ def test_a_coordinate_table_with_or_without_header_logs_gives_the_same_position(
 @pytest.mark.parametrize("notes, blocked", [
     ("Depths converted from feet to metres.", True),
     ("Tiefen von Fuß in Meter umgerechnet", True),
-    ("depths 0-12' converted", True),
+    ("depths 0-12 ft converted", True),
+    ("hole named 'Bore Hole: 5', sample 1 'M,H'", False),
     ("soft clay, left bank; FTIR sample at the foot of the slope", False),
     ("coordinates 48°12'30\" N", False),
 ])
