@@ -218,27 +218,40 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     ]
     boreholes = assemble(results)
     extracted = {bh.borehole_id: store.extracted_summary(bh) for bh in boreholes}  # before fixes, for `eval`
-    # Read knowledge and corrections and replace the records in one write transaction: a correction saved
-    # in the meantime cannot be lost, and the API waits for us instead of overwriting.
-    con.execute("BEGIN IMMEDIATE")
-    try:
-        knowledge.apply_all(con, boreholes)  # what reviewers taught beyond single records
-        for bh in boreholes:  # reviewer fixes survive re-extraction, and win over learned knowledge
-            corrections.apply(bh, store.corrections_for(con, bh.borehole_id, store.uid_for(con, bh)))
-        if dry_run:
+    # Per document group: read knowledge and corrections and replace the group's records in one short write
+    # transaction. A correction saved meanwhile cannot be lost, and reviewers wait for one group at most.
+    groups: dict[str, list] = {}
+    for doc_id in done:
+        groups.setdefault(doc_id.split("__")[0], [])
+    for bh in boreholes:
+        groups.setdefault(store.document_group(bh.borehole_id), []).append(bh)
+    for group, records in groups.items():
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            knowledge.apply_all(con, records)  # what reviewers taught beyond single records
+            for bh in records:  # reviewer fixes survive re-extraction, and win over learned knowledge
+                corrections.apply(bh, store.corrections_for(con, bh.borehole_id, store.uid_for(con, bh)))
+            if dry_run:
+                con.rollback()
+                continue
+            previous: dict[str, dict] = {}  # human decisions carry over if the content is unchanged
+            for doc_id in done:
+                if doc_id.split("__")[0] == group:
+                    previous.update(store.delete_document_boreholes(con, doc_id))
+            for bh in records:
+                store.save_borehole(con, bh, commit=False, previous=previous.get(bh.borehole_id),
+                                    extracted=extracted[bh.borehole_id])
+            con.commit()
+        except BaseException:
             con.rollback()
-            _report(boreholes, len(done))
-            return
-        previous: dict[str, dict] = {}  # human decisions carry over if the content is unchanged
-        for doc_id in done:
-            previous.update(store.delete_document_boreholes(con, doc_id))
-        for bh in boreholes:
-            store.save_borehole(con, bh, commit=False, previous=previous.get(bh.borehole_id),
-                                extracted=extracted[bh.borehole_id])
-        con.commit()
-    except BaseException:
-        con.rollback()
-        raise
+            raise
+    if dry_run:
+        _report(boreholes, len(done))
+        return
+    orphans = store.orphan_corrections(con)
+    if orphans:
+        print(f"  ! {len(orphans)} reviewer corrections belong to holes no current record carries "
+              f"(e.g. {orphans[0]['target']}); see /api/corrections/orphans", file=sys.stderr)
     located = sum(1 for b in boreholes if b.location.lat is not None)
     auto = sum(1 for b in boreholes if b.review_status.value == "auto_approved")
     print(f"Stored {len(boreholes)} boreholes ({located} georeferenced) from {len(done)} documents in {config.DB_PATH}")
