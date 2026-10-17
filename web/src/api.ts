@@ -1,5 +1,5 @@
 import { encodeRange } from './url'
-import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, Stats, UploadStatus } from './types'
+import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, SimilarGround, Stats, UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -56,6 +56,8 @@ export function fetchLayerStrips(bbox: string, signal?: AbortSignal): Promise<{ 
 const enc = (id: string) => encodeURIComponent(id)
 
 export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>(`/api/boreholes/${enc(id)}/detail`, { signal })
+export const fetchSimilar = (id: string, signal?: AbortSignal) =>
+  request<SimilarGround>(`/api/boreholes/${enc(id)}/similar`, { signal })
 export const fetchStats = () => request<Stats>('/api/stats')
 export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200): Promise<{ items: QueueItem[]; total: number }> {
   const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}`, { signal })

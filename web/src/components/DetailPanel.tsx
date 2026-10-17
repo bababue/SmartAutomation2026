@@ -3,6 +3,7 @@ import type { Detail, DetailUpdate, Layer, SourceRef } from '../types'
 import { lithStyle, patternId } from '../lithology'
 import { CardHead, CorrectionList, LayersEditor, NotesEditor, RecordEditor, TestsEditor, type TestRow } from './Corrections'
 import { Profile } from './Profile'
+import { SimilarHoles } from './SimilarHoles'
 import { ReviewBox, type QueueNav } from './ReviewBox'
 import { withSuffix } from '../review'
 
@@ -14,6 +15,7 @@ interface Props {
   inSection?: boolean
   onToggleSection?: () => void
   onSourceToggle?: (open: boolean) => void
+  onSelect?: (id: string) => void
 }
 
 const fmt = (v: number | null | undefined, digits = 2) =>
@@ -36,7 +38,7 @@ function Level({ value, label }: { value: number | null; label: string }) {
   )
 }
 
-export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, onToggleSection, onSourceToggle }: Props) {
+export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, onToggleSection, onSourceToggle, onSelect }: Props) {
   const bh = detail.borehole
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
@@ -189,6 +191,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
               <p className="notes">{bh.notes ?? <span className="muted">No notes.</span>}</p>
             </div>
           )}
+          {onSelect && <SimilarHoles boreholeId={bh.borehole_id} onSelect={onSelect} />}
         </section>
 
         {sourceOpen && (

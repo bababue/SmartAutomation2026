@@ -374,6 +374,7 @@ export default function App() {
           inSection={sectionIds.includes(detail.borehole.borehole_id)}
           onToggleSection={() => toggleSection(detail.borehole.borehole_id)}
           onSourceToggle={onSourceToggle}
+          onSelect={setSelectedId}
         />
       )}
     </div>
