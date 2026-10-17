@@ -348,7 +348,7 @@ export default function App() {
 
       <main className={`map-wrap${sectionFeatures.length ? ' map-wrap-section' : ''}`}>
         <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} sheetWidth={detail ? sheetWidth : null} dark={dark} />
-        <div className="legend" aria-label="Map legend">
+        <div className={`legend${detail ? ' legend-beside-sheet' : ''}`} aria-label="Map legend">
           <span><i className="dot dot-high" /> released</span>
           <span><i className="dot dot-medium" /> waiting for review</span>
           <span><i className="dot dot-low" /> rejected</span>

@@ -98,6 +98,7 @@ export function SectionView({ features, selectedId, onSelect, onRemove, onClear 
   const [viewport, setViewport] = useState<Viewport | null>(null)
   const [selection, setSelection] = useState<ZoomSelection | null>(null)
   const [correlate, setCorrelate] = useState(true)
+  const [helpOpen, setHelpOpen] = useState(false)  // phones only: the text hides behind '?'
   useEffect(() => {
     const el = box.current
     if (!el) return
@@ -302,7 +303,9 @@ export function SectionView({ features, selectedId, onSelect, onRemove, onClear 
     <section ref={section} className="section" aria-label="Section view">
       <header className="section-head">
         <h2>Section along {ordered.length} borehole{ordered.length === 1 ? '' : 's'}</h2>
-        <p className="muted">
+        <button className="btn btn-small section-help-toggle" onClick={() => setHelpOpen(!helpOpen)}
+          aria-expanded={helpOpen} aria-controls="section-help" aria-label="How to read the section">?</button>
+        <p id="section-help" className={`muted section-help${helpOpen ? ' section-help-open' : ''}`}>
           {byElevation ? 'Levels in m above datum as printed on each log.' : 'Depth below ground: not every log states its ground level.'}
           {' '}Horizontal distance follows the route shown on the map ({fmtDist(layout.total)} total).
           {' '}Rock head (dashed) and groundwater (blue) are joined between holes up to {MAX_JOIN_GAP_M} m apart,
