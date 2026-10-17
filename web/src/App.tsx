@@ -341,7 +341,7 @@ export default function App() {
           selectedId={selectedId} onSelect={setSelectedId} loading={loading} sectionIds={sectionIds} onToggleSection={toggleSection} />
         {!loading && data.total != null && data.features.length < data.total && (
           <button className="btn load-more" onClick={loadMore} disabled={loadingMore}>
-            {loadingMore ? 'Loading…' : `Show ${Math.min(200, data.total - data.features.length)} more of ${(data.total - data.features.length).toLocaleString('en')}`}
+            {loadingMore ? 'Loading…' : `Show ${Math.min(200, data.total - data.features.length)} more (${data.features.length.toLocaleString('en')} of ${data.total.toLocaleString('en')} shown)`}
           </button>
         )}
       </aside>

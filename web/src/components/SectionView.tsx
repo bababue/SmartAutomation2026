@@ -106,6 +106,15 @@ export function SectionView({ features, selectedId, onSelect, onRemove, onClear 
     return () => ro.disconnect()
   }, [])
 
+  // The map's bottom controls move up above the tray (.map-wrap-section in index.css).
+  useEffect(() => {
+    const el = section.current, host = el?.parentElement
+    if (!el || !host) return
+    const ro = new ResizeObserver(() => host.style.setProperty('--tray', `${el.offsetHeight}px`))
+    ro.observe(el)
+    return () => { ro.disconnect(); host.style.removeProperty('--tray') }
+  }, [])
+
   const ordered = useMemo(() => orderAlongLine(features), [features])
   const sectionKey = ordered.map((f) => f.properties.id).join('|')
   const layerBands = useMemo(() => ordered.slice(1).map((f, j) =>

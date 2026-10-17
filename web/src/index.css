@@ -549,6 +549,9 @@ button, input, select { font: inherit; color: inherit; }
 .section-hole-on .section-name { fill: var(--water); }
 .section-hole-on .section-cell { stroke: var(--ink); stroke-width: 1.2; }
 .map-wrap-section .legend { display: none; }
+.map-wrap-section .maplibregl-ctrl-bottom-left, .map-wrap-section .maplibregl-ctrl-bottom-right {
+  bottom: min(var(--tray, 0px), calc(100% - 120px));
+}
 
 /* Map popups ---------------------------------------------------------------- */
 .map-tooltip .maplibregl-popup-content, .map-picker .maplibregl-popup-content {
@@ -593,7 +596,8 @@ button, input, select { font: inherit; color: inherit; }
   :root { --sidebar: 100vw; }
   .app { grid-template-columns: 1fr; grid-template-rows: auto 42vh 1fr; }
   .topbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px; }
-  .search { flex: 1; }
+  .search { flex: 1 1 100%; order: 3; }
+  .section { max-height: 100%; overflow-y: auto; }
   .topbar-end { margin-left: auto; }
   .stats { display: none; }
   .map-wrap { grid-row: 2; }
