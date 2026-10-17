@@ -36,7 +36,7 @@ function modelName(id: string | null): string {
 
 type Benchmarked = ModelEvaluation['benchmark']['rows'][number]
 
-// The model the app extracts with: a decision, not something the figures below compute.
+// The model new uploads are extracted with: a decision, not something the figures below compute.
 const SELECTED = 'Haiku 5.5'
 
 // Within this share of the best value is a tie: run-to-run noise, not a better model.
@@ -139,9 +139,10 @@ export function ModelSummary({ quality, error, onDetails }: {
       <section className="stats-card stats-wide" aria-labelledby="models-head">
         <h3 id="models-head">Models we tested</h3>
         <p className="stats-lede">
-          <b>{SELECTED}</b> is selected{versus && <>: {factor && factor > 1 ? `about ${factor}× cheaper` : 'cheaper'} per
+          <b>{SELECTED}</b> is selected for new uploads{versus && <>: {factor && factor > 1 ? `about ${factor}× cheaper` : 'cheaper'} per
             page than {modelName(accurate.model)}, {points(accurate.metrics.boundaries, selected.metrics.boundaries)} points
-            lower on layer boundaries and {points(accurate.metrics.lab, selected.metrics.lab)} on lab values</>}.
+            lower on layer boundaries and {points(accurate.metrics.lab, selected.metrics.lab)} on lab values.
+            The corpus on this page was read with {modelName(accurate.model)}</>}.
         </p>
         <div className="stats-scroll">
           <table className="models-table">

@@ -144,7 +144,7 @@ function Claims({ whole, quality, onOpen, onReview }: {
       <ul>
         <Claim goal="Coordinates" hint="How positions and coordinate systems were obtained"
           figure={whole ? `${pct(located, whole.boreholes)} %` : loading} label="positioned from printed coordinates"
-          note={whole && `${n(located)} of ${n(whole.boreholes)} holes, ${n(whole.crs.length)} coordinate systems (EPSG)`}
+          note={whole && `${n(located)} of ${n(whole.boreholes)} holes, ${n(whole.crs.length)} coordinate ${whole.crs.length === 1 ? 'system' : 'systems'} (EPSG)`}
           onClick={() => onOpen('overview', 'coordinates')} />
         <Claim goal="Hit rate" hint="Extraction quality against the human-checked records"
           figure={!quality ? loading : found?.of ? `${((100 * found.hit) / found.of).toFixed(1)} %` : 'n/a'}
@@ -322,14 +322,15 @@ function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }:
   )
 }
 
-/** From extracted records to released ones: automatically, and after a person checked them. */
+/** From extracted records to those the release rule lets through, and how many are released in all. */
 function Funnel({ s }: { s: StatsDetail }) {
   const f = s.funnel
-  const steps: [string, number, string][] = [
-    ['Records extracted', f.records, 'var(--water)'],
-    ['Without a blocking finding', f.without_blocking, 'var(--water)'],
-    ['Released automatically', f.released_automatically, 'var(--water)'],
-    ['Released after a person checked', f.released - f.released_automatically, 'var(--high)'],
+  const t = Math.round(s.threshold * 100)
+  const steps: [string, number, string, string][] = [
+    ['Records extracted', f.records, 'var(--water)', ''],
+    ['Without a blocking finding', f.without_blocking, 'var(--water)', ''],
+    ['Passed the release rule', f.passed_rule, 'var(--water)', `score ≥ ${t} as well`],
+    ['Released in all', f.released, 'var(--high)', `${n(s.status.approved)} approved by a person`],
   ]
   return (
     <section className="stats-card stats-wide" aria-labelledby="stats-funnel">
@@ -337,16 +338,15 @@ function Funnel({ s }: { s: StatsDetail }) {
       <p className="muted">Released automatically only with a score of at least {Math.round(s.threshold * 100)} and no
         blocking finding; everything else goes to a person.</p>
       <ol className="funnel">
-        {steps.map(([label, value, fill]) => (
+        {steps.map(([label, value, fill, sub]) => (
           <li key={label}>
             <span className="funnel-figure">{n(value)}</span>
-            <span className="funnel-label">{label}</span>
+            <span className="funnel-label">{label}{sub && <span className="funnel-sub">{sub}</span>}</span>
             <Bar value={value} max={f.records} fill={fill} title={`${label}: ${n(value)} of ${n(f.records)}`} />
             <span className="funnel-share muted">{pct(value, f.records)} % of the records</span>
           </li>
         ))}
       </ol>
-      <p className="stats-note">Released in all: <b>{n(f.released)}</b> <span className="muted">{pct(f.released, f.records)} %</span></p>
     </section>
   )
 }

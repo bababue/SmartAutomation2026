@@ -197,7 +197,8 @@ class CrsDetermination(BaseModel):
 class Funnel(BaseModel):
     records: int
     without_blocking: int
-    released_automatically: int
+    # Score at or above the threshold and nothing blocking, whether a person checked the record since or not.
+    passed_rule: int
     released: int
 
 
@@ -318,7 +319,7 @@ class PromptArms(Aggregate):
 class BenchmarkRow(Aggregate):
     model: str
     route: str
-    seconds_per_page: tuple[float, float]  # range over repeated runs
+    seconds_per_page: tuple[float, float]  # range over repeated runs or, for the local model, two runtimes
     usd_per_page: float
     boundaries: tuple[float, float]
     precision: tuple[float, float]

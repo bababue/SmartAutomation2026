@@ -923,6 +923,8 @@ def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
         "SUM(lat IS NOT NULL AND loc_method = 'manual') manual, "
         "SUM(lat IS NOT NULL AND loc_method = 'geocoded_place') place_name, SUM(lat IS NULL) none, "
         "SUM(NOT EXISTS (SELECT 1 FROM findings f WHERE f.rid = b.rid AND f.severity = 'blocking')) unblocked, "
+        f"SUM(score >= {config.AUTO_APPROVE_THRESHOLD} AND NOT EXISTS (SELECT 1 FROM findings f WHERE f.rid = b.rid "
+        "AND f.severity = 'blocking')) passed_rule, "
         "SUM(review_status = 'pending_review' AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = b.rid "
         "AND f.severity = 'blocking')) waiting_blocking, "
         "SUM(lat IS NULL AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = b.rid AND f.code = 'not_georeferenced' "
@@ -965,7 +967,7 @@ def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
         "positions_withheld": totals["withheld"] or 0,
         "waiting_blocking": totals["waiting_blocking"] or 0,
         "funnel": {"records": totals["boreholes"], "without_blocking": totals["unblocked"] or 0,
-                   "released_automatically": by_status.get("auto_approved", 0),
+                   "passed_rule": totals["passed_rule"] or 0,
                    "released": by_status.get("auto_approved", 0) + by_status.get("approved", 0)},
         "threshold": config.AUTO_APPROVE_THRESHOLD,
         "findings": [{"code": r["code"], "severity": r["severity"], "records": r["records"], "count": r["n"]}

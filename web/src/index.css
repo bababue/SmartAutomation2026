@@ -860,10 +860,11 @@ select.field { padding: 0 4px; }
 .funnel li { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .funnel li:last-child { margin-left: -14px; padding-left: 14px; border-left: 1px dashed var(--grid); }
 .funnel-figure { font-size: 44px; font-weight: 600; line-height: 1.05; font-variant-numeric: tabular-nums; }
-.funnel-label { min-height: 2.7em; font-size: 15px; font-weight: 600; line-height: 1.35; }
+.funnel-label { min-height: 3.2em; font-size: 15px; font-weight: 600; line-height: 1.35; }
 .funnel .stats-bar { height: 10px; min-width: 0; border-radius: 5px; background: var(--grid-soft); }
 .funnel .stats-bar span { border-radius: 5px; }
 .funnel-share { font-size: 13px; }
+.funnel-sub { display: block; font-size: 13px; font-weight: 400; color: var(--graphite); }
 
 .stats-more { margin-top: 24px; }
 .stats-more > summary { display: flex; align-items: baseline; gap: 12px; padding: 14px 20px; list-style: none; cursor: pointer;

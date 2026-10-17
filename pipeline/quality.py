@@ -25,8 +25,8 @@ from .assemble import LOG_KINDS
 SNAPSHOT_PATH = config.ROOT / "fixtures" / "model_evaluation.json"
 
 # Transcribed from docs/model-comparison.md (wider benchmark): 6 log pages from 4 documents, same prompt,
-# compared with Opus. A pair is a range over repeated runs. `compared`: Opus's values on those pages, the base
-# of each share.
+# compared with Opus. A pair is a range over repeated runs or, for the local model, two runtimes.
+# `compared`: Opus's values on those pages, the base of each share.
 BENCHMARK = {
     "pages": 6, "documents": 4, "against": "claude-opus-5-5",
     "compared": {"boundaries": 37, "final_depth": 4, "groundwater": 3, "lab": 4},

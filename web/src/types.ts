@@ -283,7 +283,8 @@ export interface StatsDetail {
   positions_withheld: number
   /** Records waiting for review with a blocking finding. */
   waiting_blocking: number
-  funnel: { records: number; without_blocking: number; released_automatically: number; released: number }
+  /** passed_rule: score at or above the threshold and nothing blocking, whether a person checked it since or not. */
+  funnel: { records: number; without_blocking: number; passed_rule: number; released: number }
   threshold: number
   /** Blocking first, then needs a look, warnings and notes; most records first within each. */
   findings: { code: string; severity: Severity; records: number; count: number }[]
