@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { STATUS_LABEL, scoreText } from '../review'
 import type { CrsGroup, GroupFacet, QueueItem } from '../types'
 import { ConfirmCrs } from './ConfirmCrs'
+import { GroupingToggle } from './GroupingToggle'
 
 interface Props {
   items: QueueItem[]
@@ -16,10 +17,12 @@ interface Props {
   /** Documents whose coordinate system to confirm; shown above the records. */
   crsGroups: CrsGroup[]
   onChanged: () => void
+  grouped: boolean
+  onGroupedChange: (grouped: boolean) => void
 }
 
 /** The waiting records, or the audit sample, weakest first. */
-export function ReviewList({ items, groups, total, loading, audit, selectedId, onSelect, crsGroups, onChanged }: Props) {
+export function ReviewList({ items, groups, total, loading, audit, selectedId, onSelect, crsGroups, onChanged, grouped, onGroupedChange }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const byGroup = new Map<string, QueueItem[]>()
   for (const item of items) byGroup.set(item.grp, [...(byGroup.get(item.grp) ?? []), item])
@@ -31,10 +34,28 @@ export function ReviewList({ items, groups, total, loading, audit, selectedId, o
     })
   }
 
+  function renderItem(it: QueueItem) {
+    return <li key={it.id}>
+      <button className={`review-item${it.id === selectedId ? ' result-selected' : ''}`} onClick={() => onSelect(it.id)}
+        aria-current={it.id === selectedId}>
+        <span className="queue-score" style={{ ['--s' as string]: it.score ?? 0 }}>{scoreText(it.score)}</span>
+        <span className="review-item-text">
+          <span className="result-name">{it.name}</span>
+          <span className="result-place">{it.location_name ?? it.project ?? 'Unnamed site'}{it.country ? `, ${it.country}` : ''}</span>
+          <span className="result-flags">
+            <span className={`flag flag-${it.review_status}`}>{STATUS_LABEL[it.review_status]}</span>
+            {it.loc_method === 'geocoded_place' && <span className="flag flag-warn" title="Position estimated from the place name">approx. position</span>}
+          </span>
+        </span>
+      </button>
+    </li>
+  }
+
   return (
     <>
       <div className="result-head">
         <span>{loading ? 'Loading…' : `${total.toLocaleString('en')} ${audit ? 'sampled' : 'waiting'}`}</span>
+        <GroupingToggle grouped={grouped} onChange={onGroupedChange} />
       </div>
       {crsGroups.map((g) => (
         <div key={g.group} className="review-crs">
@@ -49,7 +70,8 @@ export function ReviewList({ items, groups, total, loading, audit, selectedId, o
           : 'No waiting record matches these filters.'}</p></div>
       ) : (
         <ul className="results review-list" aria-busy={loading}>
-          {groups.map((group) => {
+          {!grouped && items.map(renderItem)}
+          {grouped && groups.map((group) => {
             const entries = byGroup.get(group.group) ?? []
             const share = group.count ? Math.round(100 * group.released / group.count) : 0
             const open = expanded.has(group.group)
@@ -64,20 +86,7 @@ export function ReviewList({ items, groups, total, loading, audit, selectedId, o
               </div>
               {open && <ul className="group-items">
                 {!entries.length && <li className="group-empty">No {audit ? 'sampled' : 'waiting'} boreholes in this group.</li>}
-                {entries.map((it) => <li key={it.id}>
-                  <button className={`review-item${it.id === selectedId ? ' result-selected' : ''}`} onClick={() => onSelect(it.id)}
-                    aria-current={it.id === selectedId}>
-                    <span className="queue-score" style={{ ['--s' as string]: it.score ?? 0 }}>{scoreText(it.score)}</span>
-                    <span className="review-item-text">
-                      <span className="result-name">{it.name}</span>
-                      <span className="result-place">{it.location_name ?? it.project ?? 'Unnamed site'}{it.country ? `, ${it.country}` : ''}</span>
-                      <span className="result-flags">
-                        <span className={`flag flag-${it.review_status}`}>{STATUS_LABEL[it.review_status]}</span>
-                        {it.loc_method === 'geocoded_place' && <span className="flag flag-warn" title="Position estimated from the place name">approx. position</span>}
-                      </span>
-                    </span>
-                  </button>
-                </li>)}
+                {entries.map(renderItem)}
               </ul>}
             </li>
           })}

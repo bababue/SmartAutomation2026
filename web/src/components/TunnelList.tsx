@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { routeLength, tunnelProject, type SavedTunnel } from '../tunnelRoute'
 import type { Feature } from '../types'
+import { GroupingToggle } from './GroupingToggle'
 
 interface Props {
   tunnels: SavedTunnel[]
@@ -8,12 +9,13 @@ interface Props {
   selectedId: string | null
   onSelect: (id: string) => void
   onCreate: () => void
-  onShowBoreholes: () => void
+  grouped: boolean
+  onGroupedChange: (grouped: boolean) => void
 }
 
 const formatLength = (metres: number) => metres >= 1000 ? `${(metres / 1000).toFixed(2)} km` : `${Math.round(metres)} m`
 
-export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onCreate, onShowBoreholes }: Props) {
+export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onCreate, grouped, onGroupedChange }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const unassigned: SavedTunnel[] = []
   const byProject = new Map<string, SavedTunnel[]>()
@@ -35,17 +37,25 @@ export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onCreate,
     })
   }
 
+  function renderItem(tunnel: SavedTunnel) {
+    return <li key={tunnel.id}>
+      <button className={`tunnel-result${selectedId === tunnel.id ? ' tunnel-result-selected' : ''}`}
+        aria-current={selectedId === tunnel.id} onClick={() => onSelect(tunnel.id)}>
+        <strong>{tunnel.name || 'Tunnel'}</strong>
+        <span>{tunnel.route ? formatLength(routeLength(tunnel.route.coordinates)) : 'Route not drawn'}
+          {' · '}{tunnel.holeIds.length} borehole{tunnel.holeIds.length === 1 ? '' : 's'}</span>
+      </button>
+    </li>
+  }
+
   return <>
-    <div className="filters tunnel-tabs">
-      <div className="filter-bar" role="group" aria-label="Map content">
-        <button className="pill pill-on pill-mode" onClick={onShowBoreholes} aria-label="Close tunnels and show boreholes">
-          Tunnels <span aria-hidden="true">×</span>
-        </button>
-        <button className="pill mode-add" onClick={onCreate}>+ New tunnel</button>
-      </div>
+    <div className="result-head grouping-head">
+      <button className="pill mode-add" onClick={onCreate}>+ New tunnel</button>
+      <GroupingToggle grouped={grouped} onChange={onGroupedChange} />
     </div>
     {tunnels.length ? <ul className="tunnel-results">
-      {groups.map((group) => {
+      {!grouped && tunnels.map(renderItem)}
+      {grouped && groups.map((group) => {
         const open = expanded.has(group.key)
         return <li key={group.key} className="result-group">
           <div className="group-head">
@@ -55,14 +65,7 @@ export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onCreate,
             </button>
           </div>
           {open && <ul className="group-items">
-            {group.tunnels.map((tunnel) => <li key={tunnel.id}>
-              <button className={`tunnel-result${selectedId === tunnel.id ? ' tunnel-result-selected' : ''}`}
-                aria-current={selectedId === tunnel.id} onClick={() => onSelect(tunnel.id)}>
-                <strong>{tunnel.name || 'Tunnel'}</strong>
-                <span>{tunnel.route ? formatLength(routeLength(tunnel.route.coordinates)) : 'Route not drawn'}
-                  {' · '}{tunnel.holeIds.length} borehole{tunnel.holeIds.length === 1 ? '' : 's'}</span>
-              </button>
-            </li>)}
+            {group.tunnels.map(renderItem)}
           </ul>}
         </li>
       })}

@@ -12,6 +12,8 @@ interface Props {
   features: Feature[]
   route: TunnelRoute
   selectedId: string | null
+  hoveredId: string | null
+  onHover: (id: string | null) => void
   onSelect: (id: string) => void
   onRemove: (id: string) => void
 }
@@ -120,7 +122,7 @@ function useBoxZoom({ plotWidth, svgWidth, onZoom, onPick, onDragStart }: {
 }
 
 /** Boreholes along a route, with lithology inferred between adjacent logs. */
-export function SectionView({ features, route, selectedId, onSelect, onRemove }: Props) {
+export function SectionView({ features, route, selectedId, hoveredId, onHover, onSelect, onRemove }: Props) {
   const section = useRef<HTMLElement>(null)
   const box = useRef<HTMLDivElement>(null)
   const tooltip = useRef<HTMLDivElement>(null)
@@ -322,6 +324,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove }:
         <p>{byElevation ? 'The vertical axis shows levels above the datum printed on the borehole logs.'
           : ordered.length ? 'The vertical axis shows depth below ground because at least one borehole has no ground level.'
             : 'The vertical axis shows depth below ground until boreholes with ground levels are selected.'}</p>
+        {route.tunnelMode === 'elevation' && <p>For Elevation below datum, enter a positive distance to place the tunnel below the datum. Negative values place it above the datum.</p>}
         <p>Patterned columns are borehole measurements. The coloured areas between them are estimates; lighter areas span more than {MAX_JOIN_GAP_M} m and are less certain.</p>
         <p>Dashed lines show estimated rock head, blue markers show groundwater, and the solid blue line shows the planned tunnel axis. The shaded band shows its diameter when set.</p>
         <p>Dotted lines connect matching layer boundaries in adjacent boreholes up to {MAX_JOIN_GAP_M} m apart. The match uses broad material groups in depth order and omits ambiguous boundaries. These lines are estimates.</p>
@@ -417,10 +420,11 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove }:
             const lineWidth = Math.max(1, Math.min(COL, nearest * 0.7))
             const hitWidth = Math.max(lineWidth, Math.min(24, nearest * 0.9))
             return (
-              <g key={p.id} data-hole-id={p.id} className={`section-hole${p.id === selectedId ? ' section-hole-on' : ''}`}
+              <g key={p.id} data-hole-id={p.id} className={`section-hole${p.id === selectedId ? ' section-hole-on' : ''}${p.id === hoveredId ? ' section-hole-hover' : ''}`}
                 role="button" tabIndex={0} aria-label={`Select ${p.name}${p.id === selectedId ? ', press Delete to remove from section' : ''}`}
-                onMouseEnter={(event) => showHoleTooltip(event, p, i)} onMouseMove={(event) => showHoleTooltip(event, p, i)} onMouseLeave={hideTooltip}
-                onFocus={(event) => showTooltip(centre(event.currentTarget), p)} onBlur={hideTooltip}
+                onMouseEnter={(event) => { onHover(p.id); showHoleTooltip(event, p, i) }} onMouseMove={(event) => showHoleTooltip(event, p, i)}
+                onMouseLeave={() => { onHover(null); hideTooltip() }}
+                onFocus={(event) => { onHover(p.id); showTooltip(centre(event.currentTarget), p) }} onBlur={() => { onHover(null); hideTooltip() }}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(p.id) }
                   if (p.id === selectedId && (event.key === 'Delete' || event.key === 'Backspace')) { event.preventDefault(); onRemove(p.id) }

@@ -22,7 +22,10 @@ const STYLE = { light: 'https://tiles.openfreemap.org/styles/liberty', dark: 'ht
 interface Props {
   data: FeatureCollection<MapPoint>
   route: TunnelRoute | null
+  inactiveRoutes: TunnelRoute[]
   routeDraft: RoutePoint[] | null
+  hoveredHole: RoutePoint | null
+  onHoverHole: (id: string | null) => void
   onRoutePoint: (point: RoutePoint) => void
   selectedId: string | null
   focus: { lon: number; lat: number; accuracy_m: number | null; approximate: boolean; hasDepth: boolean } | null
@@ -48,6 +51,17 @@ function sectionLine(coords: [number, number][]) {
   }
 }
 
+function inactiveLines(routes: TunnelRoute[]) {
+  return { type: 'FeatureCollection' as const, features: routes.filter((route) => route.coordinates.length > 1).map((route) => ({
+    type: 'Feature' as const, properties: {}, geometry: { type: 'LineString' as const, coordinates: route.coordinates },
+  })) }
+}
+
+function hoverPoint(coordinates: RoutePoint | null) {
+  return { type: 'FeatureCollection' as const, features: coordinates ? [{ type: 'Feature' as const,
+    properties: {}, geometry: { type: 'Point' as const, coordinates } }] : [] }
+}
+
 function routeVertices(coords: RoutePoint[]) {
   return { type: 'FeatureCollection' as const, features: coords.map((coordinates) => ({
     type: 'Feature' as const, properties: {}, geometry: { type: 'Point' as const, coordinates },
@@ -62,10 +76,12 @@ function updateRouteCorridorWidth(m: MapLibre, route: TunnelRoute | null) {
   m.setPaintProperty('tunnel-corridor', 'line-width', Math.min(300, 2 * route.corridorM / metresPerPixel))
 }
 
-function updateRouteOverlay(m: MapLibre, state: { route: TunnelRoute | null; routeDraft: RoutePoint[] | null }) {
+function updateRouteOverlay(m: MapLibre, state: { route: TunnelRoute | null; inactiveRoutes: TunnelRoute[]; routeDraft: RoutePoint[] | null; hoveredHole: RoutePoint | null }) {
   ;(m.getSource('tunnel-route') as GeoJSONSource).setData(sectionLine(state.route?.coordinates ?? []))
+  ;(m.getSource('inactive-tunnels') as GeoJSONSource).setData(inactiveLines(state.inactiveRoutes))
   ;(m.getSource('tunnel-draft') as GeoJSONSource).setData(sectionLine(state.routeDraft ?? []))
   ;(m.getSource('tunnel-vertices') as GeoJSONSource).setData(routeVertices(state.routeDraft ?? []))
+  ;(m.getSource('hovered-hole') as GeoJSONSource).setData(hoverPoint(state.hoveredHole))
   updateRouteCorridorWidth(m, state.route)
 }
 
@@ -117,11 +133,11 @@ function wrapLongitude(lon: number) {
   return ((lon + 180) % 360 + 360) % 360 - 180
 }
 
-export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, focus, onSelect, sheetWidth, dark, view3d }: Props) {
+export function MapView({ data, route, inactiveRoutes, routeDraft, hoveredHole, onHoverHole, onRoutePoint, selectedId, focus, onSelect, sheetWidth, dark, view3d }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibre | null>(null)
   const ready = useRef(false)
-  const latest = useRef({ data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, view3d })
+  const latest = useRef({ data, onSelect, selectedId, focus, route, inactiveRoutes, routeDraft, hoveredHole, onHoverHole, onRoutePoint, dark, view3d })
   const layerStrips = useRef(new Map<string, BoreholeSummary['strip']>())
   const [loaded, setLoaded] = useState(false)
   const routeCoordinates = route?.coordinates
@@ -129,7 +145,7 @@ export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, foc
   const spread = useRef<ColumnSpread>({ columns: [], drawn: new Map(), start: 0, frame: 0, show: view3d })
   // Map event handlers read the newest props; layout effects run before the effects below that use them too.
   useLayoutEffect(() => {
-    latest.current = { data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, view3d }
+    latest.current = { data, onSelect, selectedId, focus, route, inactiveRoutes, routeDraft, hoveredHole, onHoverHole, onRoutePoint, dark, view3d }
   })
 
   useEffect(() => {
@@ -240,12 +256,17 @@ export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, foc
           m.getCanvas().style.cursor = 'pointer'
           const f = e.features?.[0]
           if (!f) return
+          latest.current.onHoverHole(f.properties.id ?? null)
           tooltip.setLngLat(f.geometry.type === 'Point' ? f.geometry.coordinates as [number, number] : e.lngLat)
             .setDOMContent(tooltipContent(f.properties as MapPoint)).addTo(m)
         })
         m.on('mouseleave', layer, () => {
           m.getCanvas().style.cursor = latest.current.routeDraft !== null ? 'crosshair' : ''
           tooltip.remove()
+          latest.current.onHoverHole(null)
+        })
+        m.on('mousemove', layer, (e: MapLayerMouseEvent) => {
+          if (latest.current.routeDraft === null) latest.current.onHoverHole(e.features?.[0]?.properties?.id ?? null)
         })
       }
       for (const layer of ['depth-columns', 'depth-column-patterns']) {
@@ -314,6 +335,12 @@ export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, foc
 
   useEffect(() => {
     const m = map.current
+    if (!m || !ready.current) return
+    updateRouteOverlay(m, latest.current)
+  }, [inactiveRoutes, hoveredHole])
+
+  useEffect(() => {
+    const m = map.current
     if (!m) return
     if (routeDraft !== null) {
       m.doubleClickZoom.disable()
@@ -359,7 +386,8 @@ function loadPatterns() {
 
 /** The borehole sources and layers on top of the basemap; a style switch drops them, so they are added again. */
 function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>>,
-  state: { data: FeatureCollection<MapPoint>; route: TunnelRoute | null; routeDraft: RoutePoint[] | null; view3d: boolean }) {
+  state: { data: FeatureCollection<MapPoint>; route: TunnelRoute | null; inactiveRoutes: TunnelRoute[];
+    routeDraft: RoutePoint[] | null; hoveredHole: RoutePoint | null; view3d: boolean }) {
   if (m.getSource('boreholes')) return
   const accent = cssColor('--water'), ink = cssColor('--ink'), panel = cssColor('--panel')
   const status = statusColors()
@@ -372,8 +400,12 @@ function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>
   m.addSource('column-leaders', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
   m.addSource('uncertainty', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
   m.addSource('tunnel-route', { type: 'geojson', data: sectionLine(state.route?.coordinates ?? []) })
+  m.addSource('inactive-tunnels', { type: 'geojson', data: inactiveLines(state.inactiveRoutes) })
   m.addSource('tunnel-draft', { type: 'geojson', data: sectionLine(state.routeDraft ?? []) })
   m.addSource('tunnel-vertices', { type: 'geojson', data: routeVertices(state.routeDraft ?? []) })
+  m.addSource('hovered-hole', { type: 'geojson', data: hoverPoint(state.hoveredHole) })
+  m.addLayer({ id: 'inactive-tunnel-lines', type: 'line', source: 'inactive-tunnels',
+    paint: { 'line-color': accent, 'line-opacity': 0.65, 'line-width': 2, 'line-dasharray': [2, 2] } })
   m.addLayer({ id: 'tunnel-corridor', type: 'line', source: 'tunnel-route', layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': accent, 'line-opacity': 0.18, 'line-width': 1 } })
   m.addLayer({ id: 'tunnel-line', type: 'line', source: 'tunnel-route', paint: { 'line-color': accent, 'line-width': 3 } })
@@ -445,6 +477,8 @@ function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>
     id: 'selected', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM, filter: ['==', ['get', 'id'], ''],
     paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 11, 'circle-stroke-color': accent, 'circle-stroke-width': 3 },
   })
+  m.addLayer({ id: 'hovered-hole-ring', type: 'circle', source: 'hovered-hole',
+    paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 13, 'circle-stroke-color': accent, 'circle-stroke-width': 3 } })
   applyView3d(m, state.view3d)
 }
 
