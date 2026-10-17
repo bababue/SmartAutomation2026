@@ -22,6 +22,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, replace
 from datetime import date
 from itertools import combinations
+from typing import TypeVar
 
 from schema.borehole import (
     SPT,
@@ -40,13 +41,15 @@ from schema.borehole import (
     SourceRef,
 )
 
-from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLog
-from . import corrections
-from .georef import candidates, crs_from_hint, georeference, haversine_km
+from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLab, XLabRow, XLog
+from . import corrections, store
+from .georef import candidates, crs_from_hint, georeference, haversine_km, is_precise
 from .knowledge import printed_pair
 from .scoring import SOURCE_CONFLICTS, STRUCTURAL, counts_against, finding_severity, score
 
 LOG_KINDS = {"borehole_log", "test_pit_log", "probe_log"}
+HoleKey = tuple[str | None, str]  # (type, number), see hole_key
+T = TypeVar("T")
 
 
 @dataclass
@@ -86,8 +89,7 @@ def _unique_ids(records: list[Borehole]) -> None:
     seen = Counter(bh.borehole_id for bh in records)
     for bh in records:
         if seen[bh.borehole_id] > 1:
-            doc_id = bh.borehole_id.split(":", 1)[0]
-            bh.borehole_id = f"{doc_id}:{id_key(bh.borehole_name, separate_numbers=True)}"
+            bh.borehole_id = f"{document_id(bh)}:{id_key(bh.borehole_name, separate_numbers=True)}"
 
 
 # Type words in hole names. Reports number boreholes and test pits separately ('1'..'6' and '1'..'20'),
@@ -101,10 +103,10 @@ _HOLE_WORDS = re.compile(r"^\s*(?:bore\s*hole|boring|bh|sondeo|drill\s*hole|borh
 # Probings are other investigations than boreholes with the same number ('CPT 1' is not 'BH 1').
 _PROBE_WORDS = re.compile(r"^\s*(?:cptu?|dpsh|dpl|dph|dp|totalsondering|trykksondering|dreiesondering|sondering|"
                           r"rammsondierung|sondierung|sonda)(?![a-z])\.?\s*(?:no\.?|nr\.?)?\s*", re.I)
-_KINDS = {"test_pit_log": "test_pit", "probe_log": "probe", "borehole_log": "borehole"}
+_HOLE_KIND_OF_PAGE = {"test_pit_log": "test_pit", "probe_log": "probe", "borehole_log": "borehole"}
 
 
-def hole_key(name: str, kind: str | None) -> tuple[str | None, str]:
+def hole_key(name: str, kind: str | None) -> HoleKey:
     """(type, number) for matching logs, tables and lab rows: 'Test Pit No. 2' and 'T.P. 2' are the test pit
     '2', 'BH-2' is the borehole '2'. `kind` (from the page or the model) applies when the name has no type word."""
     for words, word_kind in ((_PIT_WORDS, "test_pit"), (_PROBE_WORDS, "probe"), (_HOLE_WORDS, "borehole")):
@@ -114,7 +116,7 @@ def hole_key(name: str, kind: str | None) -> tuple[str | None, str]:
     return (kind if kind in ("borehole", "test_pit", "probe") else None), norm_name(name)
 
 
-def lookup(index: dict[tuple[str | None, str], object], key: tuple[str | None, str]):
+def lookup_hole(index: dict[HoleKey, T], key: HoleKey) -> T | None:
     """Exact (type, number) match; without a known type only a number that is unique across types."""
     if key in index:
         return index[key]
@@ -155,14 +157,15 @@ def _date(raw: str | None) -> date | None:
         return None
 
 
-# Unit conversion for lab values: (parameter, unit pattern) → factor to the target unit.
+_STRENGTH = {LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}
+_SHEAR = {LabParameter.cohesion, LabParameter.undrained_shear_strength}
+_WEIGHT = {LabParameter.unit_weight, LabParameter.dry_unit_weight}
 # Units each parameter is stored in, as printed without conversion (see LAB_UNITS); a value with any
 # other unit that has no factor below is dropped rather than published in the wrong unit.
-_STRENGTH = {LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}
 _LAB_NATIVE: list[tuple[set[LabParameter], str]] = [
     (_STRENGTH, r"^(mpa|n/mm2)$"),
-    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^(kpa|kn/m2)$"),
-    ({LabParameter.unit_weight, LabParameter.dry_unit_weight}, r"^kn/m3$"),
+    (_SHEAR, r"^(kpa|kn/m2)$"),
+    (_WEIGHT, r"^kn/m3$"),
     ({LabParameter.water_content, LabParameter.consistency, LabParameter.fines, LabParameter.sand, LabParameter.gravel,
       LabParameter.liquid_limit, LabParameter.plastic_limit}, r"^(%|percent)$"),
     ({LabParameter.friction_angle}, r"^(°|deg|degrees?)$"),
@@ -171,22 +174,25 @@ _LAB_NATIVE: list[tuple[set[LabParameter], str]] = [
 _DIMENSIONLESS = {LabParameter.cai, LabParameter.rmr, LabParameter.q, LabParameter.gsi, LabParameter.plasticity_index,
                   LabParameter.consistency_index, LabParameter.poissons_ratio, LabParameter.other}
 
+# (parameters, unit pattern, factor to the target unit); the first match converts.
 _LAB_FACTORS: list[tuple[set[LabParameter], str, float]] = [
     (_STRENGTH, r"^psi$", 0.00689476),
     (_STRENGTH, r"^ksi$", 6.89476),
     (_STRENGTH, r"^kn/m2$", 0.001),
-    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^psi$", 6.89476),
-    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^t/?m2$", 9.80665),
-    ({LabParameter.unit_weight, LabParameter.dry_unit_weight}, r"^pcf$|^lb/ft3$", 0.157087),
-    ({LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}, r"^kpa$", 0.001),
-    ({LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}, r"^kg/?cm2|kgf/cm", 0.0980665),
+    (_SHEAR, r"^psi$", 6.89476),
+    (_SHEAR, r"^t/?m2$", 9.80665),
+    (_WEIGHT, r"^pcf$|^lb/ft3$", 0.157087),
+    (_STRENGTH, r"^kpa$", 0.001),
+    (_STRENGTH, r"^kg/?cm2|kgf/cm", 0.0980665),
     ({LabParameter.ucs, LabParameter.tensile_strength, LabParameter.e_modulus}, r"^gpa$", 1000.0),
-    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^kg/?cm2|kgf/cm", 98.0665),
-    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^mpa$", 1000.0),
-    ({LabParameter.unit_weight, LabParameter.dry_unit_weight}, r"^t/?m3|tn/?m3|g/?cm3|mg/m3", 9.80665),
+    (_SHEAR, r"^kg/?cm2|kgf/cm", 98.0665),
+    (_SHEAR, r"^mpa$", 1000.0),
+    (_WEIGHT, r"^t/?m3|tn/?m3|g/?cm3|mg/m3", 9.80665),
     ({LabParameter.hydraulic_conductivity}, r"^cm/s", 0.01),
     ({LabParameter.hydraulic_conductivity}, r"^m/d(ay)?$", 1 / 86400),
 ]
+
+_NUMBER = r"[-+]?\d+(?:[.,]\d+)?(?:\s*(?:[eE]|[x×*]\s*10\^?)\s*[-+−]?\d+)?"
 
 
 def lab_qualifier(value_raw: str) -> str | None:
@@ -215,6 +221,14 @@ def _lab_value(parameter: LabParameter, value_raw: str, unit_raw: str | None) ->
 def lab_upper(parameter: LabParameter, value_raw: str, unit_raw: str | None) -> float | None:
     match = re.fullmatch(rf"\s*{_NUMBER}\s*[-–~]\s*({_NUMBER})\s*", value_raw)
     return _lab_value(parameter, match.group(1), unit_raw) if match else None
+
+
+def _lab_result(row: XLab | XLabRow, value: float, top_m: float | None, bottom_m: float | None,
+                source: SourceRef) -> LabResult:
+    return LabResult(parameter=row.parameter, parameter_raw=row.parameter_raw, value=value,
+                     value_raw=f"{row.value_raw} {row.unit_raw or ''}".strip(), top_m=top_m, bottom_m=bottom_m,
+                     sample_name=row.sample_name, source=source, qualifier=lab_qualifier(row.value_raw),
+                     value_upper=lab_upper(row.parameter, row.value_raw, row.unit_raw))
 
 
 def _bbox(raw: list[float] | None) -> tuple[float, float, float, float] | None:
@@ -252,7 +266,7 @@ def _plain(text: str) -> str:
 
 
 PROPERTIES = sorted(set(Layer.model_fields) - {"top_m", "bottom_m", "description_original", "description_en",
-                                               "language", "source", "confidence"})
+                                               "source"})
 
 
 def _same_properties(a: Layer, b: Layer) -> bool:
@@ -309,6 +323,12 @@ def _sheet_join(prev: Layer, nxt: Layer) -> str | None:
 SHEET = re.compile(r"(\d{1,2})\s*(?:of|de|von|aus|di|sur|af|av|/)\s*(\d{1,2})", re.IGNORECASE)
 
 
+def _sheet_number(log: XLog) -> tuple[int, int] | None:
+    """(k, n) of a sheet indicator 'k of n'."""
+    m = SHEET.search(log.sheet or "")
+    return (int(m.group(1)), int(m.group(2))) if m and 1 <= int(m.group(1)) <= int(m.group(2)) <= 50 else None
+
+
 def missing_sheets(logs: list[tuple[XLog, SourceRef]]) -> list[str]:
     """'missing sheets: 2 of 3' when the printed sheet indicators ('1 of 3', 'Hoja 3 de 3') leave a hole.
     Only numbering that plausibly counts this hole's sheets is checked (a total of at most 5, or at most as
@@ -316,10 +336,9 @@ def missing_sheets(logs: list[tuple[XLog, SourceRef]]) -> list[str]:
     seen: set[int] = set()
     totals: Counter[int] = Counter()
     for log, _ in logs:
-        m = SHEET.search(log.sheet or "")
-        if m and 1 <= int(m.group(1)) <= int(m.group(2)) <= 50:
-            seen.add(int(m.group(1)))
-            totals[int(m.group(2))] += 1
+        if sheet := _sheet_number(log):
+            seen.add(sheet[0])
+            totals[sheet[1]] += 1
     if not totals:
         return []
     total = totals.most_common(1)[0][0]
@@ -332,42 +351,39 @@ def missing_sheets(logs: list[tuple[XLog, SourceRef]]) -> list[str]:
 
 def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
             notes: list[str] | None = None) -> list[Layer]:
+    """The layer sequence of a hole's sheets; findings about how it was read are added to `notes`."""
+    notes = [] if notes is None else notes
     flat = [(x, src) for log, src in logs for x in log.layers]
-    if notes is not None:
-        notes.extend(missing_sheets(logs))
+    notes.extend(missing_sheets(logs))
     # Fill missing boundaries from neighbours: top ← previous bottom, bottom ← next top / final depth.
     # Surface and final depth are assumptions, not readings: they are reported as findings.
     tops = [x.top_m for x, _ in flat]
     bottoms = [x.bottom_m for x, _ in flat]
-    inferred: list[str] = []
     for i in range(len(flat)):
         if tops[i] is None:
             tops[i] = bottoms[i - 1] if i > 0 else 0.0
             if i == 0 and bottoms[i] is not None:
-                inferred.append("boundary inferred: top of the first layer not readable, set to 0 m")
+                notes.append("boundary inferred: top of the first layer not readable, set to 0 m")
         if bottoms[i] is None:
             if i + 1 < len(flat):
                 bottoms[i] = tops[i + 1]  # stays None if the next top is unknown too
             elif final_depth is not None and tops[i] is not None and final_depth <= tops[i] + 0.01:
                 # The hole ends where this unit starts (e.g. a pit stopped on rock): a finding, not a layer.
-                inferred.append(f"reached at the final depth {final_depth:g} m, thickness unknown: "
-                                f"{' '.join(flat[i][0].description_original.split())[:80]}")
+                notes.append(f"reached at the final depth {final_depth:g} m, thickness unknown: "
+                             f"{' '.join(flat[i][0].description_original.split())[:80]}")
             else:
                 bottoms[i] = final_depth  # only the last layer may close at the final depth
                 if final_depth is not None and tops[i] is not None:
-                    inferred.append(f"boundary inferred: bottom of the last layer not readable, "
-                                    f"set to the final depth {final_depth:g} m")
-    if notes is not None:
-        notes.extend(inferred)
+                    notes.append(f"boundary inferred: bottom of the last layer not readable, "
+                                 f"set to the final depth {final_depth:g} m")
     layers: list[Layer] = []
     for index, ((x, src), top, bottom) in enumerate(zip(flat, tops, bottoms)):
         if top is None or bottom is None:
             continue
         if index == len(flat) - 1 and abs(bottom - top) < 0.01 and (final_depth is None or abs(final_depth - top) < 0.01):
             # The last row describes what was hit at the end (a pit or hand auger stopped on rock).
-            if notes is not None:
-                notes.append(f"reached at the final depth {top:g} m, thickness unknown: "
-                             f"{' '.join(x.description_original.split())[:80]}")
+            notes.append(f"reached at the final depth {top:g} m, thickness unknown: "
+                         f"{' '.join(x.description_original.split())[:80]}")
             continue
         layer = Layer(
             top_m=top,
@@ -389,79 +405,86 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
             moisture=x.moisture,
             source=SourceRef(file=src.file, page=src.page, bbox=_bbox(x.bbox)),
         )
-        if (layers and not _same_page(src, layers[-1].source) and top < layers[-1].bottom_m < bottom
-                and any(abs(l.top_m - top) < 0.05 for l in layers)
-                and all(_same_properties(l, layer) for l in layers if l.bottom_m > top and l.top_m < bottom)):
-            if notes is not None:
-                notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page}; "
-                             f"top set to {layers[-1].bottom_m:g} m")
-            layer.top_m = top = layers[-1].bottom_m
-        prev = layers[-1] if layers else None
-        if (prev and layer.primary == Lithology.unknown and not _same_page(src, prev.source)
-                and abs(prev.bottom_m - top) < 0.05 and prev.primary not in (Lithology.unknown, Lithology.no_recovery)):
-            # Same unit across a sheet break whose soil/rock name is printed on the earlier sheet only.
-            layer.primary = prev.primary
-            if notes is not None:
-                notes.append(f"lithology of layer {top:g}–{bottom:g} m taken from the previous sheet")
-        join = _sheet_join(layers[-1], layer) if layers and not _same_page(src, flat[index - 1][1]) else None
-        if join == "merge":
-            prev = layers[-1]
-            if notes is not None and abs(prev.bottom_m - top) > 0.05:
-                notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats the unit "
-                             f"{prev.top_m:g}–{prev.bottom_m:g} m of the previous sheet; joined as "
-                             f"{prev.top_m:g}–{max(prev.bottom_m, bottom):g} m")
-            prev.bottom_m = max(prev.bottom_m, bottom)
-            if _plain(layer.description_original) not in ("", _plain(prev.description_original)):
-                prev.description_original += f" / {layer.description_original}"
-                if prev.description_en and layer.description_en:
-                    prev.description_en += f" / {layer.description_en}"
-            conflicts = _carry_properties(prev, layer)
-            if conflicts and notes is not None:
-                notes.append(f"properties differ across the sheet break: layer {prev.top_m:g}–{prev.bottom_m:g} m, "
-                             + "; ".join(conflicts))
-            continue
-        if join == "extend":
-            if notes is not None:
-                notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page} as continued from the previous "
-                             f"sheet; top set to {layers[-1].bottom_m:g} m")
-            layer.top_m = top = layers[-1].bottom_m
-        if (layers and abs(layers[-1].top_m - top) < 0.01 and abs(layers[-1].bottom_m - bottom) < 0.01
-                and _same_properties(layers[-1], layer)):
-            continue  # same layer read twice (overlapping sheets); a different material stays as an overlap
-        prev = layers[-1] if layers else None
-        if (prev and not _same_page(src, prev.source) and abs(prev.bottom_m - bottom) < 0.01
-                and prev.top_m < top < prev.bottom_m and _same_properties(prev, layer)):
-            # The earlier sheet gave the unit's full range, the next one repeats it from its sheet top.
-            if notes is not None:
-                notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats {prev.top_m:g}–{prev.bottom_m:g} m")
-            continue
-        if (prev and not _same_page(src, prev.source) and abs(prev.top_m - top) < 0.01
-                and bottom < prev.bottom_m - 0.01 and _same_properties(prev, layer)):
-            # The earlier sheet ran its last unit past its own end; the next sheet shows where it really ends.
-            if notes is not None:
-                notes.append(f"layer {prev.top_m:g}–{prev.bottom_m:g} m ends at {bottom:g} m per page {src.page}")
-            layers[-1] = layer
-            continue
-        layers.append(layer)
+        new_sheet = index > 0 and not _same_page(src, flat[index - 1][1])
+        if not _join_into(layers, layer, new_sheet, notes):
+            layers.append(layer)
     return layers
 
 
-def extend_sampled_layers(bh: Borehole, sample_max: float = 0.6, gap_max: float = 1.6) -> list[str]:
+def _join_into(layers: list[Layer], layer: Layer, new_sheet: bool, notes: list[str]) -> bool:
+    """Fit `layer` to the layers read so far across a sheet break: it may restate, continue or end a unit of the
+    previous sheet. Returns whether it was taken in that way; otherwise it is a layer of its own."""
+    src, top, bottom = layer.source, layer.top_m, layer.bottom_m
+    if (layers and not _same_page(src, layers[-1].source) and top < layers[-1].bottom_m < bottom
+            and any(abs(l.top_m - top) < 0.05 for l in layers)
+            and all(_same_properties(l, layer) for l in layers if l.bottom_m > top and l.top_m < bottom)):
+        notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page}; top set to {layers[-1].bottom_m:g} m")
+        layer.top_m = top = layers[-1].bottom_m
+    prev = layers[-1] if layers else None
+    if (prev and layer.primary == Lithology.unknown and not _same_page(src, prev.source)
+            and abs(prev.bottom_m - top) < 0.05 and prev.primary not in (Lithology.unknown, Lithology.no_recovery)):
+        # Same unit across a sheet break whose soil/rock name is printed on the earlier sheet only.
+        layer.primary = prev.primary
+        notes.append(f"lithology of layer {top:g}–{bottom:g} m taken from the previous sheet")
+    join = _sheet_join(prev, layer) if prev and new_sheet else None
+    if join == "merge":
+        if abs(prev.bottom_m - top) > 0.05:
+            notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats the unit "
+                         f"{prev.top_m:g}–{prev.bottom_m:g} m of the previous sheet; joined as "
+                         f"{prev.top_m:g}–{max(prev.bottom_m, bottom):g} m")
+        prev.bottom_m = max(prev.bottom_m, bottom)
+        if _plain(layer.description_original) not in ("", _plain(prev.description_original)):
+            prev.description_original += f" / {layer.description_original}"
+            if prev.description_en and layer.description_en:
+                prev.description_en += f" / {layer.description_en}"
+        if conflicts := _carry_properties(prev, layer):
+            notes.append(f"properties differ across the sheet break: layer {prev.top_m:g}–{prev.bottom_m:g} m, "
+                         + "; ".join(conflicts))
+        return True
+    if join == "extend":
+        notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page} as continued from the previous "
+                     f"sheet; top set to {prev.bottom_m:g} m")
+        layer.top_m = top = prev.bottom_m
+    if (prev and abs(prev.top_m - top) < 0.01 and abs(prev.bottom_m - bottom) < 0.01
+            and _same_properties(prev, layer)):
+        return True  # same layer read twice (overlapping sheets); a different material stays as an overlap
+    if (prev and not _same_page(src, prev.source) and abs(prev.bottom_m - bottom) < 0.01
+            and prev.top_m < top < prev.bottom_m and _same_properties(prev, layer)):
+        # The earlier sheet gave the unit's full range, the next one repeats it from its sheet top.
+        notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats {prev.top_m:g}–{prev.bottom_m:g} m")
+        return True
+    if (prev and not _same_page(src, prev.source) and abs(prev.top_m - top) < 0.01
+            and bottom < prev.bottom_m - 0.01 and _same_properties(prev, layer)):
+        # The earlier sheet ran its last unit past its own end; the next sheet shows where it really ends.
+        notes.append(f"layer {prev.top_m:g}–{prev.bottom_m:g} m ends at {bottom:g} m per page {src.page}")
+        layers[-1] = layer
+        return True
+    return False
+
+
+SAMPLE_MAX_M = 0.6
+SAMPLE_GAP_MAX_M = 1.6
+
+
+def extend_sampled_layers(bh: Borehole) -> list[str]:
     """Logs that describe the soil at each sample (SPT 0.45 m, then nothing until the next sample) leave
-    gaps between samples. A short described interval followed by a gap of at most `gap_max` to the next
-    layer is extended to it, as an inferred boundary (never released without a look)."""
+    gaps between samples. A short described interval followed by a gap of at most SAMPLE_GAP_MAX_M to the
+    next layer is extended to it, as an inferred boundary (never released without a look)."""
     notes = []
     layers = sorted(bh.layers, key=lambda layer: layer.top_m)
     for a, b in zip(layers, layers[1:]):
         gap = b.top_m - a.bottom_m
-        if a.top_m > 0 and a.bottom_m - a.top_m <= sample_max and 0.1 < gap <= gap_max:  # a top layer is no sample
+        if a.top_m > 0 and a.bottom_m - a.top_m <= SAMPLE_MAX_M and 0.1 < gap <= SAMPLE_GAP_MAX_M:  # a top layer is no sample
             notes.append(f"boundary inferred: layer {a.top_m:g}–{a.bottom_m:g} m (a sample) extended to the next "
                          f"description at {b.top_m:g} m")
             a.bottom_m = b.top_m
     return notes
 
 
-def fill_core_loss(bh: Borehole, tol: float = 0.05) -> list[str]:
+CORE_LOSS_TOLERANCE_M = 0.05
+
+
+def fill_core_loss(bh: Borehole) -> list[str]:
     """A gap inside one core run with less than full recovery, no longer than the unrecovered length,
     is core loss: fill it with a no_recovery layer and say so."""
     notes = []
@@ -469,14 +492,15 @@ def fill_core_loss(bh: Borehole, tol: float = 0.05) -> list[str]:
     layers = sorted(bh.layers, key=lambda layer: layer.top_m)
     for a, b in zip(layers, layers[1:]):
         gap = b.top_m - a.bottom_m
-        if gap <= tol:
+        if gap <= CORE_LOSS_TOLERANCE_M:
             continue
-        run = next((c for c in bh.core_runs if c.top_m - tol <= a.bottom_m and b.top_m <= c.bottom_m + tol), None)
+        run = next((c for c in bh.core_runs if c.top_m - CORE_LOSS_TOLERANCE_M <= a.bottom_m
+                    and b.top_m <= c.bottom_m + CORE_LOSS_TOLERANCE_M), None)
         tcr = run.total_core_recovery_pct if run else None
         if tcr is None or tcr >= 100:
             continue
         left = budget.setdefault(id(run), (1 - tcr / 100) * (run.bottom_m - run.top_m))
-        if gap > left + tol:
+        if gap > left + CORE_LOSS_TOLERANCE_M:
             continue
         budget[id(run)] = left - gap
         bh.layers.append(Layer(top_m=a.bottom_m, bottom_m=b.top_m, description_original="core loss (inferred)",
@@ -524,8 +548,7 @@ def document_crs(pages: list[PageResult]) -> tuple[str, int] | None:
 
 def flag_position_outliers(boreholes: list[Borehole]) -> None:
     """Holes of one document lie close together; one far from the others hints at a misread or a wrong CRS."""
-    precise = [b for b in boreholes if b.location.lat is not None
-               and b.location.method in (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)]
+    precise = [b for b in boreholes if is_precise(b.location)]
     if len(precise) < 3:
         return
     lat = statistics.median(b.location.lat for b in precise)
@@ -785,7 +808,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     coords_raw = _first(x.coords_raw for x in xs)
     crs_raw = _first(x.crs_raw for x in xs)
     method = GeorefMethod.stated_coordinates
-    row = lookup(coord_rows, key)
+    row = lookup_hole(coord_rows, key)
     # A surveyor's coordinate table can name another system than the log template prints: both are
     # tried and the named place decides.
     table_crs = row.crs_raw if row and coords_raw and row.crs_raw and row.crs_raw != crs_raw else None
@@ -859,11 +882,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
             GroundwaterObservation(depth_m=g.depth_m, kind=g.kind, observed_on=_date(g.date), dry=g.dry,
                                    reference=g.reference, raw=g.raw, source=src)
             for x, src in logs for g in x.groundwater),
-        lab_results=[LabResult(parameter=lab.parameter, parameter_raw=lab.parameter_raw, value=v,
-                               value_raw=f"{lab.value_raw} {lab.unit_raw or ''}".strip(), top_m=lab.top_m,
-                               bottom_m=lab.bottom_m, sample_name=lab.sample_name, source=src,
-                               qualifier=lab_qualifier(lab.value_raw),
-                               value_upper=lab_upper(lab.parameter, lab.value_raw, lab.unit_raw))
+        lab_results=[_lab_result(lab, v, lab.top_m, lab.bottom_m, src)
                      for x, src in logs for lab in x.lab_results
                      if (v := _lab_value(lab.parameter, lab.value_raw, lab.unit_raw)) is not None],
         sources=[src for _, src in logs],
@@ -892,14 +911,9 @@ def placeholder(doc_id: str, source_file: str, page: int | None, issue: str, nam
     return bh
 
 
-def _log_key(log: XLog, page_kind: str) -> tuple[str | None, str]:
+def _log_key(log: XLog, page_kind: str) -> HoleKey:
     return hole_key(log.name, log.investigation_type if log.investigation_type in ("borehole", "test_pit", "probe")
-                    else _KINDS.get(page_kind))
-
-
-def _sheet_number(log: XLog) -> tuple[int, int] | None:
-    m = SHEET.search(log.sheet or "")
-    return (int(m.group(1)), int(m.group(2))) if m and 1 <= int(m.group(1)) <= int(m.group(2)) <= 50 else None
+                    else _HOLE_KIND_OF_PAGE.get(page_kind))
 
 
 def _file_order(doc_id: str) -> list:
@@ -917,9 +931,9 @@ def join_image_sheets(by_doc: dict[str, list[PageResult]], group_crs: dict[str, 
     singles: dict[str, list[str]] = defaultdict(list)
     for doc_id, pages in by_doc.items():
         if "__" in doc_id and len(pages) == 1:
-            singles[doc_id.split("__")[0]].append(doc_id)
+            singles[store.document_group(doc_id)].append(doc_id)
     for group, doc_ids in singles.items():
-        open_holes: dict[tuple[str | None, str], tuple[str, list[tuple[XLog, SourceRef]], tuple[int, int]]] = {}
+        open_holes: dict[HoleKey, tuple[str, list[tuple[XLog, SourceRef]], tuple[int, int]]] = {}
         for doc_id in sorted(doc_ids, key=_file_order):
             r = by_doc[doc_id][0]
             if r.extraction is None or r.kind not in LOG_KINDS:
@@ -959,6 +973,54 @@ def _continues_sheet(sheets: list[tuple[XLog, SourceRef]], log: XLog) -> bool:
     return (last_top if last_top is not None else bottom) - 0.01 <= top <= bottom + SHEET_GAP_M
 
 
+def _document_inputs(pages: list[PageResult]) -> tuple[dict[HoleKey, XCoordinateRow],
+                                                       dict[HoleKey, list[tuple[XLog, SourceRef]]],
+                                                       tuple[float, float, float] | None]:
+    """A document's coordinate table rows and its logs, each by hole key, and its place estimate
+    (lat, lon, precision in km)."""
+    coord_rows: dict[HoleKey, XCoordinateRow] = {}
+    groups: dict[HoleKey, list[tuple[XLog, SourceRef]]] = defaultdict(list)
+    places = []
+    for r in pages:
+        if r.extraction is None:
+            continue
+        for row in r.extraction.coordinate_rows:
+            k = hole_key(row.name, None)
+            old = coord_rows.get(k)
+            # Actual positions over planned ones, then a table that names its coordinate system.
+            if old is None or (old.is_planned and not row.is_planned) or \
+                    (bool(old.is_planned) == bool(row.is_planned) and row.crs_raw and not old.crs_raw):
+                coord_rows[k] = row
+        for log in r.extraction.logs:
+            if r.kind not in LOG_KINDS and log.layers:
+                # A summary or coordinate table ('depth to rock: 40 m') is no layer sequence: it adds
+                # coordinates and header values to the hole, not layers.
+                log = log.model_copy(update={"layers": []})
+            if log.layers or log.coords_raw or r.kind in LOG_KINDS:
+                groups[_log_key(log, r.kind)].append((log, SourceRef(file=r.source_file, page=r.page)))
+            if log.place_lat is not None and log.place_lon is not None:
+                places.append((log.place_lat, log.place_lon, log.place_precision_km or 10.0))
+    if not places:
+        return coord_rows, groups, None
+    # Median of the more precise estimates only, so a few country-level guesses don't drag it away.
+    best = min(p[2] for p in places)
+    precise = [p for p in places if p[2] <= max(3 * best, 10.0)]
+    return coord_rows, groups, (statistics.median(p[0] for p in precise), statistics.median(p[1] for p in precise),
+                                statistics.median(p[2] for p in precise))
+
+
+def _name_split_hole(bh: Borehole, doc_id: str, naming: str, page: int, nth: int) -> None:
+    """Id and name of a hole split off by `split_holes`, from its first page (and its count there), so that
+    nothing stored or linked for the bare name follows it."""
+    suffix = f"-{nth}" if nth > 1 else ""
+    if naming == "unnamed":
+        bh.borehole_id = f"{doc_id}:p{page}{suffix}"
+        bh.borehole_name = f"unnamed sheet, {doc_id} p{page}{suffix}"
+    else:
+        bh.borehole_id = f"{doc_id}:{id_key(bh.borehole_name)}-p{page}{suffix}"
+        bh.borehole_name = f"{bh.borehole_name}, p{page}{suffix}"
+
+
 def assemble(results: list[PageResult], *, deduplicate: bool = True,
              failed_docs: set[str] | None = None) -> list[Borehole]:
     by_doc: dict[str, list[PageResult]] = defaultdict(list)
@@ -968,45 +1030,17 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
     # Folders of single images (e.g. one JPG per hole) form one document for CRS and position checks.
     by_group: dict[str, list[PageResult]] = defaultdict(list)
     for r in results:
-        by_group[r.doc_id.split("__")[0]].append(r)
+        by_group[store.document_group(r.doc_id)].append(r)
     group_crs = {g: document_crs(rs) for g, rs in by_group.items()}
     join_image_sheets(by_doc, group_crs)
 
     boreholes: list[Borehole] = []
     built: dict[str, list[tuple[Borehole, int, dict]]] = defaultdict(list)
     for doc_id, pages in by_doc.items():
-        group = doc_id.split("__")[0]
+        group = store.document_group(doc_id)
         pages.sort(key=lambda r: r.page)
-        coord_rows: dict[str, XCoordinateRow] = {}
-        groups: dict[str, list[tuple[XLog, SourceRef]]] = defaultdict(list)
-        places = []
+        coord_rows, groups, doc_place = _document_inputs(pages)
         page_texts = {(r.source_file, r.page): r.text for r in pages}
-        for r in pages:
-            if r.extraction is None:
-                continue
-            for row in r.extraction.coordinate_rows:
-                k = hole_key(row.name, None)
-                old = coord_rows.get(k)
-                # Actual positions over planned ones, then a table that names its coordinate system.
-                if old is None or (old.is_planned and not row.is_planned) or \
-                        (bool(old.is_planned) == bool(row.is_planned) and row.crs_raw and not old.crs_raw):
-                    coord_rows[k] = row
-            for log in r.extraction.logs:
-                if r.kind not in LOG_KINDS and log.layers:
-                    # A summary or coordinate table ('depth to rock: 40 m') is no layer sequence: it adds
-                    # coordinates and header values to the hole, not layers.
-                    log = log.model_copy(update={"layers": []})
-                if log.layers or log.coords_raw or r.kind in LOG_KINDS:
-                    groups[_log_key(log, r.kind)].append((log, SourceRef(file=r.source_file, page=r.page)))
-                if log.place_lat is not None and log.place_lon is not None:
-                    places.append((log.place_lat, log.place_lon, log.place_precision_km or 10.0))
-        doc_place = None
-        if places:
-            # Median of the more precise estimates only, so a few country-level guesses don't drag it away.
-            best = min(p[2] for p in places)
-            precise = [p for p in places if p[2] <= max(3 * best, 10.0)]
-            doc_place = (statistics.median(p[0] for p in precise), statistics.median(p[1] for p in precise),
-                         statistics.median(p[2] for p in precise))
         doc_records: list[Borehole] = []
         split_pages: Counter[int] = Counter()
         for (kind, _), named in groups.items():
@@ -1019,16 +1053,10 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
                     bh, unreadable = build_borehole(doc_id, pages[0].source_file, logs,
                                                     coord_rows if naming == "named" else {},
                                                     doc_place, group_crs[group], kind)
-                    if naming != "named":  # nothing stored or linked for the bare name follows this hole
+                    if naming != "named":
                         page = logs[0][1].page
                         split_pages[page] += 1
-                        suffix = f"-{split_pages[page]}" if split_pages[page] > 1 else ""
-                        if naming == "unnamed":
-                            bh.borehole_id = f"{doc_id}:p{page}{suffix}"
-                            bh.borehole_name = f"unnamed sheet, {doc_id} p{page}{suffix}"
-                        else:
-                            bh.borehole_id = f"{doc_id}:{id_key(bh.borehole_name)}-p{page}{suffix}"
-                            bh.borehole_name = f"{bh.borehole_name}, p{page}{suffix}"
+                        _name_split_hole(bh, doc_id, naming, page, split_pages[page])
                     bh.issues += findings
                     built[group].append((bh, unreadable, page_texts))
                     doc_records.append(bh)
@@ -1056,27 +1084,21 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
     return dedupe(boreholes) if deduplicate else boreholes
 
 
-PRECISE_METHODS = (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)
 DEPTH_TOLERANCE_M = 0.05
 # Findings that describe a record's layer sequence or its position travel with the layers or the position.
 LAYER_FINDINGS = STRUCTURAL + ("no layers extracted", "layer ", "minor discontinuity", "core loss inferred",
                                "lithology of layer", "missing sheets", "page ", "depths printed in feet",
                                "properties differ")
-POSITION_FINDINGS = ("coordinate", "CRS", "position", "printed coordinates", "not georeferenced", "invalid WGS84",
-                     "no place to cross-check")
+POSITION_FINDINGS = corrections.GEOREF_ISSUES + ("coordinate system from reviewer knowledge",)
 
 
-def _precise(bh: Borehole) -> bool:
-    return bh.location.lat is not None and bh.location.method in PRECISE_METHODS
-
-
-def _document(bh: Borehole) -> str:
+def document_id(bh: Borehole) -> str:
     return bh.borehole_id.split(":", 1)[0]
 
 
 def _group(bh: Borehole) -> str:
     """The folder or upload batch: files put together by a person, so one hole number there is one hole."""
-    return _document(bh).split("__")[0]
+    return store.document_group(bh.borehole_id)
 
 
 def _name_tokens(name: str) -> list[str]:
@@ -1092,7 +1114,7 @@ def _short_names(boreholes: list[Borehole]) -> dict[str, str]:
         mine = _name_tokens(bh.borehole_name)
         for other in boreholes:
             theirs = _name_tokens(other.borehole_name)
-            if (_group(other) == _group(bh) and _document(other) != _document(bh) and 2 <= len(theirs) < len(mine)
+            if (_group(other) == _group(bh) and document_id(other) != document_id(bh) and 2 <= len(theirs) < len(mine)
                     and mine[-len(theirs):] == theirs and any(t.isdigit() for t in theirs)):
                 out[bh.borehole_id] = hole_key(other.borehole_name, None)[1]
                 break
@@ -1102,7 +1124,7 @@ def _short_names(boreholes: list[Borehole]) -> dict[str, str]:
 def _where(bh: Borehole) -> str:
     src = bh.sources[0] if bh.sources else None
     if src is None:
-        return _document(bh)
+        return document_id(bh)
     return f"{src.file} p{src.page}" if src.page else src.file
 
 
@@ -1116,7 +1138,7 @@ def _evidence(a: Borehole, b: Borehole) -> tuple[list[str], list[str], list[str]
     la, lb = a.location, b.location
     if la.lat is not None and lb.lat is not None:
         d = haversine_km(la.lat, la.lon, lb.lat, lb.lon) * 1000
-        if _precise(a) and _precise(b):
+        if is_precise(la) and is_precise(lb):
             (agree if d <= POSITION_TOLERANCE_M else differ).append(f"positions {d:.0f} m apart")
         elif d > 3 * max(la.accuracy_m or 0.0, lb.accuracy_m or 0.0, 1000.0):
             differ.append(f"positions {d / 1000:.0f} km apart")
@@ -1163,7 +1185,7 @@ def _complete(bh: Borehole) -> bool:
 
 def _location_rank(bh: Borehole) -> tuple:
     loc = bh.location
-    return loc.lat is not None, _precise(bh), not loc.is_planned, loc.confidence or 0.0
+    return loc.lat is not None, is_precise(loc), not loc.is_planned, loc.confidence or 0.0
 
 
 # How far header values of two documents may differ; a date has to match.
@@ -1179,8 +1201,9 @@ def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dic
     one the review was made under before one reached by its uid. Otherwise the layers come from one log: the
     better-checked one when both read the same boundaries, else the more detailed one, and the other sequence
     goes to review. "Better checked" is judged on the record as it will be stored (`judged`: knowledge and
-    corrections applied), and a blocking finding outweighs any score. Missing header values and the better position are taken from the other record; values that
-    disagree stay with the layer record and become findings. Tests and lab values of both are kept once."""
+    corrections applied), and a blocking finding outweighs any score. Missing header values and the better
+    position are taken from the other record; values that disagree stay with the layer record and become
+    findings. Tests and lab values of both are kept once."""
     same = _same_layers(a, b)
     reviewed = lambda r: (r.borehole_id in protected.get(r.borehole_id, ()), r.borehole_id in protected)
     def checked(r: Borehole) -> tuple:
@@ -1193,9 +1216,8 @@ def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dic
     rank = (lambda r: (*reviewed(r), _complete(r), *checked(r), len(r.layers))) if same else \
         (lambda r: (*reviewed(r), _complete(r), len(r.layers), *checked(r)))
     main, other = (a, b) if rank(a) >= rank(b) else (b, a)
-    bh = main
-    issues = list(bh.issues)
-    checks = set(bh.validate_log())  # rerun below, as a filled final depth can change them
+    issues = list(main.issues)
+    checks = set(main.validate_log())  # rerun below, as a filled final depth can change them
     issues = [i for i in issues if i not in checks]
     if how == "certain":
         issues.append(f"combined with the record from {_where(other)}: same name, {', '.join(agree)}")
@@ -1207,50 +1229,50 @@ def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dic
         issues.append(f"sources disagree on the layer sequence: kept {len(main.layers)} layers to {end(main):g} m "
                       f"from {_where(main)}, {_where(other)} reads {len(other.layers)} layers to {end(other):g} m")
     if _location_rank(other) > _location_rank(main):
-        bh.location = other.location.model_copy(deep=True)
+        main.location = other.location.model_copy(deep=True)
         issues = [i for i in issues if not i.startswith(POSITION_FINDINGS)]
         issues += [i for i in other.issues if i.startswith(POSITION_FINDINGS)]
     # The other record's own checks are rerun on the combined record below.
-    other_checks = set(other.model_copy(deep=True).validate_log())
+    other_checks = set(other.validate_log())
     issues += [i for i in other.issues if not i.startswith(LAYER_FINDINGS + POSITION_FINDINGS) and i not in other_checks]
 
     depths_moved = False
     for field in _FILLED:
-        mine, theirs = getattr(bh, field), getattr(other, field)
+        mine, theirs = getattr(main, field), getattr(other, field)
         if theirs in (None, ""):
             continue
         if mine in (None, ""):
-            setattr(bh, field, theirs)
+            setattr(main, field, theirs)
             if field == "surface_elevation_m":
-                bh.surface_elevation_raw, bh.elevation_datum = other.surface_elevation_raw, other.elevation_datum
+                main.surface_elevation_raw, main.elevation_datum = other.surface_elevation_raw, other.elevation_datum
             source = other.field_sources.get(field) or (other.sources[0] if other.sources else None)
             if source:
-                bh.field_sources[field] = source
+                main.field_sources[field] = source
             depths_moved |= field in ("depth_m", "length_m")
         elif field in SOURCE_CONFLICTS:
             rule, what, unit = SOURCE_CONFLICTS[field]
             tolerance = COMPARE_TOLERANCE.get(field)
             if (mine != theirs) if tolerance is None else abs(mine - theirs) > tolerance:
                 issues.append(f"{rule} {what}: {mine}{unit} ({_where(main)}) vs {theirs}{unit} ({_where(other)})")
-    bh.notes = "\n".join(dict.fromkeys(n for n in (bh.notes, other.notes) if n)) or None
+    main.notes = "\n".join(dict.fromkeys(n for n in (main.notes, other.notes) if n)) or None
 
     def new(items: list, theirs: list, key) -> list:
         seen = {key(x) for x in items}
         return [x for x in theirs if key(x) not in seen]
 
-    samples = new(bh.samples, other.samples, lambda s: (s.name, s.top_m, s.bottom_m))
-    spt = new(bh.spt, other.spt, lambda s: (s.depth_m, tuple(s.blows or ()), s.n_value))
-    runs = new(bh.core_runs, other.core_runs, lambda c: (c.top_m, c.bottom_m))
-    bh.samples, bh.spt, bh.core_runs = bh.samples + samples, bh.spt + spt, bh.core_runs + runs
-    water = _unique_groundwater(bh.groundwater + other.groundwater)
-    labs = [lab for lab in other.lab_results if add_lab_result(bh, lab)]
-    depths_moved |= bool(samples or spt or runs or labs or len(water) > len(bh.groundwater))
-    bh.groundwater = water
+    samples = new(main.samples, other.samples, lambda s: (s.name, s.top_m, s.bottom_m))
+    spt = new(main.spt, other.spt, lambda s: (s.depth_m, tuple(s.blows or ()), s.n_value))
+    runs = new(main.core_runs, other.core_runs, lambda c: (c.top_m, c.bottom_m))
+    main.samples, main.spt, main.core_runs = main.samples + samples, main.spt + spt, main.core_runs + runs
+    water = _unique_groundwater(main.groundwater + other.groundwater)
+    labs = [lab for lab in other.lab_results if add_lab_result(main, lab)]
+    depths_moved |= bool(samples or spt or runs or labs or len(water) > len(main.groundwater))
+    main.groundwater = water
     if depths_moved:  # their depths share the other log's unchecked conversion from feet
         issues += [i for i in other.issues if i.startswith("depths printed in feet")]
-    bh.sources = list({(s.file, s.page): s for s in bh.sources + other.sources}.values())
-    bh.issues = list(dict.fromkeys(issues + bh.validate_log()))
-    return bh
+    main.sources = list({(s.file, s.page): s for s in main.sources + other.sources}.values())
+    main.issues = list(dict.fromkeys(issues + main.validate_log()))
+    return main
 
 
 def _kind(bh: Borehole) -> str | None:
@@ -1273,7 +1295,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
     clusters: dict[str, list[dict]] = defaultdict(list)
     kept: list[dict] = []
     for bh in sorted(boreholes, key=lambda b: b.borehole_id):
-        entry = {"bh": bh, "ids": {bh.borehole_id}, "docs": {_document(bh)}, "changed": False}
+        entry = {"bh": bh, "ids": {bh.borehole_id}, "docs": {document_id(bh)}, "changed": False}
         kept.append(entry)
         if any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
             continue
@@ -1282,7 +1304,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
         best = None
         for cluster in clusters[number]:
             other = cluster["bh"]
-            if _document(bh) in cluster["docs"] or (kind and _kind(other) and kind != _kind(other)):
+            if document_id(bh) in cluster["docs"] or (kind and _kind(other) and kind != _kind(other)):
                 continue
             reviews = [protected[i] for i in cluster["ids"] if i in protected]
             if review is not None and reviews and not any(review & r for r in reviews):
@@ -1305,7 +1327,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
         kept.pop()
         cluster["bh"] = combine(cluster["bh"], bh, how, agree, protected, judged)
         cluster["ids"].add(bh.borehole_id)
-        cluster["docs"].add(_document(bh))
+        cluster["docs"].add(document_id(bh))
         cluster["changed"] = True
     for entry in kept:
         if entry["changed"]:
@@ -1338,9 +1360,9 @@ def plausible(parameter: LabParameter, value: float) -> bool:
 
 def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[int, int, int]:
     """Attach the rows of lab sheets to the holes of the same document: by hole name (also with a test
-    suffix such as 'QX 16 - FHT'), else by a sample name that is a hole name or that only one hole has,
+    suffix such as 'BH 16 - FHT'), else by a sample name that is a hole name or that only one hole has,
     else to the only hole of the document. Returns (linked, unmatched, implausible)."""
-    by_name: dict[tuple[str | None, str], Borehole] = {}
+    by_name: dict[HoleKey, Borehole] = {}
     for bh in records:
         by_name.setdefault(hole_key(bh.borehole_name, bh.investigation_type.value if bh.investigation_type else None), bh)
     by_sample: dict[str, list[tuple[Borehole, object]]] = defaultdict(list)
@@ -1354,12 +1376,12 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
 
     def find_hole(name: str, page_kind: str | None, depth: float | None) -> Borehole | None:
         kind, number = hole_key(name, page_kind)
-        bh = lookup(by_name, (kind, number))
+        bh = lookup_hole(by_name, (kind, number))
         if bh is None and kind is None:  # same number for a borehole and a pit: the depth decides
             fits = [b for (k, n), b in by_name.items() if n == number and deep_enough(b, depth)]
             bh = fits[0] if len(fits) == 1 else None
         if bh is None:
-            # 'QX10CONTAMLAND', 'QX16FHT': a known hole followed by a word. A single letter ('QX11A') is
+            # 'BH10CONTAM', 'BH16FHT': a known hole followed by a word. A single letter ('BH11A') is
             # another hole (a re-drill) and does not match.
             prefixes = [(n, b) for (k, n), b in by_name.items() if n[-1:].isdigit() and number.startswith(n)
                         and len(number) - len(n) >= 2 and number[len(n)].isalpha() and (kind is None or k in (kind, None))]
@@ -1409,17 +1431,11 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
                 continue
             top = row.top_m if row.top_m is not None else (sample.top_m if sample else None)
             bottom = row.bottom_m if row.bottom_m is not None else (sample.bottom_m if sample and row.top_m is None else None)
-            result = LabResult(parameter=row.parameter, parameter_raw=row.parameter_raw, value=value,
-                               value_raw=f"{row.value_raw} {row.unit_raw or ''}".strip(), top_m=top, bottom_m=bottom,
-                               sample_name=row.sample_name, source=SourceRef(file=r.source_file, page=r.page),
-                               qualifier=lab_qualifier(row.value_raw),
-                               value_upper=lab_upper(row.parameter, row.value_raw, row.unit_raw))
-            add_lab_result(bh, result)
+            add_lab_result(bh, _lab_result(row, value, top, bottom, SourceRef(file=r.source_file, page=r.page)))
             linked += 1
     return linked, unmatched, implausible
 
 
-_NUMBER = r"[-+]?\d+(?:[.,]\d+)?(?:\s*(?:[eE]|[x×*]\s*10\^?)\s*[-+−]?\d+)?"
 _LEADING_VALUE = re.compile(rf"^\s*[<>≤≥~]?\s*{_NUMBER}(?:\s*[-–~]\s*{_NUMBER})?\s*")
 
 

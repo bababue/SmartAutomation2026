@@ -113,15 +113,18 @@ NOT_PRINTED = 0.3
 UNCONFIRMED_CAP = 0.85
 
 
-def covers_full_depth(bh: Borehole, tol: float = 0.05) -> bool:
+FULL_DEPTH_TOLERANCE_M = 0.05
+
+
+def covers_full_depth(bh: Borehole) -> bool:
     """The layers run from the surface to a stated final depth (or length) without a gap or overlap."""
     final = bh.depth_m or bh.length_m
     if not bh.layers or final is None:
         return False
     layers = sorted(bh.layers, key=lambda layer: layer.top_m)
-    if layers[0].top_m > tol or abs(max(layer.bottom_m for layer in layers) - final) > tol:
+    if layers[0].top_m > FULL_DEPTH_TOLERANCE_M or abs(max(l.bottom_m for l in layers) - final) > FULL_DEPTH_TOLERANCE_M:
         return False
-    return all(abs(a.bottom_m - b.top_m) <= tol for a, b in zip(layers, layers[1:]))
+    return all(abs(a.bottom_m - b.top_m) <= FULL_DEPTH_TOLERANCE_M for a, b in zip(layers, layers[1:]))
 
 
 INTERVAL = re.compile(r"\d+(?:[.,]\d+)?\s*(?:m\s*)?[-–~]\s*\d+(?:[.,]\d+)?\s*m?\b")
@@ -154,7 +157,7 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
         extraction -= min(0.2, 0.05 * unreadable)
         reasons.append(f"{unreadable} item(s) reported as unreadable")
     found, total, checked, checkable = text_check(bh, page_texts)
-    agreement = found / total if total >= 3 else None
+    agreement = text_agreement(bh, page_texts)
     has_text = checked > 0
     if agreement is not None and agreement < NOT_PRINTED and not prints_depths(bh, page_texts):
         # Almost nothing matches: the log draws boundaries against a depth scale instead of printing them.

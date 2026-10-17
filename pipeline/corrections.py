@@ -24,7 +24,7 @@ from datetime import date
 from schema.borehole import Borehole, GeorefMethod, GroundwaterObservation, Layer, Lithology
 
 from . import config
-from .georef import _apply, resolve_with
+from .georef import apply_reading, resolve_with
 from .scoring import SOURCE_CONFLICTS, counts_against, score
 
 # Findings about the position that a reviewer's CRS or position correction settles.
@@ -75,8 +75,7 @@ def _crs(bh: Borehole, epsg: int) -> bool:
     c = resolve_with(loc.coords_raw, epsg, near)
     if c is None:
         return False
-    method = loc.method if loc.method == GeorefMethod.linked_table else GeorefMethod.stated_coordinates
-    _apply(loc, c, method)
+    apply_reading(loc, c)
     loc.crs_candidates, loc.confidence, loc.accuracy_m = [], 1.0, 10.0
     return True
 
@@ -189,7 +188,7 @@ def apply(bh: Borehole, items: list[dict]) -> list[bool]:
         return []
     results = []
     existing = list(bh.issues)
-    before = bh.validate_log()  # note: also overwrites bh.issues
+    before = bh.validate_log()
     notes, georef_fixed, fields_fixed = [], False, set()
     overlapping = _overlapping_fixes(bh, items)
     for n, c in enumerate(items):
