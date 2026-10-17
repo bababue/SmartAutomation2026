@@ -88,7 +88,7 @@ class UploadQueue:
         self.executor.submit(self._work, task)
 
     def _work(self, task: UploadTask) -> None:
-        from .__main__ import run
+        from .runner import run
 
         con = store.connect(self.db_path)
         try:

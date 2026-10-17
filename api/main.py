@@ -560,8 +560,8 @@ async def upload_documents(files: list[UploadFile] = File(...)):
             skipped.append(name)
     if not batch:
         raise HTTPException(415, "no PDF, JPG, PNG, TIFF, DOCX, TXT, XLSX or ZIP file in the upload")
-    from pipeline.__main__ import _missing_credentials
-    if msg := _missing_credentials():
+    from pipeline.runner import missing_credentials
+    if msg := missing_credentials():
         raise HTTPException(503, msg)
     job_id = uuid.uuid4().hex[:12]
     folder = f"upload-{job_id}"

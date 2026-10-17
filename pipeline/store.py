@@ -396,7 +396,7 @@ def _write_lab_values(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
 def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str | None = None, uid: str | None = None,
             version_id: int | None = None, review_revision: int = 0) -> None:
     loc = bh.location
-    doc_id = bh.borehole_id.split(":", 1)[0]
+    doc_id = doc_of(bh.borehole_id)
     lithologies = sorted({layer.primary.value for layer in bh.layers})
     cur = con.execute(
         """INSERT INTO boreholes (id, name, doc_id, project, location_name, country, lat, lon, depth, elevation,
@@ -474,8 +474,12 @@ def record_review(con: sqlite3.Connection, borehole_id: str, decision: ReviewSta
     return bh
 
 
+def doc_of(borehole_id: str) -> str:
+    return borehole_id.split(":", 1)[0]
+
+
 def document_group(borehole_id: str) -> str:
-    return borehole_id.split(":", 1)[0].split("__")[0]
+    return doc_of(borehole_id).split("__")[0]
 
 
 def add_correction(con: sqlite3.Connection, scope: str, target: str, kind: str, payload: dict, reviewer: str,

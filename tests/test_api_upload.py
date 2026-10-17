@@ -20,7 +20,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
     monkeypatch.setattr(config, "MAX_UPLOAD_PAGES", 2)
     monkeypatch.setattr(config, "MAX_UPLOAD_BYTES", 10_000)
-    monkeypatch.setattr("pipeline.__main__._missing_credentials", lambda: None)
+    monkeypatch.setattr("pipeline.runner.missing_credentials", lambda: None)
     store.connect(path).close()
     with TestClient(app) as client:
         yield client
@@ -53,7 +53,7 @@ def test_rejects_unreadable_file_and_leaves_nothing_behind(client):
 
 
 def test_rejects_upload_without_credentials_before_saving(client, monkeypatch):
-    monkeypatch.setattr("pipeline.__main__._missing_credentials", lambda: "No key")
+    monkeypatch.setattr("pipeline.runner.missing_credentials", lambda: "No key")
     res = client.post("/api/upload", files={"files": ("log.pdf", _pdf_bytes(1), "application/pdf")})
     assert res.status_code == 503
     assert not config.UPLOADS_DIR.exists()
@@ -66,7 +66,7 @@ def test_rejects_file_over_the_byte_cap(client):
 
 
 def test_strips_directory_components_from_the_filename(client, monkeypatch):
-    monkeypatch.setattr("pipeline.__main__.run", lambda *a, **k: None)
+    monkeypatch.setattr("pipeline.runner.run", lambda *a, **k: None)
     res = client.post("/api/upload", files={"files": ("../../evil.pdf", _pdf_bytes(1), "application/pdf")})
     assert res.status_code == 200
     saved = list((config.UPLOADS_DIR / f"upload-{res.json()['job_id']}").iterdir())
@@ -79,7 +79,7 @@ def test_accepts_file_within_the_page_cap(client, monkeypatch):
     def fake_run(docs, max_pages=None, yes=True, dataset_dir=config.DATASET_DIR, progress=None):
         calls.append(docs)
 
-    monkeypatch.setattr("pipeline.__main__.run", fake_run)
+    monkeypatch.setattr("pipeline.runner.run", fake_run)
     res = client.post("/api/upload", files={"files": ("log.pdf", _pdf_bytes(2), "application/pdf")})
     assert res.status_code == 200
     job_id = res.json()["job_id"]
@@ -146,7 +146,7 @@ def test_files_of_one_batch_form_one_document_group_in_one_run(client, monkeypat
     from tests.test_assemble import _log
 
     runs = []
-    real_run = __import__("pipeline.__main__", fromlist=["run"]).run
+    real_run = __import__("pipeline.runner", fromlist=["run"]).run
 
     def recording_run(docs, **kwargs):
         runs.append([d.doc_id for d in docs])
@@ -155,7 +155,7 @@ def test_files_of_one_batch_form_one_document_group_in_one_run(client, monkeypat
     classification = PageClassification(kind="borehole_log", logs=[LogRef(name="BH1", sheet=None)],
                                         language="en", has_coordinates=True, crs_text=None)
     log = _log("BH1", "E 412000 N 5320000", 300, [(0, 9)]).model_copy(update={"final_depth_m": 9})
-    monkeypatch.setattr("pipeline.__main__.run", recording_run)
+    monkeypatch.setattr("pipeline.runner.run", recording_run)
     monkeypatch.setattr("pipeline.llm.classify_page", lambda *args: classification)
     monkeypatch.setattr("pipeline.llm.extract_page", lambda *args: PageExtraction(logs=[log], coordinate_rows=[]))
     res = client.post("/api/upload", files=[("files", ("log.pdf", _pdf_bytes(1), "application/pdf")),
@@ -172,7 +172,7 @@ def test_files_of_one_batch_form_one_document_group_in_one_run(client, monkeypat
 
 
 def test_zip_keeps_only_documents_and_skips_archive_metadata(client, monkeypatch):
-    monkeypatch.setattr("pipeline.__main__.run", lambda *a, **k: None)
+    monkeypatch.setattr("pipeline.runner.run", lambda *a, **k: None)
     archive = _zip_bytes({"logs/a.pdf": _pdf_bytes(1), "notes.csv": b"x", "__MACOSX/logs/._a.pdf": b"meta"})
     res = client.post("/api/upload", files={"files": ("batch.zip", archive, "application/zip")})
     assert res.status_code == 200
@@ -181,7 +181,7 @@ def test_zip_keeps_only_documents_and_skips_archive_metadata(client, monkeypatch
 
 
 def test_batch_skips_other_files_beside_its_documents(client, monkeypatch):
-    monkeypatch.setattr("pipeline.__main__.run", lambda *a, **k: None)
+    monkeypatch.setattr("pipeline.runner.run", lambda *a, **k: None)
     res = client.post("/api/upload", files=[("files", ("log.pdf", _pdf_bytes(1), "application/pdf")),
                                             ("files", ("site.shp", b"x", "application/octet-stream")),
                                             ("files", ("site.gpkg", b"x", "application/octet-stream"))])
@@ -226,7 +226,7 @@ def test_status_reports_the_running_stage(client, monkeypatch):
         reported.set()
         assert release.wait(3)
 
-    monkeypatch.setattr("pipeline.__main__.run", fake_run)
+    monkeypatch.setattr("pipeline.runner.run", fake_run)
     job_id = client.post("/api/upload", files={"files": ("log.pdf", _pdf_bytes(1), "application/pdf")}).json()["job_id"]
     assert reported.wait(3)
     try:

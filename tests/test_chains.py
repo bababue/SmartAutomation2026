@@ -1,6 +1,6 @@
 """Extraction order across continuation sheets and the previous-sheet context (synthetic data)."""
 
-from pipeline.__main__ import _chains, _walk
+from pipeline.runner import _chains, _walk
 from pipeline.extraction_models import LogRef, PageClassification, PageExtraction, PageKind, XLayer, XLog
 from pipeline.ingest import PageImage
 from pipeline.llm import sheet_context
