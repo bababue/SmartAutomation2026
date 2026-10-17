@@ -13,13 +13,26 @@ export interface TunnelRoute {
   diameterM: number | null
 }
 
-export interface RoutePosition {
+interface RoutePosition {
   chainageM: number
   offsetM: number
 }
 
+export interface RouteCandidate extends RoutePosition {
+  id: string
+  name: string
+}
+
 const STORAGE_KEY = 'borehole-atlas.tunnel-route'
 const RAD = Math.PI / 180
+/** Metres per degree, for the flat approximation used over the short distances of a site or a route. */
+export const M_PER_DEG_LAT = 111_132
+export const M_PER_DEG_LON = 111_320  // at the equator; times cos(latitude) elsewhere
+
+/** The point `eastM` and `northM` metres away from [lon, lat]. */
+export function offsetPoint([lon, lat]: RoutePoint, eastM: number, northM: number): RoutePoint {
+  return [lon + eastM / (M_PER_DEG_LON * Math.max(0.01, Math.cos(lat * RAD))), lat + northM / M_PER_DEG_LAT]
+}
 
 function longitudeDifference(a: number, b: number) {
   return ((b - a + 540) % 360) - 180
@@ -28,8 +41,8 @@ function longitudeDifference(a: number, b: number) {
 function segmentVector(a: RoutePoint, b: RoutePoint) {
   const latitude = ((a[1] + b[1]) / 2) * RAD
   return {
-    x: longitudeDifference(a[0], b[0]) * 111_320 * Math.cos(latitude),
-    y: (b[1] - a[1]) * 111_132,
+    x: longitudeDifference(a[0], b[0]) * M_PER_DEG_LON * Math.cos(latitude),
+    y: (b[1] - a[1]) * M_PER_DEG_LAT,
   }
 }
 
@@ -49,8 +62,8 @@ export function projectToRoute(point: RoutePoint, coordinates: RoutePoint[]): Ro
     const length = Math.hypot(segment.x, segment.y)
     if (!length) continue
     const latitude = ((a[1] + b[1]) / 2) * RAD
-    const px = longitudeDifference(a[0], point[0]) * 111_320 * Math.cos(latitude)
-    const py = (point[1] - a[1]) * 111_132
+    const px = longitudeDifference(a[0], point[0]) * M_PER_DEG_LON * Math.cos(latitude)
+    const py = (point[1] - a[1]) * M_PER_DEG_LAT
     const fraction = Math.max(0, Math.min(1, (px * segment.x + py * segment.y) / (length * length)))
     const offsetM = Math.hypot(px - fraction * segment.x, py - fraction * segment.y)
     if (offsetM < nearest.offsetM) nearest = { chainageM: passed + fraction * length, offsetM }
@@ -59,7 +72,7 @@ export function projectToRoute(point: RoutePoint, coordinates: RoutePoint[]): Ro
   return nearest
 }
 
-export function nearbyBoreholes(features: Feature[], route: TunnelRoute) {
+export function nearbyBoreholes(features: Feature[], route: TunnelRoute): RouteCandidate[] {
   return features.flatMap((feature) => {
     const position = projectToRoute(feature.geometry.coordinates, route.coordinates)
     return position.offsetM <= route.corridorM

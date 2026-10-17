@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { exportUrl } from '../api'
 
 interface Props {
   inReview: boolean
@@ -39,14 +40,14 @@ export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggl
   const button = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    if (!open) { setSub(null); return }
+    if (!open) return
     root.current?.querySelector<HTMLElement>('[role^="menuitem"]')?.focus()
-    const onDown = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false) }
+    const onDown = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) { setOpen(false); setSub(null) } }
     document.addEventListener('pointerdown', onDown)
     return () => document.removeEventListener('pointerdown', onDown)
   }, [open])
 
-  const close = () => { setOpen(false); button.current?.focus() }
+  const close = () => { setOpen(false); setSub(null); button.current?.focus() }
   const pick = (action: () => void) => () => { action(); close() }
 
   // Submenus open to the left, because the menu sits at the right edge of the window.
@@ -94,7 +95,7 @@ export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggl
   return (
     <div className="app-menu" ref={root} onKeyDown={onKeyDown}>
       <button ref={button} className="btn btn-icon menu-button" aria-haspopup="menu" aria-expanded={open}
-        aria-label="Menu" onClick={() => setOpen(!open)}>
+        aria-label="Menu" onClick={() => { setOpen(!open); setSub(null) }}>
         <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 5h12M3 9h12M3 13h12" /></svg>
       </button>
       {open && (
@@ -114,11 +115,11 @@ export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggl
             {sub === 'export' && (
               <div className="menu-flyout" id="menu-export">
                 <div className="app-menu-list" role="menu" aria-label="Export released records">
-                  <a role="menuitem" className="app-menu-item" href="/api/export.xlsx" onClick={close}
+                  <a role="menuitem" className="app-menu-item" href={exportUrl('xlsx')} onClick={close}
                     title="Released records in Herrenknecht's BoreholeDataFormat">
                     <Icon d={ICON.table} /><span className="menu-text">Excel</span>
                   </a>
-                  <a role="menuitem" className="app-menu-item" href="/api/export.csv" onClick={close}
+                  <a role="menuitem" className="app-menu-item" href={exportUrl('csv')} onClick={close}
                     title="Released records, one row per layer">
                     <Icon d={ICON.file} /><span className="menu-text">CSV</span>
                   </a>

@@ -14,41 +14,29 @@ export interface Layer {
   bottom_m: number
   description_original: string
   description_en: string | null
-  language: string | null
   primary: Lithology
-  secondary: { lithology: Lithology; qualifier: string | null }[]
-  uscs: string | null
   stratigraphic_name: string | null
   stratigraphic_code: string | null
   stratigraphic_color: string | null
   geologic_age: string | null
-  color: string | null
-  consistency: string | null
-  relative_density: string | null
-  weathering: string | null
   source: SourceRef | null
 }
 
 export interface Location {
   coords_raw: string | null
   crs_raw: string | null
-  easting: number | null
-  northing: number | null
   crs_epsg: number | null
   crs_candidates: string[]
   lat: number | null
   lon: number | null
   method: 'stated_coordinates' | 'linked_table' | 'geocoded_place' | 'manual' | null
   accuracy_m: number | null
-  place_name: string | null
-  country: string | null
   confidence: number | null
   source: SourceRef | null
 }
 
 export interface SPT {
   depth_m: number
-  blows: number[]
   n_value: number | null
   refusal: boolean
   raw: string | null
@@ -79,9 +67,7 @@ export interface LabResult {
 export interface Borehole {
   borehole_id: string
   borehole_name: string
-  investigation_type: string | null
   location_name: string | null
-  project_id: string | null
   project_name: string | null
   client: string | null
   contractor: string | null
@@ -100,7 +86,6 @@ export interface Borehole {
   spt: SPT[]
   groundwater: Groundwater[]
   lab_results: LabResult[]
-  sources: SourceRef[]
   confidence: number | null
   issues: string[]
   score: number | null
@@ -127,12 +112,15 @@ export interface QueueItem {
   location_name: string | null
   country: string | null
   score: number | null
-  confidence: number | null
-  loc_confidence: number | null
-  loc_method: string | null
   n_layers: number
   source_file: string | null
   reasons: string[]
+}
+
+/** One page of the review queue, with the number of all records in it. */
+export interface QueuePage {
+  items: QueueItem[]
+  total: number
 }
 
 export interface CrsGroup {
@@ -146,7 +134,6 @@ export interface CrsGroup {
 
 /** Ground model values derived from the layers (pipeline/ground.py), depths below ground in m. */
 export interface Ground {
-  final_depth_m: number | null
   /** Top of the rock that continues to the bottom of the hole; null: rock not reached. */
   rock_head_m: number | null
   /** Top of decomposed rock (grades IV–VI) above the rock head. */
@@ -164,18 +151,17 @@ export interface BoreholeSummary {
   country: string | null
   depth: number | null
   elevation: number | null
-  investigation_type: string | null
-  confidence: number | null
-  loc_confidence: number | null
   loc_method: string | null
   n_layers: number
-  n_issues: number
-  lithologies: string | null
   strip: [number, number, Lithology][] | null
   ground: Ground | null
   score: number | null
   review_status: ReviewStatus
-  source_file: string | null
+}
+
+/** Layer strips of the holes in a map box, for the 3D columns. */
+export interface LayerStrips {
+  items: { id: string; strip: BoreholeSummary['strip'] }[]
 }
 
 export interface Feature {
@@ -197,18 +183,18 @@ export interface GroupFacet {
   group: string
   /** The project name its holes give most often; null: none gives one. */
   project: string | null
-  /** How many different project names its holes give (sheets spell them differently). */
-  project_names: number
   count: number
   released: number
-  bbox: [number, number, number, number]
 }
 
 export type CorrectionKind = 'crs' | 'position' | 'layer' | 'layer_add' | 'field' | 'groundwater' | 'test'
 
+/** One hole, or every hole of its document (e.g. a coordinate system). */
+export type CorrectionScope = 'borehole' | 'document'
+
 export interface CorrectionRecord {
   id: number
-  scope: 'borehole' | 'document'
+  scope: CorrectionScope
   target: string
   kind: CorrectionKind
   payload: Record<string, number | string | boolean>
@@ -228,8 +214,6 @@ export interface Detail {
   content_hash: string | null
   /** Review state the reviewer saw; a decision on an outdated state is refused. */
   review_revision?: number
-  uid?: string
-  version_id?: number
   threshold: number
 }
 
@@ -239,10 +223,6 @@ export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log'> & Partial<Pic
 export interface Stats {
   boreholes: number
   located: number
-  layers: number
-  documents: number
-  pages: number
-  countries: { country: string; n: number }[]
   status: Record<ReviewStatus, number>
   threshold: number
   demo: boolean
@@ -270,6 +250,14 @@ export interface StatsDetail {
   crs: [number, number][]
   /** Release audit over the whole database; null: no sample drawn yet (`pipeline eval audit`). */
   audit: { sample: number; reviewed: number; wrong: number; rate: number | null; low: number; high: number } | null
+}
+
+/** An accepted upload batch: its job, and which files are read or skipped. */
+export interface UploadJob {
+  job_id: string
+  pages: number
+  files: string[]
+  skipped: string[]
 }
 
 export interface UploadStatus {

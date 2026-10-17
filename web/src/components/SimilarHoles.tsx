@@ -5,7 +5,7 @@ import type { SimilarGround } from '../types'
 
 /** Holes of other projects with comparable ground: lithology per depth band and water level, from the stored layers. */
 export function SimilarHoles({ boreholeId, onSelect, onFindLike }: {
-  boreholeId: string; onSelect: (id: string) => void; onFindLike?: (like: NonNullable<SimilarGround['like']>) => void
+  boreholeId: string; onSelect: (id: string) => void; onFindLike: (like: NonNullable<SimilarGround['like']>) => void
 }) {
   const [result, setResult] = useState<SimilarGround | 'error' | null>(null)
   useEffect(() => {
@@ -24,7 +24,7 @@ export function SimilarHoles({ boreholeId, onSelect, onFindLike }: {
           <>
             <p className="similar-here">
               This hole: {result.ground}
-              {onFindLike && result.like && (
+              {result.like && (
                 <button className="btn btn-small btn-ghost similar-find" onClick={() => onFindLike(result.like!)}
                   title="Set the ground filters from this hole and show every match">Find more like this</button>
               )}

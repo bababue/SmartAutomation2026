@@ -1,12 +1,6 @@
 import { useRef, useState } from 'react'
-import { routeFromGeoJson, routeLength, type RoutePoint, type TunnelRoute } from '../tunnelRoute'
-
-export interface RouteCandidate {
-  id: string
-  name: string
-  chainageM: number
-  offsetM: number
-}
+import { fmtDistance, parseDecimal } from '../format'
+import { routeFromGeoJson, routeLength, type RouteCandidate, type RoutePoint, type TunnelRoute } from '../tunnelRoute'
 
 interface Props {
   route: TunnelRoute | null
@@ -26,9 +20,6 @@ interface Props {
   onDelete: () => void
   onClose: () => void
 }
-
-const formatMetres = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(2)} km` : `${Math.round(value)} m`
-const numberOrNull = (value: string) => value === '' ? null : Number(value)
 
 export function RoutePanel({ route, draft, candidates, selectedIds, loading, error, onChange, onImport,
   onStartDrawing, onUndo, onFinishDrawing, onCancelDrawing, onSelectNearby, onToggleHole, onDelete, onClose }: Props) {
@@ -76,7 +67,7 @@ export function RoutePanel({ route, draft, candidates, selectedIds, loading, err
         {!route && !draft && <p className="route-hint">Draw a line on the map or import a WGS84 GeoJSON LineString.</p>}
 
         {route && <>
-          <p className="route-summary">{formatMetres(routeLength(route.coordinates))} · {route.coordinates.length} vertices · saved in this browser</p>
+          <p className="route-summary">{fmtDistance(routeLength(route.coordinates))} · {route.coordinates.length} vertices · saved in this browser</p>
           <div className="route-divider" />
           <h3>Boreholes</h3>
           <label className="route-field">Distance from route, each side (m)
@@ -93,7 +84,7 @@ export function RoutePanel({ route, draft, candidates, selectedIds, loading, err
             {candidates.map((candidate) => <li key={candidate.id}>
               <label><input type="checkbox" checked={selectedIds.includes(candidate.id)} onChange={() => onToggleHole(candidate.id)} />
                 <span className="route-candidate-name">{candidate.name}</span>
-                <span className="muted">{formatMetres(candidate.chainageM)} · {Math.round(candidate.offsetM)} m away</span>
+                <span className="muted">{fmtDistance(candidate.chainageM)} · {Math.round(candidate.offsetM)} m away</span>
               </label>
             </li>)}
           </ul>}
@@ -110,20 +101,20 @@ export function RoutePanel({ route, draft, candidates, selectedIds, loading, err
             </label>
             {route.tunnelMode === 'depth' ? <label className="route-field">Axis depth (m)
               <input type="number" min="0" step="0.1" value={route.depthM ?? ''} placeholder="e.g. 15"
-                onChange={(event) => set({ depthM: numberOrNull(event.target.value) })} />
+                onChange={(event) => set({ depthM: parseDecimal(event.target.value) })} />
             </label> : <>
               <label className="route-field">Axis elevation at route start (m)
                 <input type="number" step="0.1" value={route.startElevationM ?? ''}
-                  onChange={(event) => set({ startElevationM: numberOrNull(event.target.value) })} />
+                  onChange={(event) => set({ startElevationM: parseDecimal(event.target.value) })} />
               </label>
               <label className="route-field">Axis elevation at route end (m)
                 <input type="number" step="0.1" value={route.endElevationM ?? ''}
-                  onChange={(event) => set({ endElevationM: numberOrNull(event.target.value) })} />
+                  onChange={(event) => set({ endElevationM: parseDecimal(event.target.value) })} />
               </label>
             </>}
             <label className="route-field">Tunnel diameter (m, optional)
               <input type="number" min="0" step="0.1" value={route.diameterM ?? ''}
-                onChange={(event) => set({ diameterM: numberOrNull(event.target.value) })} />
+                onChange={(event) => set({ diameterM: parseDecimal(event.target.value) })} />
             </label>
           </div>
           <button className="route-delete" onClick={onDelete}>Delete saved route</button>

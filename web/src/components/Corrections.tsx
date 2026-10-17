@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from 'react'
 import { postCorrection } from '../api'
+import { fmtNum, parseDecimal, words } from '../format'
 import { LITHOLOGY, lithStyle } from '../lithology'
 import { fmtDateTime, loadReviewer, withSuffix } from '../review'
-import type { Borehole, CorrectionKind, CorrectionRecord, DetailUpdate, Layer } from '../types'
+import type { Borehole, CorrectionKind, CorrectionRecord, CorrectionScope, DetailUpdate, Layer } from '../types'
 
-type Item = { kind: CorrectionKind; payload: Record<string, unknown>; scope?: 'borehole' | 'document' }
+type Item = { kind: CorrectionKind; payload: Record<string, unknown>; scope?: CorrectionScope }
 
 /** Sends corrections under the reviewer name from the release bar; keeps a readable error. */
 function useCorrection(boreholeId: string, onChange: (update: DetailUpdate) => void) {
@@ -25,9 +26,7 @@ function useCorrection(boreholeId: string, onChange: (update: DetailUpdate) => v
       for (const it of items) onChange(await postCorrection(boreholeId, it.kind, it.payload, reviewer, it.scope ?? 'borehole'))
       return true
     } catch (e) {
-      const text = (e as Error).message
-      const detail = text.match(/"detail":\s*"([^"]+)"/)?.[1]
-      setError(`Correction not saved: ${detail ?? text}`)
+      setError(`Correction not saved: ${(e as Error).message}`)
       return false
     } finally {
       setBusy(false)
@@ -36,7 +35,8 @@ function useCorrection(boreholeId: string, onChange: (update: DetailUpdate) => v
   return { send, busy, error }
 }
 
-const num = (v: string) => (v.trim() === '' ? NaN : Number(v.replace(',', '.')))
+// NaN for an empty or unreadable entry, so that every comparison with it fails.
+const num = (v: string) => parseDecimal(v) ?? NaN
 const str = (v: number | string | null | undefined) => (v == null ? '' : String(v))
 const bad = (v: string) => v.trim() !== '' && !Number.isFinite(num(v))
 
@@ -301,7 +301,7 @@ export function TestsEditor({ boreholeId, rows, onChange, onDone }: {
       <ul className="tests tests-edit">
         {drafts.map((d) => (
           <li key={`${d.row.test}-${d.row.depth}-${d.row.parameter ?? ''}`}>
-            <span className="num">{d.row.depth.toLocaleString('en', { maximumFractionDigits: 2 })} m</span>
+            <span className="num">{fmtNum(d.row.depth)} m</span>
             <span className="tests-label">{d.row.label}</span>
             <input className={`field field-num${bad(d.value) ? ' field-invalid' : ''}`} inputMode="decimal" value={d.value}
               onChange={(e) => set(d, { value: e.target.value })} aria-label={`${d.row.label} at ${d.row.depth} m`} />
@@ -347,10 +347,10 @@ function describe(c: CorrectionRecord): string {
   const p = c.payload
   if (c.kind === 'crs') return `Coordinate system set to EPSG:${p.epsg}${c.scope === 'document' ? ' for the whole document' : ''}`
   if (c.kind === 'position') return `Position set to ${p.lat}, ${p.lon}`
-  if (c.kind === 'field') return `${String(p.field).replaceAll('_', ' ')} set to ${p.value ?? '–'}`
+  if (c.kind === 'field') return `${words(String(p.field))} set to ${p.value ?? '–'}`
   if (c.kind === 'groundwater') return p.dry ? 'Groundwater: dry' : `Groundwater level ${p.depth_m} m added`
   if (c.kind === 'test') {
-    const what = `${String(p.parameter ?? p.test).replaceAll('_', ' ')} at ${p.orig_depth} m`
+    const what = `${words(String(p.parameter ?? p.test))} at ${p.orig_depth} m`
     return p.delete ? `${what} deleted` : `${what} set to ${p.value}${p.rqd != null ? `, RQD ${p.rqd} %` : ''}`
   }
   if (c.kind === 'layer_add') return `Layer ${p.top}–${p.bottom} m added (${lithStyle(String(p.primary)).label})`

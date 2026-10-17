@@ -118,7 +118,7 @@ export const lithStyle = (key: string): Style => LITHOLOGY[key] ?? LITHOLOGY.unk
 export const patternId = (key: string) => `lith-${key}`
 
 /** Put once into an <svg> (or a hidden one) to make all patterns available by url(#lith-…). */
-export function LithologyPatterns({ scale = 1 }: { scale?: number }) {
+export function LithologyPatterns() {
   return (
     <defs>
       {Object.entries(LITHOLOGY).map(([key, s]) => (
@@ -128,7 +128,6 @@ export function LithologyPatterns({ scale = 1 }: { scale?: number }) {
           width={S}
           height={S}
           patternUnits="userSpaceOnUse"
-          patternTransform={scale !== 1 ? `scale(${scale})` : undefined}
         >
           <rect width={S} height={S} fill={s.fill} />
           {s.pattern(s.ink ?? '#2B3336')}
