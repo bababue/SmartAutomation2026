@@ -13,7 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from . import config, ingest, llm, store
+from . import config, ingest, llm, runner, store
 
 
 class UploadDoc(BaseModel):
@@ -131,8 +131,6 @@ class UploadQueue:
             con.close()
 
     def _work(self, job_id: str) -> None:
-        from .runner import run
-
         con = store.connect(self.db_path)
         try:
             with self.lock:
@@ -148,10 +146,10 @@ class UploadQueue:
                                   max_calls=max(0, min(config.MAX_UPLOAD_CALLS,
                                                        config.MAX_DAILY_CALLS - store.llm_calls_today(con))))
             try:
-                run([ingest.SourceDoc(d.doc_id, d.path, d.kind) for d in docs],
-                    dataset_dir=config.UPLOADS_DIR / task.folder, guard=guard, job_id=job_id,
-                    progress=lambda stage, done, total: self.progress.__setitem__(
-                        job_id, UploadProgress(stage=stage, done=done, total=total)))
+                runner.run([ingest.SourceDoc(d.doc_id, d.path, d.kind) for d in docs],
+                           dataset_dir=config.UPLOADS_DIR / task.folder, guard=guard, job_id=job_id,
+                           progress=lambda stage, done, total: self.progress.__setitem__(
+                               job_id, UploadProgress(stage=stage, done=done, total=total)))
                 kept = [d.doc_id for d in docs if d.doc_id not in guard.dropped]
                 if not kept:
                     raise llm.Cancelled("every document was cancelled")

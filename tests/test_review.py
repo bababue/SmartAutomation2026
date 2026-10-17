@@ -4,8 +4,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pipeline import config, store
-from pipeline.assemble import _layers, _num, id_key, norm_name
+from pipeline.assemble import _layers
 from pipeline.extraction_models import XLayer
+from pipeline.identity import id_key, norm_name
+from pipeline.labs import _num
 from pipeline.scoring import score, text_agreement
 from schema.borehole import Borehole, GeorefMethod, Layer, Location, ReviewStatus, SourceRef
 
@@ -251,12 +253,12 @@ def test_position_outlier_is_flagged():
 
 
 def test_groundwater_repeated_on_every_sheet_is_kept_once():
-    from pipeline.assemble import _unique_groundwater
+    from pipeline.dedupe import unique_groundwater
     from schema.borehole import GroundwaterObservation
     src = [SourceRef(file="f", page=i) for i in (1, 2, 3)]
     obs = [GroundwaterObservation(depth_m=4.5, kind="standing", raw="GL(-) 4.5 M", source=s) for s in src]
     obs.append(GroundwaterObservation(depth_m=6.0, kind="struck", raw="6.0", source=src[2]))
-    assert [(g.depth_m, g.source.page) for g in _unique_groundwater(obs)] == [(4.5, 1), (6.0, 3)]
+    assert [(g.depth_m, g.source.page) for g in unique_groundwater(obs)] == [(4.5, 1), (6.0, 3)]
 
 
 def test_location_text_without_source_notes():
@@ -442,7 +444,8 @@ def test_log_without_printed_depths_is_not_penalised():
 
 
 def test_boreholes_and_test_pits_with_the_same_number_stay_apart():
-    from pipeline.assemble import PageResult, assemble, hole_key
+    from pipeline.assemble import PageResult, assemble
+    from pipeline.identity import hole_key
     from pipeline.extraction_models import PageExtraction, XLog
 
     assert hole_key("Test Pit No. 2", None) == hole_key("T.P. 2", None) == hole_key("2", "test_pit") == ("test_pit", "2")
@@ -553,7 +556,7 @@ def test_document_with_conflicting_crs_statements_gets_none():
 
 
 def test_hole_words_in_other_languages_and_probings_are_typed():
-    from pipeline.assemble import hole_key
+    from pipeline.identity import hole_key
     assert hole_key("Hull nr. 4", None) == hole_key("4", "borehole") == ("borehole", "4")
     assert hole_key("CPT 1", None) == ("probe", "1") != hole_key("BH 1", None)
 

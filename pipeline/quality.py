@@ -22,8 +22,6 @@ from pathlib import Path
 from . import config, evaluate, experiment, llm, runner, store
 from .assemble import LOG_KINDS
 
-SNAPSHOT_PATH = config.ROOT / "fixtures" / "model_evaluation.json"
-
 # Transcribed from docs/model-comparison.md (wider benchmark): 6 log pages from 4 documents, same prompt,
 # compared with Opus. A pair is a range over repeated runs or, for the local model, two runtimes.
 # `compared`: Opus's values on those pages, the base of each share.
@@ -190,7 +188,7 @@ def model_comparison(arms: list[dict], reference: dict[str, dict], pages: dict[s
 _memo: dict[str, tuple[tuple, object]] = {}
 
 
-def _cached(name: str, paths: list[Path], compute: Callable[[], object]):
+def _cached(name: str, paths: list[Path], compute: Callable[[], object]) -> object:
     """compute() again only when one of the files changed; scoring every arm takes a few seconds."""
     key = tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else (str(p),) for p in paths)
     hit = _memo.get(name)
@@ -216,7 +214,7 @@ def log_pages(con: sqlite3.Connection) -> int:
 
 def evaluation(con: sqlite3.Connection) -> dict | None:
     """Everything from data/eval and the given database; None without a reference."""
-    ref_path = evaluate.REFERENCE_PATH
+    ref_path = config.REFERENCE_PATH
     reference = evaluate.load_reference(ref_path)
     if not reference:
         return None
@@ -236,11 +234,11 @@ def evaluation(con: sqlite3.Connection) -> dict | None:
             "log_pages": log_pages(con)}
 
 
-def load_snapshot(path: Path = SNAPSHOT_PATH) -> dict | None:
+def load_snapshot(path: Path = config.MODEL_EVALUATION_PATH) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
-def write_snapshot(path: Path = SNAPSHOT_PATH) -> dict | None:
+def write_snapshot(path: Path = config.MODEL_EVALUATION_PATH) -> dict | None:
     con = read_only(config.DB_PATH)
     try:
         data = evaluation(con)

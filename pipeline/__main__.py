@@ -22,6 +22,10 @@
 from __future__ import annotations
 
 import argparse
+import datetime
+import shutil
+import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -29,11 +33,11 @@ from . import config, evaluate, experiment, llm, quality, runner
 from .runner import COST_CLASSIFY, COST_EXTRACT, page_cost
 
 
-def cmd_ingest(args) -> None:
+def cmd_ingest(args: argparse.Namespace) -> None:
     runner.ingest_docs(runner.select(args.doc))
 
 
-def cmd_estimate(args) -> None:
+def cmd_estimate(args: argparse.Namespace) -> None:
     rendered = runner.ingest_docs(runner.select(args.doc))
     n = sum(len(p) for p in rendered.values())
     print(f"{len(rendered)} documents, {n} pages")
@@ -44,7 +48,7 @@ def cmd_estimate(args) -> None:
         print(f"measured {stage}: {pages} pages, ${usd:.2f} (${usd / pages:.4f} per page)")
 
 
-def cmd_run(args) -> None:
+def cmd_run(args: argparse.Namespace) -> None:
     if not args.doc and not args.all:
         sys.exit("choose documents with --doc NAME (repeatable) or --all")
     try:
@@ -53,22 +57,22 @@ def cmd_run(args) -> None:
         sys.exit(str(exc))
 
 
-def cmd_rebuild(args) -> None:
+def cmd_rebuild(args: argparse.Namespace) -> None:
     runner.rebuild(runner.select(args.doc), args.max_pages, args.dry_run)
 
 
-def cmd_eval(args) -> None:
+def cmd_eval(args: argparse.Namespace) -> None:
     if args.action != "snapshot-models":
         evaluate.cmd_eval(args)
         return
     data = quality.write_snapshot()
     if data is None:
         sys.exit("no reference yet: approve records, then run `python -m pipeline eval snapshot`")
-    print(f"wrote {quality.SNAPSHOT_PATH}: {data['reference']['records']} reference records, "
+    print(f"wrote {config.MODEL_EVALUATION_PATH}: {data['reference']['records']} reference records, "
           f"{len(data['arms']['runs'])} arms; check that it holds aggregates only before committing")
 
 
-def cmd_experiment(args) -> None:
+def cmd_experiment(args: argparse.Namespace) -> None:
     if args.action in ("init", "run") and args.name in (None, experiment.BASELINE):
         sys.exit(f"name the experiment: python -m pipeline experiment {args.action} NAME (not '{experiment.BASELINE}')")
     if args.action == "init":
@@ -109,14 +113,9 @@ Created {created} from {source}: {boreholes} boreholes, {documents} documents.
 """
 
 
-def cmd_share(args) -> None:
+def cmd_share(args: argparse.Namespace) -> None:
     """A consistent copy of the database (SQLite backup API, safe while the API runs), the page images and
     optionally the cache, with a README for colleagues."""
-    import datetime
-    import shutil
-    import sqlite3
-    import subprocess
-
     out = Path(args.out).expanduser()
     if out.exists() and any(out.iterdir()):
         sys.exit(f"{out} exists and is not empty")

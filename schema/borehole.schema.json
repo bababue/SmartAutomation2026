@@ -704,12 +704,12 @@
             }
           ],
           "default": null,
-          "description": "PROJ string for local grids without an EPSG code",
+          "description": "CRS without an EPSG code: another authority's code (e.g. 'ESRI:102138') or a description of a local grid fitted to reviewed positions",
           "title": "Crs Proj"
         },
         "crs_candidates": {
           "default": [],
-          "description": "All CRS tried (EPSG codes / PROJ strings) when the choice was ambiguous",
+          "description": "All CRS tried (authority codes such as 'EPSG:32632', or a notation name) when the choice was ambiguous",
           "items": {
             "type": "string"
           },

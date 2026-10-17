@@ -117,7 +117,7 @@ def test_a_reviewed_record_takes_in_its_unreviewed_copy(con, monkeypatch):
 
 
 def test_dedupe_judges_copies_as_they_will_be_stored():
-    from pipeline.assemble import dedupe
+    from pipeline.dedupe import dedupe
     a, b = record(bid="a:BH1"), record(bid="b:BH1")
     a.confidence, a.location.confidence = 1.0, 0.5
     b.confidence, b.location.confidence = 0.95, 0.95
@@ -129,7 +129,7 @@ def test_dedupe_judges_copies_as_they_will_be_stored():
     assert dedupe([a, b], judged={"a:BH1": blocked, "b:BH1": b}) == [b]
 
 def test_two_reviewed_copies_of_a_hole_both_stay():
-    from pipeline.assemble import dedupe
+    from pipeline.dedupe import dedupe
     a, b = record(bid="a:BH1"), record(bid="b:BH1")
     assert len(dedupe([a, b], {"a:BH1": {"uid-a"}, "b:BH1": {"uid-b"}})) == 2
     assert dedupe([a, b], {"a:BH1": {"uid-a"}}) == [a]
@@ -138,7 +138,7 @@ def test_two_reviewed_copies_of_a_hole_both_stay():
 
 
 def test_a_document_correction_does_not_join_two_independently_reviewed_copies(con):
-    from pipeline.assemble import dedupe
+    from pipeline.dedupe import dedupe
     a, b = record(bid="folder__a:BH1", name="BH1"), record(bid="folder__b:BH1", name="BH1")
     for bh, status in ((a, ReviewStatus.approved), (b, ReviewStatus.rejected)):
         store.save_borehole(con, bh.model_copy(deep=True))
@@ -153,7 +153,7 @@ def test_a_document_correction_does_not_join_two_independently_reviewed_copies(c
 
 
 def test_dedupe_prefers_the_better_position():
-    from pipeline.assemble import dedupe
+    from pipeline.dedupe import dedupe
     a, b = record(bid="a:BH1"), record(bid="b:BH1")
     a.confidence, a.location.confidence, a.review_status = 1.0, 0.5, ReviewStatus.pending_review
     b.confidence, b.location.confidence, b.review_status = 0.95, 0.95, ReviewStatus.auto_approved

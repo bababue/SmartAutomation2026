@@ -6,13 +6,13 @@ from fastapi.testclient import TestClient
 
 from api import models
 from api.main import app
-from pipeline import evaluate, quality
+from pipeline import config
 
 TEXT_FIELDS = {"generated", "created", "date", "model", "arm", "name", "prompt", "against", "route"}
 
 
 def test_snapshot_holds_declared_aggregates_only():
-    data = json.loads(quality.SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    data = json.loads(config.MODEL_EVALUATION_PATH.read_text(encoding="utf-8"))
     models.ModelEvaluation.model_validate(data)  # extra="forbid": an undeclared field fails
 
     def texts(value, key=None):
@@ -29,8 +29,8 @@ def test_snapshot_holds_declared_aggregates_only():
 
 
 def test_quality_falls_back_to_the_snapshot_without_eval_data(db_path, tmp_path, monkeypatch):
-    monkeypatch.setattr(evaluate, "REFERENCE_PATH", tmp_path / "eval" / "reference.json")
+    monkeypatch.setattr(config, "REFERENCE_PATH", tmp_path / "eval" / "reference.json")
     body = TestClient(app).get("/api/stats/quality").json()
     assert body["source"] == "snapshot"
-    assert body["evaluation"] == json.loads(quality.SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    assert body["evaluation"] == json.loads(config.MODEL_EVALUATION_PATH.read_text(encoding="utf-8"))
     assert body["usage"] == []

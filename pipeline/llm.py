@@ -20,14 +20,14 @@ import os
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import partial
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import TypeVar
 
@@ -502,8 +502,8 @@ def _strip_fences(text: str) -> str:
     return text
 
 
-def _cached(stage: str, page: PageImage, key_for, model: str, effort: str, out: type[T], produce,
-            part: str = "") -> T:
+def _cached(stage: str, page: PageImage, key_for: Callable[[str, str], str], model: str, effort: str, out: type[T],
+            produce: Callable[[], T], part: str = "") -> T:
     """The cached answer of the configured model, else a new call. key_for(model, effort) is the cache key."""
     path = cache_path(stage, page, part)
     key = key_for(model, effort)
@@ -539,8 +539,8 @@ def _cached(stage: str, page: PageImage, key_for, model: str, effort: str, out: 
     return result
 
 
-def _from_cache(stage: str, page: PageImage, key_for, model: str, effort: str, out: type[T],
-                part: str = "") -> T | None:
+def _from_cache(stage: str, page: PageImage, key_for: Callable[[str, str], str], model: str, effort: str,
+                out: type[T], part: str = "") -> T | None:
     """Cached result if it was produced from the same input and prompt, checked with the model and effort recorded
     in the entry: a rebuild keeps the pages extracted before the configured model changed (a run re-extracts
     them, see _cached). Entries without a record count as made with the configured settings."""
@@ -558,7 +558,7 @@ def _lab_key(page: PageImage, model: str, effort: str) -> str:
 
 
 def _produce(model: str, effort: str, system: str, image: Path, hint: str, out: type[T], max_tokens: int,
-             strict: bool = False):
+             strict: bool = False) -> Callable[[], T]:
     """The call for the configured backend. strict: a small schema, for strict structured output. The call
     carries what it sends (`sent`) for the record a CallGuard keeps."""
     if config.LLM_BACKEND == "claude-code":
@@ -671,21 +671,21 @@ def coordinate_image(page: PageImage, bbox: tuple[float, float, float, float] | 
     return out
 
 
-def _coords_key(page: PageImage, bbox, hole: str, model: str, effort: str) -> str:
+def _coords_key(page: PageImage, bbox: tuple | None, hole: str, model: str, effort: str) -> str:
     image = config.PAGES_DIR / page.image
     return _cache_key(config.COORDS_PROMPT_VERSION, model, effort, image.read_bytes(), repr(bbox), hole)
 
 
-def _coords_part(hole: str, bbox) -> str:
+def _coords_part(hole: str, bbox: tuple | None) -> str:
     return _cache_key(hole, repr(bbox))[:12]
 
 
-def cached_coordinates(page: PageImage, bbox, hole: str) -> CoordinateReading | None:
+def cached_coordinates(page: PageImage, bbox: tuple | None, hole: str) -> CoordinateReading | None:
     return _from_cache("coords", page, partial(_coords_key, page, bbox, hole), config.EXTRACT_MODEL,
                        config.COORDS_EFFORT, CoordinateReading, _coords_part(hole, bbox))
 
 
-def read_coordinates(page: PageImage, bbox, hole: str) -> CoordinateReading:
+def read_coordinates(page: PageImage, bbox: tuple | None, hole: str) -> CoordinateReading:
     """A second, independent reading of one hole's coordinates (its own prompt and cache key, so no
     PROMPT_VERSION change re-reads them)."""
     hint = f"Hole: {hole}" if hole else "Read the coordinates printed on this page."

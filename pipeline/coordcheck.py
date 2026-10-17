@@ -5,15 +5,15 @@ for the challenge, and a misread digit moves a hole without any other finding no
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from schema.borehole import Borehole, GeorefMethod
+from schema.borehole import Borehole, GeorefMethod, Location
 
 from . import config
-from .assemble import document_id, norm_name
 from .extraction_models import CoordinateReading, PageExtraction
 from .georef import candidates, crs_from_hint, haversine_km, is_precise, resolve_with
+from .identity import document_id, norm_name
 from .ingest import PageImage
 
 # Two readings of the same printed text agree to well below this after parsing; more is a different reading.
@@ -25,9 +25,10 @@ DIFFERENT = "coordinates read differently on a second look"
 DIFFERENT_CRS = "coordinate system read differently on a second look"
 
 Key = tuple[str, int, str, str]  # doc_id, page, normalised hole name, "log" or "table"
+Target = tuple[PageImage, tuple | None, str, str]  # page, coordinate box, hole name, "log" or "table"
 
 
-def targets(pages: Iterable[PageImage], extractions: dict[tuple[str, int], PageExtraction]):
+def targets(pages: Iterable[PageImage], extractions: dict[tuple[str, int], PageExtraction]) -> Iterator[Target]:
     """(page, coordinate box, hole name, source) of every log with printed coordinates, and of the coordinate-table
     rows of holes whose logs print none (only those take the table's position). Table rows carry no box, so their
     whole page is read."""
@@ -43,7 +44,7 @@ def targets(pages: Iterable[PageImage], extractions: dict[tuple[str, int], PageE
                 yield p, None, row.name, "table"
 
 
-def readings(items, read: Callable[[PageImage, tuple | None, str], CoordinateReading | None]
+def readings(items: Iterable[Target], read: Callable[[PageImage, tuple | None, str], CoordinateReading | None]
              ) -> dict[Key, CoordinateReading | None]:
     """read: a model call or a cache lookup. A failed reading leaves its hole without a second look; two holes of
     one name on one page are ambiguous (None) and get none either."""
@@ -75,7 +76,7 @@ def _reading_for(bh: Borehole, found: dict[Key, CoordinateReading | None]) -> Co
     return found.get((doc_id, src.page, name, "log"))
 
 
-def _equivalent(loc, crs: int | str) -> bool:
+def _equivalent(loc: Location, crs: int | str) -> bool:
     """The first reading's text gives the same point in `crs` (e.g. ETRS89 and WGS84 UTM of one zone)."""
     if not isinstance(crs, int) or not loc.coords_raw:
         return False

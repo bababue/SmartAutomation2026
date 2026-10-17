@@ -56,17 +56,17 @@ def test_value_on_log_and_lab_sheet_is_kept_once():
 
 
 def test_units_are_converted_or_the_value_is_dropped():
-    from pipeline.assemble import _lab_value, lab_qualifier
+    from pipeline.labs import lab_qualifier, lab_value
     from schema.borehole import LabParameter as P
-    assert _lab_value(P.ucs, "1500", "psi") == pytest.approx(10.342, rel=1e-3)
-    assert _lab_value(P.ucs, "25", "MPa") == 25 and _lab_value(P.ucs, "25", None) == 25
-    assert _lab_value(P.ucs, "25", "bananas") is None  # never publish a number in the wrong unit
-    assert _lab_value(P.cai, "2.1", "-") == 2.1
+    assert lab_value(P.ucs, "1500", "psi") == pytest.approx(10.342, rel=1e-3)
+    assert lab_value(P.ucs, "25", "MPa") == 25 and lab_value(P.ucs, "25", None) == 25
+    assert lab_value(P.ucs, "25", "bananas") is None  # never publish a number in the wrong unit
+    assert lab_value(P.cai, "2.1", "-") == 2.1
     assert lab_qualifier("<0.01") == "<" and lab_qualifier("5 - 10") == "range" and lab_qualifier("12.5") is None
 
 
 def test_lab_range_bounds_use_the_same_target_unit():
-    from pipeline.assemble import lab_upper
+    from pipeline.labs import lab_upper
     assert lab_upper("ucs", "5–10", "kPa") == pytest.approx(0.01)
     assert lab_upper("ucs", "5", "kPa") is None
     bh = hole("BH1")
@@ -76,7 +76,7 @@ def test_lab_range_bounds_use_the_same_target_unit():
 
 @pytest.mark.parametrize("text", ["2 × 10-6", "2x10^-6", "2e-6", "2,0E-6"])
 def test_scientific_exponents_are_exact_values(text):
-    from pipeline.assemble import lab_qualifier, lab_upper
+    from pipeline.labs import lab_qualifier, lab_upper
     assert lab_qualifier(text) is None
     assert lab_upper("hydraulic_conductivity", text, "m/s") is None
 
@@ -148,7 +148,7 @@ def test_chemistry_rows_with_the_same_detection_limit_are_kept_apart():
 
 
 def test_duplicate_record_hands_its_lab_values_to_the_kept_one():
-    from pipeline.assemble import dedupe
+    from pipeline.dedupe import dedupe
     from schema.borehole import GeorefMethod, LabResult
     def located(doc: str, confidence: float, labs: list[tuple[float, float]]) -> Borehole:
         bh = hole("BH-4")
@@ -167,7 +167,7 @@ def test_duplicate_record_hands_its_lab_values_to_the_kept_one():
 
 
 def test_lab_values_from_a_log_in_feet_keep_the_kept_record_in_review():
-    from pipeline.assemble import dedupe
+    from pipeline.dedupe import dedupe
     from schema.borehole import GeorefMethod, LabResult, ReviewStatus
     def located(doc: str, confidence: float) -> Borehole:
         bh = hole("BH-4")

@@ -2,7 +2,8 @@
 
 from datetime import date
 
-from pipeline.assemble import dedupe, unstack_place_positions
+from pipeline.assemble import unstack_place_positions
+from pipeline.dedupe import dedupe
 from pipeline.scoring import finding_severity
 from schema.borehole import SPT, Borehole, GeorefMethod, Layer, Lithology, Location, ReviewStatus, SourceRef
 

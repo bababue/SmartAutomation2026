@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from schema.borehole import Borehole, ReviewStatus, ScoreFactor
 
 from . import config, ground, scoring
+from .identity import hole_key
 
 REVIEW_STATUSES = ", ".join(f"'{s.value}'" for s in ReviewStatus)
 
@@ -351,7 +352,6 @@ def _blocking(bh: Borehole) -> set[str]:
 
 def natural_key(bh: Borehole) -> str:
     """The hole by what it is: document group, type and number ('nk:report|borehole|12')."""
-    from .assemble import hole_key  # assembly rules define what counts as the same hole
     kind, number = hole_key(bh.borehole_name, bh.investigation_type.value if bh.investigation_type else None)
     return f"nk:{document_group(bh.borehole_id)}|{kind or ''}|{number}"
 
@@ -408,14 +408,13 @@ def _drop_unreviewed_version(con: sqlite3.Connection, version_id: int) -> None:
 
 
 def _write_projections(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
-    from .scoring import EPSG_IN_FINDING, finding_code, finding_severity
     con.executemany("INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?)",
                     [(rid, i, l.top_m, l.bottom_m, l.primary.value, l.stratigraphic_code, l.geologic_age)
                      for i, l in enumerate(bh.layers)])
     _write_lab_values(con, rid, bh)
     con.executemany("INSERT INTO findings VALUES (?, ?, ?, ?, ?, ?)",
-                    [(rid, i, finding_code(t), finding_severity(t),
-                      int(m.group(1)) if (m := EPSG_IN_FINDING.search(t)) else None, t)
+                    [(rid, i, scoring.finding_code(t), scoring.finding_severity(t),
+                      int(m.group(1)) if (m := scoring.EPSG_IN_FINDING.search(t)) else None, t)
                      for i, t in enumerate(bh.issues)])
     sources = {(s.file, s.page or 0, "log") for s in bh.sources}
     sources |= {(r.source.file, r.source.page or 0, "lab") for r in bh.lab_results if r.source}
@@ -616,5 +615,5 @@ def load_borehole(con: sqlite3.Connection, borehole_id: str) -> Borehole | None:
     return Borehole.model_validate_json(row["data"]) if row else None
 
 
-def as_json(value) -> str:
+def as_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False)

@@ -121,7 +121,7 @@ def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
 def stats_quality(con: DB) -> models.Quality:
     """Extraction quality and model comparison: computed from data/eval where it exists, else the committed
     snapshot. The release audit and the recorded model calls cover the whole database."""
-    if evaluate.REFERENCE_PATH.exists():
+    if config.REFERENCE_PATH.exists():
         source, data = "live", quality.evaluation(con)
     else:
         data = quality.load_snapshot()

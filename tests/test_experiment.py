@@ -5,7 +5,7 @@ from pipeline.ingest import PageImage
 
 
 def test_arm_uses_its_own_cache_and_a_key_from_its_prompt(tmp_path, monkeypatch):
-    monkeypatch.setattr(experiment, "EXPERIMENTS_DIR", tmp_path / "experiments")
+    monkeypatch.setattr(config, "EXPERIMENTS_DIR", tmp_path / "experiments")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
     monkeypatch.setattr(config, "PROMPT_VERSION", config.PROMPT_VERSION)

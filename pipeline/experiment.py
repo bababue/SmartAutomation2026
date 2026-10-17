@@ -28,15 +28,15 @@ from pathlib import Path
 from schema.borehole import Borehole
 
 from . import config, evaluate, llm, scoring, store
+from .ingest import PageImage, SourceDoc
 
-EXPERIMENTS_DIR = config.DATA_DIR / "eval" / "experiments"
 BASELINE = "baseline"
 
 
 def arm_dir(name: str) -> Path:
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name):
         raise SystemExit(f"experiment names are lowercase letters, digits, '-' and '_': {name!r}")
-    return EXPERIMENTS_DIR / name
+    return config.EXPERIMENTS_DIR / name
 
 
 def init(name: str) -> Path:
@@ -72,7 +72,7 @@ def fresh_db(name: str) -> sqlite3.Connection:
     return store.connect(path)
 
 
-def proxy(con: sqlite3.Connection, docs, rendered) -> dict:
+def proxy(con: sqlite3.Connection, docs: list[SourceDoc], rendered: dict[str, list[PageImage]]) -> dict:
     """Signals that need no reference, for comparing arms on documents nobody has checked yet: how many
     layer boundaries the PDF text layer confirms (digital PDFs only), blocking findings and releases.
     Hints only: a text layer can be incomplete, and fewer findings can also mean fewer layers."""
@@ -114,7 +114,7 @@ def proxy_report(names: list[str]) -> list[str]:
 
 
 def arms() -> list[str]:
-    found = sorted(p.parent.name for p in EXPERIMENTS_DIR.glob("*/boreholes.sqlite"))
+    found = sorted(p.parent.name for p in config.EXPERIMENTS_DIR.glob("*/boreholes.sqlite"))
     return sorted(found, key=lambda n: n != BASELINE)
 
 

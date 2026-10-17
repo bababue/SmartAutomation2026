@@ -31,6 +31,13 @@ MAX_DAILY_CALLS = int(os.getenv("MAX_DAILY_CALLS", "2000"))
 # rendered page shows them together. A PDF placed here by hand is used instead of converting.
 CONVERTED_DIR = DATA_DIR / "converted"
 DB_PATH = Path(os.getenv("DB_PATH", DATA_DIR / "boreholes.sqlite"))
+# Reviewed reference records, the release audit and prompt experiments; they hold extracted values.
+EVAL_DIR = DATA_DIR / "eval"
+REFERENCE_PATH = EVAL_DIR / "reference.json"
+AUDIT_PATH = EVAL_DIR / "audit.json"
+EXPERIMENTS_DIR = EVAL_DIR / "experiments"
+# Committed aggregates of the evaluation, served where there is no data/ (the Docker image).
+MODEL_EVALUATION_PATH = ROOT / "fixtures" / "model_evaluation.json"
 
 # Models: Claude is approved for the challenge data. Classification runs on a small
 # thumbnail at low effort; extraction gets the full page at higher effort.

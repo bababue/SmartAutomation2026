@@ -12,6 +12,7 @@ run changes them and they drop back to review.
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import random
@@ -19,6 +20,7 @@ import re
 import sqlite3
 import statistics
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,11 +28,9 @@ from pathlib import Path
 from schema.borehole import Borehole, ReviewStatus
 
 from . import config, store
-from .assemble import _lab_name
 from .georef import haversine_km
+from .labs import lab_name
 
-REFERENCE_PATH = config.DATA_DIR / "eval" / "reference.json"
-AUDIT_PATH = config.DATA_DIR / "eval" / "audit.json"
 EVAL_DEPTH_TOLERANCE_M = 0.1
 
 
@@ -43,7 +43,7 @@ def extracted_summary(bh: Borehole) -> dict:
             "layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
             "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg, "depth_m": bh.depth_m,
             "groundwater": sorted(gw.depth_m for gw in bh.groundwater if gw.depth_m is not None),
-            "lab": [[r.parameter.value, r.value, r.top_m, r.qualifier, *_lab_name(r), r.value_upper]
+            "lab": [[r.parameter.value, r.value, r.top_m, r.qualifier, *lab_name(r), r.value_upper]
                     for r in bh.lab_results]}
 
 
@@ -76,11 +76,11 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"boreholes": {}}
 
 
-def load_reference(path: Path = REFERENCE_PATH) -> dict[str, dict]:
+def load_reference(path: Path = config.REFERENCE_PATH) -> dict[str, dict]:
     return _load(path)["boreholes"]
 
 
-def load_holdout(path: Path = REFERENCE_PATH) -> set[str]:
+def load_holdout(path: Path = config.REFERENCE_PATH) -> set[str]:
     """Document groups kept out of prompt tuning: their scores show whether a change generalises."""
     return set(_load(path).get("holdout", []))
 
@@ -91,7 +91,7 @@ def _write(path: Path, data: dict) -> None:
                                indent=1, ensure_ascii=False), encoding="utf-8")
 
 
-def snapshot(con: sqlite3.Connection, path: Path = REFERENCE_PATH) -> tuple[int, int, int]:
+def snapshot(con: sqlite3.Connection, path: Path = config.REFERENCE_PATH) -> tuple[int, int, int]:
     """Add approved records (corrected ones included) to the reference. Returns (added, updated, total)."""
     data = _load(path)
     reference = data["boreholes"]
@@ -103,7 +103,7 @@ def snapshot(con: sqlite3.Connection, path: Path = REFERENCE_PATH) -> tuple[int,
     return added, updated, len(reference)
 
 
-def set_holdout(groups: list[str], path: Path = REFERENCE_PATH) -> set[str]:
+def set_holdout(groups: list[str], path: Path = config.REFERENCE_PATH) -> set[str]:
     data = _load(path)
     data["holdout"] = sorted(set(groups))
     _write(path, data)
@@ -326,7 +326,7 @@ def pct(part: float, whole: float) -> str:
     return f"{100 * part / whole:5.1f}%" if whole else "    –"
 
 
-def _m(values: list[float], fn) -> str:
+def _m(values: list[float], fn: Callable[[list[float]], float]) -> str:
     return f"{fn(values):8.1f}" if values else "       –"
 
 
@@ -370,10 +370,10 @@ def report(scores: dict[str, Score], holdout: set[str] = frozenset()) -> str:
     return "\n".join(lines)
 
 
-def draw_audit(con: sqlite3.Connection, size: int, seed: int, path: Path = AUDIT_PATH) -> list[str]:
+def draw_audit(con: sqlite3.Connection, size: int, seed: int, path: Path = config.AUDIT_PATH) -> list[str]:
     """A reproducible random sample of automatically released records not yet in the reference, for a person to
     check. Kept by uid, so the sample survives rebuilds that rename a hole."""
-    reference = load_reference(path.with_name(REFERENCE_PATH.name))  # the audit lives beside the reference
+    reference = load_reference(path.with_name(config.REFERENCE_PATH.name))  # the audit lives beside the reference
     candidates = sorted((r["id"], r["uid"]) for r in con.execute(
         "SELECT id, uid FROM boreholes WHERE review_status = ?", (ReviewStatus.auto_approved.value,))
         if r["id"] not in reference)
@@ -385,7 +385,7 @@ def draw_audit(con: sqlite3.Connection, size: int, seed: int, path: Path = AUDIT
     return [bid for bid, _ in sorted(sample)]
 
 
-def load_audit(path: Path = AUDIT_PATH) -> dict | None:
+def load_audit(path: Path = config.AUDIT_PATH) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
@@ -419,7 +419,7 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return max(0.0, centre - half), min(1.0, centre + half)
 
 
-def audit_summary(con: sqlite3.Connection, path: Path = AUDIT_PATH) -> dict | None:
+def audit_summary(con: sqlite3.Connection, path: Path = config.AUDIT_PATH) -> dict | None:
     """The false-release rate among the audited records a person has decided on, with its interval."""
     audit = load_audit(path)
     if audit is None:
@@ -441,7 +441,7 @@ def audit_line(s: dict) -> str:
             f"{s['sample'] - s['reviewed']} of {s['sample']} not checked yet")
 
 
-def cmd_eval(args) -> None:
+def cmd_eval(args: argparse.Namespace) -> None:
     if args.action == "holdout":
         print(f"holdout: {', '.join(sorted(set_holdout(args.doc or []))) or 'none'}")
         return
@@ -450,13 +450,14 @@ def cmd_eval(args) -> None:
     if args.action == "audit":
         if load_audit() is None or args.redraw:
             ids = draw_audit(con, args.size, args.seed)
-            print(f"drew {len(ids)} automatically released records (seed {args.seed}) into {AUDIT_PATH}; check them in "
-                  "the review queue (?view=review&audit=1), then run `python -m pipeline eval snapshot`")
+            print(f"drew {len(ids)} automatically released records (seed {args.seed}) into {config.AUDIT_PATH}; "
+                  "check them in the review queue (?view=review&audit=1), then run "
+                  "`python -m pipeline eval snapshot`")
         print(audit_line(audit_summary(con)))
         return
     if args.action == "snapshot":
         added, updated, n = snapshot(con)
-        print(f"reference: {added} added, {updated} updated, {n} records in {REFERENCE_PATH}")
+        print(f"reference: {added} added, {updated} updated, {n} records in {config.REFERENCE_PATH}")
         return
     reference = load_reference()
     if not reference:

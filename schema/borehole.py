@@ -60,9 +60,13 @@ class Location(_Model):
     easting: float | None = Field(None, description="Parsed easting (or longitude for geographic CRS) in source CRS")
     northing: float | None = Field(None, description="Parsed northing (or latitude for geographic CRS) in source CRS")
     crs_epsg: int | None = Field(None, description="Resolved EPSG code of the source CRS")
-    crs_proj: str | None = Field(None, description="PROJ string for local grids without an EPSG code")
+    crs_proj: str | None = Field(
+        None, description="CRS without an EPSG code: another authority's code (e.g. 'ESRI:102138') or a "
+        "description of a local grid fitted to reviewed positions"
+    )
     crs_candidates: list[str] = Field(
-        [], description="All CRS tried (EPSG codes / PROJ strings) when the choice was ambiguous"
+        [], description="All CRS tried (authority codes such as 'EPSG:32632', or a notation name) when the choice "
+        "was ambiguous"
     )
     is_planned: bool | None = Field(None, description="True if only proposed/planned coordinates are available")
     lat: float | None = Field(None, description="WGS84 latitude")

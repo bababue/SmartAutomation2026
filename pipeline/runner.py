@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import threading
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import TypeVar
+
+from schema.borehole import Borehole
 
 from . import config, coordcheck, corrections, evaluate, experiment, ingest, knowledge, llm, store
-from .assemble import (LOG_KINDS, PageResult, _log_key, assemble, dedupe, flag_position_outliers, norm_name,
-                       placeholder, unstack_place_positions)
+from .assemble import LOG_KINDS, PageResult, assemble, flag_position_outliers, placeholder, unstack_place_positions
+from .dedupe import dedupe
+from .extraction_models import CoordinateReading, PageClassification, PageExtraction, PageLabResults
+from .identity import log_key, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
+
+Rendered = dict[str, list[ingest.PageImage]]  # by doc_id
+Classes = dict[tuple[str, int], PageClassification]  # by (doc_id, page)
+Extractions = dict[tuple[str, int], PageExtraction]
+T = TypeVar("T")
 
 # Rough per-page API cost in USD at the Opus 5.5 list price; `estimate` also shows the cost measured on cached pages.
 COST_CLASSIFY, COST_EXTRACT = 0.008, 0.15
@@ -45,7 +56,7 @@ def missing_credentials() -> str | None:
     return None
 
 
-def _ingest(docs, con, dataset_dir: Path | None = None) -> dict[str, list[ingest.PageImage]]:
+def _ingest(docs: list[ingest.SourceDoc], con: sqlite3.Connection, dataset_dir: Path | None = None) -> Rendered:
     rendered = {}
     for d in docs:
         pages = ingest.render(d, dataset_dir)
@@ -55,7 +66,7 @@ def _ingest(docs, con, dataset_dir: Path | None = None) -> dict[str, list[ingest
     return rendered
 
 
-def ingest_docs(docs) -> dict[str, list[ingest.PageImage]]:
+def ingest_docs(docs: list[ingest.SourceDoc]) -> Rendered:
     store.migrate()
     con = store.connect()
     try:
@@ -68,7 +79,8 @@ def ingest_docs(docs) -> dict[str, list[ingest.PageImage]]:
 Progress = Callable[[str, int, int], None]
 
 
-def _parallel(fn, items, label, progress: Progress | None = None):
+def _parallel(fn: Callable[[ingest.PageImage], T], items: list[ingest.PageImage], label: str,
+              progress: Progress | None = None) -> dict[tuple[str, int], T]:
     results, failed = {}, []
     with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as pool:
         futures = {pool.submit(fn, item): item for item in items}
@@ -91,7 +103,7 @@ def _parallel(fn, items, label, progress: Progress | None = None):
 CHAIN_GAP = 3
 
 
-def _chains(pages: list[ingest.PageImage], classes) -> list[list[ingest.PageImage]]:
+def _chains(pages: list[ingest.PageImage], classes: Classes) -> list[list[ingest.PageImage]]:
     """Extraction order. A log page that shares a hole name with the previous log page of the same
     document (per the classification) continues it: it waits for that page and gets its summary as
     context. Independent chains run in parallel."""
@@ -114,13 +126,15 @@ def _chains(pages: list[ingest.PageImage], classes) -> list[list[ingest.PageImag
     return chains
 
 
-def expected_logs(c) -> int:
+def expected_logs(c: PageClassification) -> int:
     """Logs a page must return, as the classification counted them. Probe records (dynamic probe, CPT) are left
     out: they often carry blow counts only."""
     return max(len(c.logs), 1) if c.kind.value in LOG_KINDS - {"probe_log"} else 0
 
 
-def _walk(chain, classes, extract):
+def _walk(chain: list[ingest.PageImage], classes: Classes,
+          extract: Callable[[ingest.PageImage, str, str, int], PageExtraction | None]
+          ) -> tuple[Extractions, list[tuple[ingest.PageImage, Exception]]]:
     """Extract one chain in page order; each page gets the summary of the previous one."""
     results, failed, prev = {}, [], None
     for p in chain:
@@ -137,7 +151,7 @@ def _walk(chain, classes, extract):
     return results, failed
 
 
-def _cached_extractions(chains, classes) -> dict:
+def _cached_extractions(chains: list[list[ingest.PageImage]], classes: Classes) -> Extractions:
     """Cached extractions, walked in the run's chains so each page gets the same context."""
     extractions = {}
     for chain in chains:
@@ -145,7 +159,8 @@ def _cached_extractions(chains, classes) -> dict:
     return extractions
 
 
-def _extract(todo, classes, con=None, retry: bool = True, progress: Progress | None = None):
+def _extract(todo: list[ingest.PageImage], classes: Classes, con: sqlite3.Connection | None = None, retry: bool = True,
+             progress: Progress | None = None) -> tuple[Extractions, int]:
     """retry: read a page that came back with fewer logs than classified once more (a model call)."""
     chains = _chains(todo, classes)
     hints = {doc_id: knowledge.prompt_context(con, doc_id) for doc_id in {p.doc_id for p in todo}} if con else {}
@@ -172,7 +187,7 @@ def _check_max_pages(max_pages: int | None) -> None:
         raise ValueError("max_pages must be positive")
 
 
-def _truncate(rendered, max_pages: int | None):
+def _truncate(rendered: Rendered, max_pages: int | None) -> tuple[Rendered, set[str]]:
     """The first `max_pages` pages of each document, and the documents that lost pages to the cap."""
     if max_pages is None:
         return rendered, set()
@@ -206,14 +221,15 @@ def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = 
         calls.close()
 
 
-def _check(docs, guard: llm.CallGuard) -> None:
+def _check(docs: list[ingest.SourceDoc], guard: llm.CallGuard) -> None:
     if guard.exhausted:
         raise llm.CallLimitReached(f"stopped after {guard.calls} model calls, the limit for this run")
     if all(guard.cancelled(d.doc_id) for d in docs):
         raise llm.Cancelled("cancelled")
 
 
-def _run(con, docs, max_pages, yes, dataset_dir, progress, guard: llm.CallGuard) -> None:
+def _run(con: sqlite3.Connection, docs: list[ingest.SourceDoc], max_pages: int | None, yes: bool,
+         dataset_dir: Path | None, progress: Progress | None, guard: llm.CallGuard) -> None:
     print(f"Ingest {len(docs)} documents (LLM backend: {config.LLM_BACKEND})")
     rendered, truncated = _truncate(_ingest(docs, con, dataset_dir), max_pages)
     pages = [p for ps in rendered.values() for p in ps]
@@ -260,7 +276,8 @@ def _run(con, docs, max_pages, yes, dataset_dir, progress, guard: llm.CallGuard)
     if set(rendered) != published:
         raise RuntimeError("Some documents were incomplete; their previous records were preserved")
 
-def rebuild(docs, max_pages: int | None = None, dry_run: bool = False) -> None:
+
+def rebuild(docs: list[ingest.SourceDoc], max_pages: int | None = None, dry_run: bool = False) -> None:
     """Assemble, apply knowledge and corrections, and store, from the cache only (no API calls)."""
     _check_max_pages(max_pages)
     store.migrate()
@@ -278,7 +295,7 @@ def rebuild(docs, max_pages: int | None = None, dry_run: bool = False) -> None:
         con.close()
 
 
-def cached_inputs(rendered):
+def cached_inputs(rendered: Rendered) -> tuple[Classes, dict[tuple[str, int], PageLabResults]]:
     """Cached classifications and lab-sheet results of the rendered pages."""
     classes = {(p.doc_id, p.page): c for ps in rendered.values() for p in ps
                if (c := llm.cached_classification(p)) is not None}
@@ -288,12 +305,13 @@ def cached_inputs(rendered):
     return classes, labs
 
 
-def extract_todo(rendered, classes) -> list[ingest.PageImage]:
+def extract_todo(rendered: Rendered, classes: Classes) -> list[ingest.PageImage]:
     return [p for ps in rendered.values() for p in ps
             if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
 
 
-def _lost_logs(pages, classes, extractions) -> list[tuple[int, str, str | None]]:
+def _lost_logs(pages: list[ingest.PageImage], classes: Classes, extractions: Extractions
+               ) -> list[tuple[int, str, str | None]]:
     """Log pages that came back with fewer logs than the classification counted, and holes that came back without
     a layer on any page: (page, finding, hole name). Counted, not matched by name: the classification reads the
     thumbnail and often writes a hole's name differently. A log without layers counts on its page: a last sheet
@@ -308,7 +326,7 @@ def _lost_logs(pages, classes, extractions) -> list[tuple[int, str, str | None]]
         if (found := len(logs)) < expected:
             lost.append((p.page, f"log not extracted: page {p.page} shows {expected} logs, {found} came back", None))
         for log in logs:
-            kind, number = _log_key(log, c.kind.value)
+            kind, number = log_key(log, c.kind.value)
             if kind != "probe":
                 first.setdefault(number, (p.page, log.name))
                 if log.layers:
@@ -318,11 +336,12 @@ def _lost_logs(pages, classes, extractions) -> list[tuple[int, str, str | None]]
     return lost
 
 
-def _has_previous(con, doc_ids) -> bool:
+def _has_previous(con: sqlite3.Connection, doc_ids: Iterable[str]) -> bool:
     return any(con.execute("SELECT 1 FROM boreholes WHERE doc_id = ? LIMIT 1", (d,)).fetchone() for d in doc_ids)
 
 
-def _complete(con, doc_id: str, pages, classes, extractions) -> bool:
+def _complete(con: sqlite3.Connection, doc_id: str, pages: list[ingest.PageImage], classes: Classes,
+              extractions: Extractions) -> bool:
     available = all((p.doc_id, p.page) in classes for p in pages) and all(
         (p.doc_id, p.page) in extractions
         for p in pages
@@ -335,7 +354,8 @@ def _complete(con, doc_id: str, pages, classes, extractions) -> bool:
     return not (_lost_logs(pages, classes, extractions) and _has_previous(con, [doc_id]))
 
 
-def _publishable_docs(con, rendered, classes, extractions, incomplete_docs: set[str], dry_run: bool) -> list[str]:
+def _publishable_docs(con: sqlite3.Connection, rendered: Rendered, classes: Classes, extractions: Extractions,
+                      incomplete_docs: set[str], dry_run: bool) -> list[str]:
     """Documents whose records can replace the stored ones: complete, in a group without incomplete documents.
     A dry run writes nothing, so it shows every classified document."""
     def complete(doc_id: str) -> bool:
@@ -356,7 +376,8 @@ def _publishable_docs(con, rendered, classes, extractions, incomplete_docs: set[
     return done
 
 
-def _protected(con, records, uids: dict[str, str | None], fixes: dict[str, list]) -> dict[str, set]:
+def _protected(con: sqlite3.Connection, records: list[Borehole], uids: dict[str, str | None],
+               fixes: dict[str, list]) -> dict[str, set]:
     """Identities a reviewer stands behind, per record that has corrections or a human decision: deduplication
     must not merge them away. The record's own id counts when the decision or a correction names it. Document
     corrections apply to every hole of the group, so they identify none."""
@@ -375,7 +396,7 @@ def _protected(con, records, uids: dict[str, str | None], fixes: dict[str, list]
     return protected
 
 
-def _write_group(con, records, doc_ids: list[str], dry_run: bool) -> list:
+def _write_group(con: sqlite3.Connection, records: list[Borehole], doc_ids: list[str], dry_run: bool) -> list[Borehole]:
     """Read knowledge and corrections and replace one document group's records in one short write transaction:
     a correction saved meanwhile cannot be lost, and reviewers wait for one group at most."""
     con.execute("BEGIN IMMEDIATE")
@@ -416,8 +437,10 @@ def _write_group(con, records, doc_ids: list[str], dry_run: bool) -> list:
     return records
 
 
-def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool = False,
-           incomplete_docs: set[str] | None = None, coords=None) -> set[str]:
+def _store(con: sqlite3.Connection, docs: list[ingest.SourceDoc], rendered: Rendered, classes: Classes,
+           extractions: Extractions, labs: dict[tuple[str, int], PageLabResults] | None = None,
+           dry_run: bool = False, incomplete_docs: set[str] | None = None,
+           coords: dict[coordcheck.Key, CoordinateReading | None] | None = None) -> set[str]:
     """Lab sheets are optional: a failed lab page does not hold back the document's logs.
     dry_run: assemble and report, but write nothing. coords: second readings of printed coordinates."""
     labs = labs or {}
@@ -453,7 +476,7 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
         if coords and (note := coordcheck.check(bh, coords)):
             bh.issues.append(note)
             corrections.rescore(bh)
-    groups: dict[str, list] = {store.document_group(doc_id): [] for doc_id in done}
+    groups: dict[str, list[Borehole]] = {store.document_group(doc_id): [] for doc_id in done}
     for bh in boreholes:
         groups.setdefault(store.document_group(bh.borehole_id), []).append(bh)
     stored = []
@@ -474,7 +497,7 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     return set(done)
 
 
-def _report(boreholes, n_docs: int) -> None:
+def _report(boreholes: list[Borehole], n_docs: int) -> None:
     """One line per record: what a run would store (for checking results while another run writes)."""
     for bh in sorted(boreholes, key=lambda b: b.borehole_id):
         findings = [i for i in bh.issues if not i.startswith("unreadable")]
