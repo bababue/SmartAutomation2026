@@ -34,7 +34,7 @@ def test_rows_link_by_hole_then_unique_sample():
         row("BH-2", "U1", "hydraulic_conductivity", "3x10-5", "cm/s"),
         row("BH-2", "U1", "liquid_limit", "NP", "%"),        # no number
     )
-    linked, unmatched = link_lab_results([a, b], [page])
+    linked, unmatched, _ = link_lab_results([a, b], [page])
     assert (linked, unmatched) == (3, 2)
     assert [(r.parameter.value, r.value, r.top_m) for r in a.lab_results] == [("ucs", 12.5, 2.0)]
     k = next(r for r in b.lab_results if r.parameter.value == "hydraulic_conductivity")
@@ -43,7 +43,7 @@ def test_rows_link_by_hole_then_unique_sample():
 
 def test_single_hole_document_takes_rows_without_name():
     a = hole("TP1")
-    linked, unmatched = link_lab_results([a], [lab_page(row(None, None, "ucs", "40", "MPa", top=1.0))] * 2)
+    linked, unmatched, _ = link_lab_results([a], [lab_page(row(None, None, "ucs", "40", "MPa", top=1.0))] * 2)
     assert (linked, unmatched) == (2, 0) and len(a.lab_results) == 1  # same value read twice: kept once
 
 
@@ -63,3 +63,18 @@ def test_units_are_converted_or_the_value_is_dropped():
     assert _lab_value(P.ucs, "25", "bananas") is None  # never publish a number in the wrong unit
     assert _lab_value(P.cai, "2.1", "-") == 2.1
     assert lab_qualifier("<0.01") == "<" and lab_qualifier("5 - 10") == "range" and lab_qualifier("12.5") is None
+
+
+
+def test_hole_id_in_sample_column_suffixes_and_implausible_values():
+    holes = [hole("QX-10"), hole("QX-11"), hole("QX-01")]
+    page = lab_page(
+        row(None, "QX10", "water_content", "33.0", "%", top=2.5),     # hole id in the sample column
+        row("QX 16 - FHT", None, "hydraulic_conductivity", "1e-7", "m/s"),  # unknown hole: stays unmatched
+        row("QX10 Contam Land", None, "water_content", "30", "%", top=1.0),  # known hole + word
+        row("QX11A", None, "water_content", "25", "%", top=2.0),       # re-drill: another hole
+        row("QX-01", None, "ucs", "9100", None, top=3.0),              # 9100 MPa is impossible
+    )
+    linked, unmatched, implausible = link_lab_results(holes, [page])
+    assert (linked, unmatched, implausible) == (2, 2, 1)
+    assert len(holes[0].lab_results) == 2 and not holes[1].lab_results and not holes[2].lab_results

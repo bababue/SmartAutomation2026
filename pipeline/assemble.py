@@ -604,9 +604,10 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
         _unique_ids(doc_records)
         _unique_ids_by_type(doc_records)
     for group, records in built.items():
-        linked, unmatched = link_lab_results([bh for bh, _, _ in records], by_group[group])
-        if unmatched:
-            print(f"  {group}: {linked} lab results linked, {unmatched} without a matching hole")
+        linked, unmatched, implausible = link_lab_results([bh for bh, _, _ in records], by_group[group])
+        if unmatched or implausible:
+            print(f"  {group}: {linked} lab results linked, {unmatched} without a matching hole, "
+                  f"{implausible} outside plausible ranges")
         flag_position_outliers([bh for bh, _, _ in records])
         for bh, unreadable, page_texts in records:
             score(bh, page_texts, unreadable)
@@ -641,9 +642,29 @@ def _same_value(a: float, b: float) -> bool:
     return abs(a - b) <= 1e-9 + 5e-4 * max(abs(a), abs(b))
 
 
-def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[int, int]:
-    """Attach the rows of lab sheets to the holes of the same document: by hole name, else by a sample
-    name that only one hole has, else to the only hole of the document. Returns (linked, unmatched)."""
+# Physically plausible ranges in the stored units: a value outside is a misread or a unit error
+# (e.g. UCS '9100' without unit is kPa, not MPa) and is not published.
+LAB_RANGES: dict[LabParameter, tuple[float, float]] = {
+    LabParameter.ucs: (0.05, 500), LabParameter.tensile_strength: (0.01, 100), LabParameter.point_load_index: (0.01, 25),
+    LabParameter.e_modulus: (0.1, 200_000), LabParameter.cai: (0, 8), LabParameter.water_content: (0, 500),
+    LabParameter.unit_weight: (8, 35), LabParameter.dry_unit_weight: (5, 32), LabParameter.fines: (0, 100),
+    LabParameter.sand: (0, 100), LabParameter.gravel: (0, 100), LabParameter.liquid_limit: (0, 500),
+    LabParameter.plastic_limit: (0, 300), LabParameter.plasticity_index: (0, 300), LabParameter.friction_angle: (0, 60),
+    LabParameter.cohesion: (0, 5000), LabParameter.undrained_shear_strength: (0, 5000),
+    LabParameter.hydraulic_conductivity: (1e-14, 1), LabParameter.poissons_ratio: (0, 0.5), LabParameter.rmr: (0, 100),
+    LabParameter.gsi: (0, 100), LabParameter.q: (1e-4, 1000),
+}
+
+
+def plausible(parameter: LabParameter, value: float) -> bool:
+    lo, hi = LAB_RANGES.get(parameter, (float("-inf"), float("inf")))
+    return lo <= value <= hi
+
+
+def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[int, int, int]:
+    """Attach the rows of lab sheets to the holes of the same document: by hole name (also with a test
+    suffix such as 'QX 16 - FHT'), else by a sample name that is a hole name or that only one hole has,
+    else to the only hole of the document. Returns (linked, unmatched, implausible)."""
     by_name: dict[tuple[str | None, str], Borehole] = {}
     for bh in records:
         by_name.setdefault(hole_key(bh.borehole_name, bh.investigation_type.value if bh.investigation_type else None), bh)
@@ -656,7 +677,21 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
         end = bh.depth_m or max((layer.bottom_m for layer in bh.layers), default=None)
         return depth is None or end is None or depth <= end + 0.5
 
-    linked = unmatched = 0
+    def find_hole(name: str, page_kind: str | None, depth: float | None) -> Borehole | None:
+        kind, number = hole_key(name, page_kind)
+        bh = lookup(by_name, (kind, number))
+        if bh is None and kind is None:  # same number for a borehole and a pit: the depth decides
+            fits = [b for (k, n), b in by_name.items() if n == number and deep_enough(b, depth)]
+            bh = fits[0] if len(fits) == 1 else None
+        if bh is None:
+            # 'QX10CONTAMLAND', 'QX16FHT': a known hole followed by a word. A single letter ('QX11A') is
+            # another hole (a re-drill) and does not match.
+            prefixes = [(n, b) for (k, n), b in by_name.items() if n[-1:].isdigit() and number.startswith(n)
+                        and len(number) - len(n) >= 2 and number[len(n)].isalpha() and (kind is None or k in (kind, None))]
+            bh = max(prefixes, key=lambda nb: len(nb[0]))[1] if prefixes else None
+        return bh
+
+    linked = unmatched = implausible = 0
     for r in pages:
         if r.labs is None:
             continue
@@ -667,13 +702,16 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
             value = _lab_value(row.parameter, row.value_raw, row.unit_raw)
             if value is None:
                 continue  # no number (e.g. 'NP', '-')
+            if not plausible(row.parameter, value):
+                implausible += 1
+                continue
             bh = None
             if row.hole_name:
-                kind, number = hole_key(row.hole_name, page_kind)
-                bh = lookup(by_name, (kind, number))
-                if bh is None and kind is None:  # same number for a borehole and a pit: the depth decides
-                    fits = [b for (k, n), b in by_name.items() if n == number and deep_enough(b, row.top_m)]
-                    bh = fits[0] if len(fits) == 1 else None
+                bh = find_hole(row.hole_name, page_kind, row.top_m)
+                if bh is not None and not deep_enough(bh, row.top_m):
+                    bh = None
+            elif row.sample_name:  # sheets often put the hole id into the sample column
+                bh = find_hole(row.sample_name, page_kind, row.top_m)
             sample = None
             if row.sample_name:
                 hits = by_sample.get(norm_name(row.sample_name), [])
@@ -700,4 +738,4 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
             elif same.sample_name is None:
                 same.sample_name = result.sample_name
             linked += 1
-    return linked, unmatched
+    return linked, unmatched, implausible
