@@ -379,6 +379,7 @@ Environment variables, read from the shell or from `.env`:
 | `EXTRACT_MODEL` / `EXTRACT_EFFORT` | `claude-opus-5-5` / `medium` | log extraction |
 | `MAX_WORKERS` | `6` (API), `3` (CLI) | parallel LLM calls |
 | `AUTO_APPROVE_THRESHOLD` | `0.9` | release score for automatic release |
+| `MAX_UPLOAD_PAGES` | `100` | maximum pages per upload batch |
 | `MAX_UPLOAD_JOBS` | `8` | maximum queued and processing uploads |
 | `MAX_UPLOAD_WORKERS` | `1` | concurrent upload pipelines in the API process |
 | `DATASET_DIR` | `temp/HKBoreholeChallenge_Data_BFH2026/BoreholeData` | input documents |
