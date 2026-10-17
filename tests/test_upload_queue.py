@@ -19,7 +19,8 @@ def db_path(tmp_path, monkeypatch):
 
 
 def task(name):
-    return uploads.UploadTask(job_id=name, doc_id=f"upload-{name}", filename="invented.pdf", kind="pdf")
+    return uploads.UploadTask(job_id=name, folder=f"upload-{name}",
+                              docs=[uploads.UploadDoc(doc_id=f"upload-{name}__invented", path="invented.pdf", kind="pdf")])
 
 
 def wait_result(path, name):
@@ -27,7 +28,7 @@ def wait_result(path, name):
     try:
         for _ in range(100):
             result = uploads.result(con, name)
-            if result and result.status != "processing":
+            if result and result.status not in ("queued", "processing"):
                 return result
             time.sleep(0.01)
     finally:
@@ -50,6 +51,11 @@ def test_queue_limits_workers_and_admitted_jobs(db_path, monkeypatch):
         queue.submit(task("one"))
         assert started.wait(2)
         queue.submit(task("two"))
+        con = store.connect(db_path)
+        try:
+            assert uploads.result(con, "two").model_dump(include={"status", "ahead"}) == {"status": "queued", "ahead": 1}
+        finally:
+            con.close()
         with pytest.raises(uploads.QueueFull):
             queue.submit(task("three"))
         assert len(calls) == 1

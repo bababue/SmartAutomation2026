@@ -96,9 +96,9 @@ export function AppMenu({ inReview, uploading, dark, onToggleReview, onUpload, o
           <button role="menuitem" className="app-menu-item" onClick={pick(onToggleReview)} onMouseEnter={() => setSub(null)}>
             <Icon d={inReview ? ICON.map : ICON.review} /><span className="menu-text">{inReview ? 'Back to map' : 'Review queue'}</span>
           </button>
-          <button role="menuitem" className="app-menu-item" onClick={pick(onUpload)} disabled={uploading}
-            onMouseEnter={() => setSub(null)} title="Or drop a file anywhere on the page">
-            <Icon d={ICON.upload} /><span className="menu-text">{uploading ? 'Processing upload…' : 'Upload a document'}</span>
+          <button role="menuitem" className="app-menu-item" onClick={pick(onUpload)} onMouseEnter={() => setSub(null)}
+            title="Files chosen together are read as one batch. Or drop them anywhere on the page.">
+            <Icon d={ICON.upload} /><span className="menu-text">{uploading ? 'Upload more documents' : 'Upload documents'}</span>
           </button>
           <div className="menu-sub" onMouseEnter={() => setSub('export')}>
             {subTrigger('export', 'Export released', ICON.export)}

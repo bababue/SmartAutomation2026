@@ -107,6 +107,9 @@ with human corrections or decisions keep their own identity.
 
 Web uploads use a bounded queue with status stored in SQLite. Run one API process per database. After a
 restart, queued jobs continue and interrupted jobs report an error so the user can explicitly retry them.
+Files chosen or dropped together, and the documents inside an uploaded ZIP, are one batch: one document
+group, processed in one run, so records of one hole spread over several files are combined. The byte and
+page limits apply to the whole batch.
 
 ## Repository layout
 

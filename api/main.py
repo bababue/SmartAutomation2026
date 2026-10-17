@@ -9,12 +9,14 @@ import math
 import re
 import shutil
 import sqlite3
+import tempfile
 import threading
 import uuid
+import zipfile
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import IO, Annotated, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
@@ -506,64 +508,146 @@ def correct(borehole_id: str, body: Correction, con: DB):
 
 
 @app.post("/api/upload")
-async def upload_document(file: UploadFile = File(...)):
-    # Only the final path component: a client-supplied name must never place the file outside upload_dir.
-    filename = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1] or "upload"
-    suffix = Path(filename).suffix.lower()
-    if suffix not in ingest.SUPPORTED:
-        raise HTTPException(415, f"unsupported file type {suffix or '(none)'}; use PDF, JPG, PNG, TIFF or DOCX")
+async def upload_documents(files: list[UploadFile] = File(...)):
+    """One batch of files, or zips of them, becomes one document group assembled in a single run, so
+    records of one hole spread over several files are combined."""
+    names = [_safe_part((f.filename or "").replace("\\", "/").rsplit("/", 1)[-1]) or "upload" for f in files]
+    for name in names:
+        suffix = Path(name).suffix.lower()
+        if suffix not in ingest.SUPPORTED and suffix != ".zip":
+            raise HTTPException(415, f"unsupported file type {suffix or '(none)'}; use PDF, JPG, PNG, TIFF, DOCX or ZIP")
     from pipeline.__main__ import _missing_credentials
     if msg := _missing_credentials():
         raise HTTPException(503, msg)
     job_id = uuid.uuid4().hex[:12]
-    doc_id = f"upload-{job_id}"
-    upload_dir = config.UPLOADS_DIR / doc_id
+    folder = f"upload-{job_id}"
+    upload_dir = config.UPLOADS_DIR / folder
     upload_dir.mkdir(parents=True, exist_ok=True)
-    dest = upload_dir / filename
-    size = 0
-    with dest.open("wb") as out:
-        while chunk := await file.read(1 << 20):
-            size += len(chunk)
-            if size > config.MAX_UPLOAD_BYTES:
-                out.close()
-                shutil.rmtree(upload_dir, ignore_errors=True)
-                raise HTTPException(413, f"file exceeds the {config.MAX_UPLOAD_BYTES // (1 << 20)} MB upload limit")
-            out.write(chunk)
-
-    kind = "pdf" if suffix == ".pdf" else "docx" if suffix == ".docx" else "image"
-    doc = ingest.SourceDoc(doc_id=doc_id, path=filename, kind=kind)
+    docs: list[ingest.SourceDoc] = []
     try:
-        pages = await run_in_threadpool(_render_upload, doc, upload_dir, dest)
+        budget = _ByteBudget()
+        for file, name in zip(files, names):
+            if name.lower().endswith(".zip"):
+                with tempfile.TemporaryFile() as archive:
+                    while chunk := await file.read(1 << 20):
+                        budget.received(len(chunk))
+                        archive.write(chunk)
+                    await run_in_threadpool(_extract_zip, archive, name, upload_dir, budget)
+            else:
+                with _unique_path(upload_dir, name).open("wb") as out:
+                    while chunk := await file.read(1 << 20):
+                        budget.received(len(chunk))
+                        budget.stored(len(chunk))
+                        out.write(chunk)
+        docs = [ingest.SourceDoc(f"{folder}__{d.doc_id}", d.path, d.kind) for d in ingest.discover(upload_dir)]
+        if not docs:
+            raise HTTPException(415, "the upload contains no PDF, JPG, PNG, TIFF or DOCX file")
+        pages = await run_in_threadpool(_render_upload, docs, upload_dir)
+        await run_in_threadpool(app.state.upload_queue.submit, uploads.UploadTask(
+            job_id=job_id, folder=folder,
+            docs=[uploads.UploadDoc(doc_id=d.doc_id, path=d.path, kind=d.kind) for d in docs]))
     except Exception as exc:
         shutil.rmtree(upload_dir, ignore_errors=True)
-        shutil.rmtree(config.PAGES_DIR / doc_id, ignore_errors=True)
+        for d in docs:
+            shutil.rmtree(config.PAGES_DIR / d.doc_id, ignore_errors=True)
         if isinstance(exc, HTTPException):
             raise
-        raise HTTPException(422, f"could not read {filename}: is it a valid {suffix.lstrip('.').upper()} file?") from exc
+        if isinstance(exc, uploads.QueueFull):
+            raise HTTPException(503, "the upload queue is full; try again after a document finishes processing") from exc
+        raise
+    return {"job_id": job_id, "pages": pages, "files": [Path(d.path).as_posix() for d in docs]}
 
+
+class _ByteBudget:
+    """MAX_UPLOAD_BYTES applies to the whole batch: to the bytes received and to the documents stored,
+    so a small zip cannot expand past the limit."""
+
+    def __init__(self) -> None:
+        self.received_bytes = self.stored_bytes = 0
+
+    def received(self, n: int) -> None:
+        self.received_bytes += n
+        self._check(self.received_bytes)
+
+    def stored(self, n: int) -> None:
+        self.stored_bytes += n
+        self._check(self.stored_bytes)
+
+    @staticmethod
+    def _check(total: int) -> None:
+        if total > config.MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"the upload exceeds the {config.MAX_UPLOAD_BYTES // (1 << 20)} MB upload limit")
+
+
+def _safe_part(part: str) -> str:
+    """One path component that is a valid file name on every OS."""
+    return re.sub(r'[<>:"|?*\x00-\x1f]', "-", part).strip(" .")
+
+
+def _unique_path(folder: Path, rel: str) -> Path:
+    dest = folder / rel
+    stem, suffix, n = dest.stem, dest.suffix, 1
+    while dest.exists():  # two files of one name in a batch stay two documents
+        n += 1
+        dest = dest.with_name(f"{stem}-{n}{suffix}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    return dest
+
+
+def _extract_zip(archive: IO[bytes], name: str, upload_dir: Path, budget: _ByteBudget) -> None:
     try:
-        await run_in_threadpool(app.state.upload_queue.submit, uploads.UploadTask(
-            job_id=job_id, doc_id=doc_id, filename=filename, kind=kind))
-    except uploads.QueueFull:
-        shutil.rmtree(upload_dir, ignore_errors=True)
-        shutil.rmtree(config.PAGES_DIR / doc_id, ignore_errors=True)
-        raise HTTPException(503, "the upload queue is full; try again after a document finishes processing")
-    return {"job_id": job_id, "pages": len(pages)}
+        zf = zipfile.ZipFile(archive)
+    except zipfile.BadZipFile:
+        raise HTTPException(422, f"could not read {name}: is it a valid ZIP file?") from None
+    with zf:
+        for info in zf.infolist():
+            parts = info.filename.replace("\\", "/").split("/")
+            if parts[0] == "" or ".." in parts or ":" in parts[0]:  # absolute, traversing or drive-qualified
+                raise HTTPException(400, f"{name} contains an unsafe path: {info.filename}")
+            parts = [p for p in parts if p not in ("", ".")]
+            # Entries starting with '.' or '__MACOSX' are archive metadata, not documents.
+            if (info.is_dir() or not parts or any(p.startswith((".", "__MACOSX")) for p in parts)
+                    or Path(parts[-1]).suffix.lower() not in ingest.SUPPORTED):
+                continue
+            dest = _unique_path(upload_dir, "/".join(_safe_part(p) or "_" for p in parts))
+            if upload_dir.resolve() not in dest.resolve().parents:
+                raise HTTPException(400, f"{name} contains an unsafe path: {info.filename}")
+            try:
+                with zf.open(info) as src, dest.open("wb") as out:
+                    while chunk := src.read(1 << 20):  # counted as read: the sizes in the archive header can lie
+                        budget.stored(len(chunk))
+                        out.write(chunk)
+            except (RuntimeError, zipfile.BadZipFile, NotImplementedError) as exc:  # encrypted, corrupt, unknown method
+                raise HTTPException(422, f"could not extract {info.filename} from {name}: {exc}") from None
 
 
 _MUPDF = threading.Lock()  # PyMuPDF is not thread-safe; concurrent uploads must not render at the same time
 
 
-def _render_upload(doc: ingest.SourceDoc, upload_dir: Path, dest: Path) -> list[ingest.PageImage]:
+def _render_upload(docs: list[ingest.SourceDoc], upload_dir: Path) -> int:
+    _check_page_count(len(docs))  # every document has at least one page
     with _MUPDF:
-        if doc.kind != "docx":
-            # Opened from memory first: on Windows a file PyMuPDF fails to open stays locked while the error is
-            # alive, and the rejected upload could not be removed.
-            with pymupdf.open(stream=dest.read_bytes(), filetype=dest.suffix.lstrip(".").lower()) as source:
-                if doc.kind == "pdf":  # a long PDF would take minutes to render only to be rejected
-                    _check_page_count(source.page_count)
-        pages = ingest.render(doc, upload_dir)
-    _check_page_count(len(pages))
+        declared = 0
+        for doc in docs:
+            if doc.kind == "docx":
+                continue
+            src = upload_dir / doc.path
+            try:
+                # Opened from memory first: on Windows a file PyMuPDF fails to open stays locked while the error
+                # is alive, and the rejected upload could not be removed.
+                with pymupdf.open(stream=src.read_bytes(), filetype=src.suffix.lstrip(".").lower()) as source:
+                    declared += source.page_count if doc.kind == "pdf" else 1
+            except Exception as exc:
+                raise HTTPException(422, f"could not read {doc.path}: is it a valid "
+                                         f"{src.suffix.lstrip('.').upper()} file?") from exc
+        _check_page_count(declared)  # a long PDF would take minutes to render only to be rejected
+        pages = 0
+        for doc in docs:
+            try:
+                pages += len(ingest.render(doc, upload_dir))
+            except Exception as exc:
+                raise HTTPException(422, f"could not read {doc.path}") from exc
+    _check_page_count(pages)
     return pages
 
 

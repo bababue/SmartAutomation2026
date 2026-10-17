@@ -13,11 +13,17 @@ from pydantic import BaseModel, Field
 from . import config, ingest, store
 
 
-class UploadTask(BaseModel):
-    job_id: str
+class UploadDoc(BaseModel):
     doc_id: str
-    filename: str
+    path: str  # relative to the batch folder
     kind: Literal["pdf", "docx", "image"]
+
+
+class UploadTask(BaseModel):
+    """One upload batch: its documents form one document group and are assembled in one run."""
+    job_id: str
+    folder: str  # under UPLOADS_DIR
+    docs: list[UploadDoc]
 
 
 class UploadedBorehole(BaseModel):
@@ -27,9 +33,10 @@ class UploadedBorehole(BaseModel):
 
 
 class UploadResult(BaseModel):
-    status: Literal["processing", "done", "error"]
+    status: Literal["queued", "processing", "done", "error"]
     boreholes: list[UploadedBorehole] = Field(default_factory=list)
     error: str | None = None
+    ahead: int | None = None  # jobs to finish before this one starts; only while queued
 
 
 class QueueFull(Exception):
@@ -45,8 +52,13 @@ class UploadQueue:
             with con:
                 con.execute("UPDATE upload_jobs SET status = 'error', error = ? WHERE status = 'processing'",
                             ("Processing was interrupted by a server restart; submit the file again to retry",))
-            tasks = [UploadTask.model_validate_json(r["task"]) for r in con.execute(
-                "SELECT task FROM upload_jobs WHERE status = 'queued' ORDER BY created_at")]
+            tasks = []
+            for row in con.execute("SELECT id, task FROM upload_jobs WHERE status = 'queued' ORDER BY created_at").fetchall():
+                try:
+                    tasks.append(UploadTask.model_validate_json(row["task"]))
+                except ValueError:
+                    con.execute("UPDATE upload_jobs SET status = 'error', error = ? WHERE id = ?",
+                                ("The queued upload could not be resumed; submit the files again", row["id"]))
         finally:
             con.close()
         for task in tasks:
@@ -74,9 +86,11 @@ class UploadQueue:
             with con:
                 con.execute("UPDATE upload_jobs SET status = 'processing' WHERE id = ?", (task.job_id,))
             try:
-                run([ingest.SourceDoc(task.doc_id, task.filename, task.kind)],
-                    dataset_dir=config.UPLOADS_DIR / task.doc_id)
-                rows = con.execute("SELECT id, name, review_status FROM boreholes WHERE doc_id = ?", (task.doc_id,))
+                run([ingest.SourceDoc(d.doc_id, d.path, d.kind) for d in task.docs],
+                    dataset_dir=config.UPLOADS_DIR / task.folder)
+                doc_ids = [d.doc_id for d in task.docs]
+                rows = con.execute(f"SELECT id, name, review_status FROM boreholes WHERE doc_id IN "
+                                   f"({', '.join('?' * len(doc_ids))}) ORDER BY name, id", doc_ids)
                 result = UploadResult(status="done", boreholes=[UploadedBorehole.model_validate(dict(r)) for r in rows])
             except Exception as exc:
                 result = UploadResult(status="error", error=f"{type(exc).__name__}: {exc}")
@@ -91,9 +105,13 @@ class UploadQueue:
 
 
 def result(con: sqlite3.Connection, job_id: str) -> UploadResult | None:
-    row = con.execute("SELECT status, result, error FROM upload_jobs WHERE id = ?", (job_id,)).fetchone()
+    row = con.execute("SELECT status, result, error, created_at FROM upload_jobs WHERE id = ?", (job_id,)).fetchone()
     if row is None:
         return None
     if row["result"]:
         return UploadResult.model_validate_json(row["result"])
+    if row["status"] == "queued":
+        ahead = con.execute("SELECT COUNT(*) FROM upload_jobs WHERE status IN ('queued', 'processing') "
+                            "AND (created_at, id) < (?, ?)", (row["created_at"], job_id)).fetchone()[0]
+        return UploadResult(status="queued", ahead=ahead)
     return UploadResult(status="error" if row["status"] == "error" else "processing", error=row["error"])

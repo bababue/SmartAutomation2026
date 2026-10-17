@@ -85,10 +85,11 @@ export function postReview(id: string, decision: ReviewStatus, reviewer: string,
   })
 }
 
-export function postUpload(file: File) {
+/** One batch: the server assembles the files, and the documents in zips, together as one document group. */
+export function postUpload(files: File[]) {
   const body = new FormData()
-  body.append('file', file)
-  return request<{ job_id: string; pages: number }>('/api/upload', { method: 'POST', body })
+  files.forEach((f) => body.append('files', f))
+  return request<{ job_id: string; pages: number; files: string[] }>('/api/upload', { method: 'POST', body })
 }
 
 export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/upload/${enc(jobId)}`)

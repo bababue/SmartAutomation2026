@@ -235,9 +235,11 @@ export interface Stats {
 }
 
 export interface UploadStatus {
-  status: 'processing' | 'done' | 'error'
+  status: 'queued' | 'processing' | 'done' | 'error'
   boreholes: { id: string; name: string; review_status: ReviewStatus }[]
   error: string | null
+  /** Uploads to finish before this one starts; set only while queued. */
+  ahead: number | null
 }
 
 export type StatusFilter = 'all' | 'released' | 'pending' | 'rejected'

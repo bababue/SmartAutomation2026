@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { fetchBoreholes, fetchBoreholesById, fetchDetail, fetchMapPoints, fetchQueue, fetchStats, fetchUploadStatus, postUpload } from './api'
+import { fetchBoreholes, fetchBoreholesById, fetchDetail, fetchMapPoints, fetchQueue, fetchStats } from './api'
 import { LithologyPatterns } from './lithology'
 import { BrandLogo } from './components/BrandLogo'
 import { DetailPanel } from './components/DetailPanel'
@@ -7,13 +7,13 @@ import { MapView } from './components/MapView'
 import { ResultList } from './components/ResultList'
 import { ReviewQueue } from './components/ReviewQueue'
 import { SectionView, orderAlongLine } from './components/SectionView'
-import { STATUS_LABEL } from './review'
 import type { QueueNav } from './components/ReviewBox'
 import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats } from './types'
 import { readUrl, writeUrl, type View } from './url'
 import { SheetResizer } from './components/SheetResizer'
 import { FilterBar } from './components/FilterBar'
 import { AppMenu } from './components/AppMenu'
+import { UploadQueue, useUploadQueue } from './components/UploadQueue'
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
 const THEME_KEY = 'borehole-atlas.theme'
@@ -45,8 +45,6 @@ export default function App() {
   const [refresh, setRefresh] = useState(0) // bump after a review decision
   const [sectionIds, setSectionIds] = useState<string[]>(initial.sectionIds)
   const [blockingOnly, setBlockingOnly] = useState(initial.blockingOnly)
-  const [uploadJob, setUploadJob] = useState<{ id: string; label: string } | null>(null)
-  const [uploading, setUploading] = useState(false) // from the first byte sent until the job is done or failed
   const [listOpen, setListOpen] = useState(initial.listOpen)
   const [sheetWidth, setSheetWidth] = useState<number | null>(null)  // null: default split; a reload resets it
   const beforeSource = useRef<{ listOpen: boolean; sheetWidth: number | null }>({ listOpen: true, sheetWidth: null })
@@ -63,7 +61,6 @@ export default function App() {
       setSheetWidth(beforeSource.current.sheetWidth)
     }
   }, [listOpen, sheetWidth])
-  const [uploadNote, setUploadNote] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const [dark, setDark] = useState(loadDark)
@@ -226,54 +223,20 @@ export default function App() {
     [sectionFeatures],
   )
 
-  const startUpload = useCallback((file: File) => {
-    setUploading(true)
-    setUploadNote(`Uploading ${file.name}…`)
-    postUpload(file)
-      .then((res) => {
-        const label = `${res.pages} page${res.pages === 1 ? '' : 's'} of ${file.name}`
-        setUploadJob({ id: res.job_id, label })
-        setUploadNote(`Processing ${label}…`)
-      })
-      .catch((err) => { setUploading(false); setUploadNote(`Could not upload ${file.name}: ${err.message}`) })
-  }, [])
+  const onUploaded = useCallback(() => setRefresh((n) => n + 1), []) // reload the map, list and queue
+  const uploads = useUploadQueue(onUploaded, setSelectedId)
+  const { addFiles } = uploads
 
   const onFileChosen = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = '' // allow re-choosing the same file later
-    if (file) startUpload(file)
-  }, [startUpload])
+    if (e.target.files) addFiles(e.target.files)
+    e.target.value = '' // allow re-choosing the same files later
+  }, [addFiles])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setDragging(false)
-    const file = e.dataTransfer.files[0]
-    if (file && !uploading) startUpload(file)
-  }, [startUpload, uploading])
-
-  // Poll until the document is classified, extracted and stored (or fails).
-  useEffect(() => {
-    if (!uploadJob) return
-    const started = Date.now()
-    const finish = (note: string) => { clearInterval(t); setUploadJob(null); setUploading(false); setUploadNote(note) }
-    const t = setInterval(() => {
-      fetchUploadStatus(uploadJob.id).then((status) => {
-        if (status.status === 'processing') {
-          setUploadNote(`Processing ${uploadJob.label}… ${Math.round((Date.now() - started) / 1000)} s`)
-        } else if (status.status === 'error') {
-          finish(`Upload failed: ${status.error}`)
-        } else if (status.boreholes.length === 0) {
-          finish('Processed, but no borehole was recognised in the document.')
-        } else {
-          const [first] = status.boreholes
-          finish(`Added ${status.boreholes.map((b) => `${b.name} (${STATUS_LABEL[b.review_status].toLowerCase()})`).join(', ')}`)
-          setSelectedId(first.id)
-          setRefresh((n) => n + 1) // reload the map, list and queue
-        }
-      }).catch(() => finish('Lost track of the upload.'))
-    }, 1500)
-    return () => clearInterval(t)
-  }, [uploadJob])
+    addFiles(e.dataTransfer.files)
+  }, [addFiles])
 
   return (
     <div
@@ -285,7 +248,7 @@ export default function App() {
     >
       {dragging && (
         <div className="drop-overlay" aria-hidden="true">
-          {uploading ? 'An upload is still being processed' : 'Drop a borehole log to add it (PDF, image or DOCX)'}
+          Drop borehole logs to add them (PDF, image, DOCX or ZIP). Files dropped together are read as one batch.
         </div>
       )}
       <svg width={0} height={0} style={{ position: 'absolute' }} aria-hidden="true"><LithologyPatterns /></svg>
@@ -305,9 +268,9 @@ export default function App() {
           />
         </label>
         <div className="topbar-side topbar-end">
-          <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx" className="visually-hidden"
-            onChange={onFileChosen} aria-label="Upload a borehole log" />
-          {uploadNote && <p className="upload-note" role="status" title={uploadNote}>{uploadNote}</p>}
+          <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx,.zip" multiple
+            className="visually-hidden" onChange={onFileChosen} aria-label="Upload borehole logs" />
+          <UploadQueue batches={uploads.batches} onDismiss={uploads.dismiss} />
           {stats && (
             <p className="stats">
               <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes
@@ -319,7 +282,7 @@ export default function App() {
               <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> released
             </p>
           )}
-          <AppMenu inReview={view === 'review'} uploading={uploading} dark={dark}
+          <AppMenu inReview={view === 'review'} uploading={uploads.active} dark={dark}
             onToggleReview={() => setView(view === 'review' ? 'map' : 'review')}
             onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} />
         </div>
