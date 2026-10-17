@@ -106,20 +106,20 @@ export function RoutePanel({ name, project, route, draft, candidates, selectedId
             <label className="route-field">Vertical reference
               <select value={route.tunnelMode} onChange={(event) => set({ tunnelMode: event.target.value as TunnelRoute['tunnelMode'] })}>
                 <option value="depth">Depth below ground</option>
-                <option value="elevation">Elevation above datum</option>
+                <option value="elevation">Elevation below datum</option>
               </select>
             </label>
             {route.tunnelMode === 'depth' ? <label className="route-field">Axis depth (m)
               <input type="number" min="0" step="0.1" value={route.depthM ?? ''} placeholder="e.g. 15"
                 onChange={(event) => set({ depthM: parseDecimal(event.target.value) })} />
             </label> : <>
-              <label className="route-field">Axis elevation at route start (m)
-                <input type="number" step="0.1" value={route.startElevationM ?? ''}
-                  onChange={(event) => set({ startElevationM: parseDecimal(event.target.value) })} />
+              <label className="route-field">Axis distance below datum at route start (m)
+                <input type="number" step="0.1" value={route.startElevationM == null ? '' : -route.startElevationM}
+                  onChange={(event) => { const value = parseDecimal(event.target.value); set({ startElevationM: value == null ? null : -value }) }} />
               </label>
-              <label className="route-field">Axis elevation at route end (m)
-                <input type="number" step="0.1" value={route.endElevationM ?? ''}
-                  onChange={(event) => set({ endElevationM: parseDecimal(event.target.value) })} />
+              <label className="route-field">Axis distance below datum at route end (m)
+                <input type="number" step="0.1" value={route.endElevationM == null ? '' : -route.endElevationM}
+                  onChange={(event) => { const value = parseDecimal(event.target.value); set({ endElevationM: value == null ? null : -value }) }} />
               </label>
             </>}
             <label className="route-field">Tunnel diameter (m, optional)

@@ -6,6 +6,7 @@ import { BrandLogo } from './components/BrandLogo'
 import { DetailPanel } from './components/DetailPanel'
 import { MapView } from './components/MapView'
 import { ResultList } from './components/ResultList'
+import { GroupingToggle } from './components/GroupingToggle'
 import { RoutePanel } from './components/RoutePanel'
 import { TunnelList } from './components/TunnelList'
 import { ReviewList } from './components/ReviewList'
@@ -32,7 +33,8 @@ export default function App() {
   const [view, setView] = useState<View>(initial.view)
   const [routeActive, setRouteActive] = useState(initial.routeActive)
   const [tunnels, setTunnels] = useState<SavedTunnel[]>(loadTunnels)
-  const [activeTunnelId, setActiveTunnelId] = useState<string | null>(initial.tunnelId ?? (initial.routeActive ? tunnels[0]?.id ?? null : null))
+  const [activeTunnelId, setActiveTunnelId] = useState<string | null>(initial.tunnelId)
+  const [grouped, setGrouped] = useState(true)
   const activeTunnel = tunnels.find((tunnel) => tunnel.id === activeTunnelId) ?? null
   const route = activeTunnel?.route ?? null
   const routeHoleIds = activeTunnel?.holeIds ?? EMPTY_IDS
@@ -316,7 +318,8 @@ export default function App() {
   }, [routeDraft, route, activeTunnel, setRoute, setRouteHoleIds])
 
   const openTunnel = () => {
-    if (!activeTunnelId && tunnels.length === 1) setActiveTunnelId(tunnels[0].id)
+    setActiveTunnelId(null)
+    setRouteDraft(null)
     setRouteActive(true)
     setView('map')
     setListOpen(true)
@@ -406,17 +409,22 @@ export default function App() {
         {listOpen ? '‹' : '›'}
       </button>}
       <aside className="sidebar" id="sidebar" inert={!listOpen}>
-        {inTunnel ? <TunnelList tunnels={tunnels} boreholes={known} selectedId={activeTunnelId}
-          onSelect={(id) => { setActiveTunnelId(id); setRouteDraft(null); setSelectedId(null) }}
-          onCreate={createTunnel}
-          onShowBoreholes={closeTunnel} /> : view === 'review' ? <>
-        {auditOnly && <div className="filters review-mode-card">
-          <div className="filter-bar" role="group" aria-label="Map content">
-            <button className="pill pill-on pill-mode" onClick={closeReview} aria-label="Close review and show boreholes">
-              Review <span aria-hidden="true">×</span>
+        <div className="filters view-tabs">
+          <div className="filter-bar" role="group" aria-label="Views">
+            <button className={`pill${inTunnel ? ' pill-on pill-mode' : ''}`} onClick={inTunnel ? closeTunnel : openTunnel}
+              aria-label={inTunnel ? 'Close tunnels and show boreholes' : 'Show tunnels'}>
+              Tunnels {inTunnel && <span aria-hidden="true">×</span>}
+            </button>
+            <button className={`pill${view === 'review' ? ' pill-on pill-mode' : ''}`} onClick={view === 'review' ? closeReview : openReview}
+              aria-label={view === 'review' ? 'Close review and show boreholes' : 'Show review'}>
+              Review {view === 'review' && <span aria-hidden="true">×</span>}
             </button>
           </div>
-        </div>}
+        </div>
+        {inTunnel ? <TunnelList tunnels={tunnels} boreholes={known} selectedId={activeTunnelId}
+          grouped={grouped} onGroupedChange={setGrouped}
+          onCreate={createTunnel}
+          onSelect={(id) => { setActiveTunnelId(id); setRouteDraft(null); setSelectedId(null) }} /> : view === 'review' ? <>
         {auditOnly ? (
           <div className="result-head">
             <span>Release audit: automatic releases drawn for a person to check</span>
@@ -424,21 +432,21 @@ export default function App() {
           </div>
         ) : (
           <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies}
-            onShowTunnels={openTunnel} onShowReview={openReview} onCloseReview={closeReview}
             review={{ filters: reviewFilters, onChange: setReviewFilters, findings: queueFindings }} />
         )}
         {error && <p className="error" role="alert">{error}</p>}
         <ReviewList items={queue} groups={queueGroups} total={queueTotal} loading={queueLoadedKey !== queueKey} audit={auditOnly}
+          grouped={grouped} onGroupedChange={setGrouped}
           selectedId={selectedId} onSelect={setSelectedId}
           crsGroups={!auditOnly && reviewFilters.position === 'crs_inferred' ? crsGroups : []} onChanged={() => setRefresh((n) => n + 1)} />
         </> : <>
-        <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies}
-          onShowTunnels={openTunnel} onShowReview={openReview} />
+        <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies} />
         <div className="result-head">
           <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
+          <GroupingToggle grouped={grouped} onChange={setGrouped} />
         </div>
         {error && <p className="error" role="alert">{error}</p>}
-        <ResultList features={listFeatures} groups={data.facets?.groups ?? []} activeGroup={filters.group}
+        <ResultList features={listFeatures} groups={data.facets?.groups ?? []} activeGroup={filters.group} grouped={grouped}
           onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })) }}
           selectedId={selectedId} onSelect={setSelectedId} loading={loading} />
         {!loading && data.total != null && data.features.length < data.total && (
@@ -476,7 +484,7 @@ export default function App() {
                 <line x1="58" x2="100%" y1="257" y2="257" className="section-axis" />
                 <line x1="58" x2="58" y1="36" y2="257" className="section-axis" />
               </svg>
-              <p>Draw a tunnel route to see its profile here.</p>
+              <p>{activeTunnel ? 'Draw a tunnel route to see its profile here.' : 'Select a tunnel to see its profile, or create a new tunnel.'}</p>
             </div>
           </section>
         )}
