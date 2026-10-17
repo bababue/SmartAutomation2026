@@ -1374,11 +1374,18 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
         end = bh.depth_m or max((layer.bottom_m for layer in bh.layers), default=None)
         return depth is None or end is None or depth <= end + 0.5
 
-    def find_hole(name: str, page_kind: str | None, depth: float | None) -> Borehole | None:
+    def sampled_at(bh: Borehole, top: float | None, bottom: float | None) -> bool:
+        return top is not None and any(
+            abs(s.top_m - top) <= 0.05 and (bottom is None or s.bottom_m is None or abs(s.bottom_m - bottom) <= 0.05)
+            for s in bh.samples)
+
+    def find_hole(name: str, page_kind: str | None, depth: float | None, bottom: float | None) -> Borehole | None:
         kind, number = hole_key(name, page_kind)
         bh = lookup_hole(by_name, (kind, number))
         if bh is None and kind is None:  # same number for a borehole and a pit: the depth decides
             fits = [b for (k, n), b in by_name.items() if n == number and deep_enough(b, depth)]
+            if len(fits) > 1:  # both deep enough: the hole whose log has a sample at exactly that depth
+                fits = [b for b in fits if sampled_at(b, depth, bottom)]
             bh = fits[0] if len(fits) == 1 else None
         if bh is None:
             # 'BH10CONTAM', 'BH16FHT': a known hole followed by a word. A single letter ('BH11A') is
@@ -1412,11 +1419,11 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
                 continue
             bh = None
             if row.hole_name:
-                bh = find_hole(row.hole_name, page_kind, row.top_m)
+                bh = find_hole(row.hole_name, page_kind, row.top_m, row.bottom_m)
                 if bh is not None and not deep_enough(bh, row.top_m):
                     bh = None
             elif row.sample_name:  # sheets often put the hole id into the sample column
-                bh = find_hole(row.sample_name, page_kind, row.top_m)
+                bh = find_hole(row.sample_name, page_kind, row.top_m, row.bottom_m)
             sample = None
             if row.sample_name:
                 hits = by_sample.get(norm_name(row.sample_name), [])

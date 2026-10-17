@@ -118,6 +118,20 @@ def test_number_shared_by_borehole_and_test_pit_takes_the_type_that_fits_the_who
     assert link_lab_results([bh1, bh2, tp1, tp2], [pits]) == (1, 1, 0) and len(bh2.lab_results) == 2
 
 
+def test_number_shared_by_borehole_and_test_pit_goes_to_the_hole_sampled_at_that_depth():
+    # A pit table and a borehole table on one page, both read as bare numbers; both holes are deep enough.
+    bh1, bh4 = hole("1", [("C2", 1.5, 3.0)]), hole("4", [("2", 1.5, 3.0)])
+    tp1, tp4 = hole("1", [(None, 1.8, 1.8), (None, 2.7, 2.7)]), hole("4", [(None, 1.0, 1.0)])
+    for bh, kind, depth in ((bh1, "borehole", 6), (bh4, "borehole", 6), (tp1, "test_pit", 2.7), (tp4, "test_pit", 1.6)):
+        bh.investigation_type, bh.layers[0].bottom_m = InvestigationType(kind), depth
+    pit_row = row("1", None, "other", "8.89", None, top=2.7)
+    core_row = row("4", None, "other", "8.61", None, top=1.5)
+    core_row.bottom_m = 3.0
+    shallow = row("1", None, "other", "8.0", None, top=0.5)  # no hole sampled there: left unmatched
+    assert link_lab_results([bh1, bh4, tp1, tp4], [lab_page(pit_row, core_row, shallow)]) == (2, 1, 0)
+    assert len(tp1.lab_results) == len(bh4.lab_results) == 1 and not bh1.lab_results and not tp4.lab_results
+
+
 def test_chemistry_rows_with_the_same_detection_limit_are_kept_apart():
     def chem(name: str, value: str, unit: str = "ug/l") -> XLabRow:
         return XLabRow(hole_name="MW-3", sample_name=None, top_m=None, bottom_m=None, parameter="other",
