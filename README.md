@@ -3,7 +3,8 @@
 Black Forest Hackathon 2026 – Smart Automation Edition (16–18 Oct 2026, Offenburg)
 Challenge by **Herrenknecht AG**: *Automated extraction and standardisation of drilling data for a global geodatabase.*
 
-Jump to [Getting started](#getting-started) to run it yourself.
+Jump to [Getting started](#getting-started) to run it yourself. [FEATURES.md](FEATURES.md) lists what it
+does and ideas for what comes next.
 
 ## Goal
 
