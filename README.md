@@ -16,6 +16,12 @@ docker build -t borehole-atlas . && docker run --rm -p 8000:8000 borehole-atlas 
 That builds and tests everything that runs without the confidential dataset or an LLM key, and serves the app
 with synthetic boreholes (see [What the build checks](#what-the-build-checks)).
 
+**Not in this repository:** the challenge documents and everything built from them (page images, model cache,
+the database with the extracted boreholes and review decisions). They are confidential project data, used only
+for this challenge and deleted after the event. The Docker image and `make demo` run on synthetic boreholes at
+public places; the statistics page then shows the committed evaluation snapshot
+(`fixtures/model_evaluation.json`, aggregates only).
+
 ## Challenge goal and how we meet it
 
 > Automatically extract borehole profiles from PDFs, scans and images, convert them into a standardised
