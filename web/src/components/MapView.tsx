@@ -5,7 +5,7 @@ import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { fetchLayerStrips } from '../api'
 import { tooltipContent } from '../boreholeTooltip'
-import { cssColor, detailSheetRect, el } from '../dom'
+import { cssColor, el } from '../dom'
 import { LITHOLOGY, lithStyle, patternId } from '../lithology'
 import { STATUS_LABEL } from '../review'
 import type { BoreholeSummary, FeatureCollection, MapPoint, ReviewStatus } from '../types'
@@ -88,8 +88,10 @@ function updateRouteOverlay(m: MapLibre, state: { route: TunnelRoute | null; ina
 function fitRoute(m: MapLibre, coordinates: RoutePoint[]) {
   if (coordinates.length < 2) return
   const bounds = coordinates.reduce((box, point) => box.extend(point), new LngLatBounds(coordinates[0], coordinates[0]))
-  const right = Math.min(uncovered(m).right, m.getContainer().clientWidth * 0.55)
-  m.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 60 + right }, maxZoom: 15, duration: 450 })
+  const { right, bottom } = uncovered(m)
+  // Below column zoom: in the flat view the depth columns would be seen end-on and the holes disappear.
+  m.fitBounds(bounds, { padding: { top: 60, bottom: 60 + bottom, left: 60, right: 60 + Math.min(right, m.getContainer().clientWidth * 0.55) },
+    maxZoom: COLUMN_MIN_ZOOM - 0.5, duration: 450 })
 }
 
 function pickerList(items: MapPoint[], onPick: (id: string) => void) {
@@ -164,7 +166,6 @@ export function MapView({ data, route, inactiveRoutes, routeDraft, hoveredHole, 
     })
     created = m
     map.current = m
-    ;(window as unknown as { __map: MapLibre }).__map = m  // DEBUG-REMOVE
     const tooltip = new Popup({ closeButton: false, closeOnClick: false, offset: 10, className: 'map-tooltip' })
     const picker = new Popup({ closeButton: true, offset: 14, className: 'map-picker', maxWidth: '280px' })
     let stripRequest: AbortController | null = null
@@ -573,12 +574,15 @@ function recenter(m: MapLibre, focus: Props['focus']) {
   if (focus && !m.isMoving()) m.easeTo({ center: [focus.lon, focus.lat], padding: uncovered(m), duration: 0 })
 }
 
-/** Padding that keeps the centre in the part of the map the detail sheet leaves visible. */
+/** Padding that keeps the centre in the part of the map that the sheet on the right and the tunnel section below
+ * leave visible. Both are measured by their layout size, not their rectangle: the sheet slides in when it opens. */
 function uncovered(m: MapLibre) {
   const map = m.getContainer().getBoundingClientRect()
-  const sheet = detailSheetRect()
-  const right = sheet && sheet.left > map.left ? Math.max(0, map.right - sheet.left) : 0
-  return { left: 0, right, top: 0, bottom: 0 }
+  const sheet = document.querySelector<HTMLElement>('.detail, .tunnel-detail')
+  const sheetLeft = sheet ? window.innerWidth - sheet.offsetWidth : map.right  // both sheets are fixed to the right edge
+  const right = sheetLeft > map.left ? Math.max(0, map.right - sheetLeft) : 0
+  const section = m.getContainer().parentElement?.querySelector<HTMLElement>('.section')
+  return { left: 0, right, top: 0, bottom: section ? Math.min(section.offsetHeight, map.height / 2) : 0 }
 }
 
 function fit(m: MapLibre, data: FeatureCollection<MapPoint>) {
