@@ -25,7 +25,10 @@ const MARGIN = { left: 58, right: 24, top: 36, bottom: 56 }
 const PLOT_H = HEIGHT - MARGIN.top - MARGIN.bottom
 /** Width of a borehole column in px. */
 const COL = 6
+const PLOT_LEFT = MARGIN.left + COL / 2
 
+/** Final depth, else the bottom of the deepest logged layer. */
+const holeDepth = (p: BoreholeSummary) => p.depth ?? Math.max(0, ...(p.strip ?? []).map((layer) => layer[1]))
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
 const tickStep = (range: number) => {
   const base = 10 ** Math.floor(Math.log10(Math.max(range, 0.001) / 5))
@@ -44,16 +47,86 @@ function centre(element: Element): ScreenPoint {
 interface Viewport { key: string; from: number; to: number; low: number; high: number }
 interface ZoomSelection { x0: number; y0: number; x1: number; y1: number }
 
+/** Dragging across the plot zooms to the box; a click without a drag picks the hole under the pointer. */
+function useBoxZoom({ plotWidth, svgWidth, onZoom, onPick, onDragStart }: {
+  plotWidth: number
+  svgWidth: number
+  onZoom: (box: ZoomSelection) => void
+  onPick: (holeId: string) => void
+  onDragStart: () => void
+}) {
+  const drag = useRef<{ pointerId: number; x: number; y: number; holeId: string | null; zooming: boolean } | null>(null)
+  const suppressClick = useRef(false)
+  const [selection, setSelection] = useState<ZoomSelection | null>(null)
+  const pointerPosition = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    return {
+      x: clamp(event.clientX - rect.left, PLOT_LEFT, PLOT_LEFT + plotWidth),
+      y: clamp(event.clientY - rect.top, MARGIN.top, MARGIN.top + PLOT_H),
+    }
+  }
+  const startSelection = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.button !== 0) return
+    suppressClick.current = false
+    const { x, y } = pointerPosition(event)
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (event.clientX - rect.left < MARGIN.left || event.clientX - rect.left > svgWidth - MARGIN.right ||
+        event.clientY - rect.top < MARGIN.top || event.clientY - rect.top > MARGIN.top + PLOT_H) return
+    const target = event.target as Element
+    const holeId = target.closest<SVGGElement>('.section-hole')?.dataset.holeId ?? null
+    drag.current = { pointerId: event.pointerId, x, y, holeId, zooming: false }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+  const moveSelection = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const start = drag.current
+    if (!start || start.pointerId !== event.pointerId) return
+    const { x, y } = pointerPosition(event)
+    if (!start.zooming && Math.hypot(x - start.x, y - start.y) < 4) return
+    if (!start.zooming) { start.zooming = true; onDragStart() }
+    event.preventDefault()
+    setSelection({ x0: start.x, y0: start.y, x1: x, y1: y })
+  }
+  const finishSelection = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const start = drag.current
+    if (!start || start.pointerId !== event.pointerId) return
+    const { x, y } = pointerPosition(event)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    suppressClick.current = true
+    if (start.zooming && Math.abs(x - start.x) >= 16 && Math.abs(y - start.y) >= 16) {
+      onZoom({ x0: Math.min(start.x, x), x1: Math.max(start.x, x), y0: Math.min(start.y, y), y1: Math.max(start.y, y) })
+    } else if (!start.zooming && start.holeId) {
+      onPick(start.holeId)
+    }
+    drag.current = null
+    setSelection(null)
+  }
+  const cancelSelection = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (drag.current?.pointerId !== event.pointerId) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    drag.current = null
+    setSelection(null)
+  }
+
+  return {
+    selection,
+    zooming: () => drag.current?.zooming ?? false,
+    handlers: {
+      onPointerDown: startSelection, onPointerMove: moveSelection, onPointerUp: finishSelection, onPointerCancel: cancelSelection,
+      onClickCapture: (event: ReactMouseEvent) => {
+        if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false }
+      },
+    },
+  }
+}
+
 /** Boreholes along a route, with lithology inferred between adjacent logs. */
 export function SectionView({ features, route, selectedId, onSelect, onRemove, onClear }: Props) {
   const section = useRef<HTMLElement>(null)
   const box = useRef<HTMLDivElement>(null)
   const tooltip = useRef<HTMLDivElement>(null)
-  const drag = useRef<{ pointerId: number; x: number; y: number; holeId: string | null; zooming: boolean } | null>(null)
-  const suppressClick = useRef(false)
   const [width, setWidth] = useState(900)
   const [viewport, setViewport] = useState<Viewport | null>(null)
-  const [selection, setSelection] = useState<ZoomSelection | null>(null)
   const [correlate, setCorrelate] = useState(true)
   const [helpOpen, setHelpOpen] = useState(false)  // phones only: the text hides behind '?'
   useEffect(() => {
@@ -95,7 +168,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     const plotWidth = Math.max(1, width - MARGIN.left - MARGIN.right - COL)
     const tops = ordered.map((f) => (byElevation ? f.properties.elevation! : 0))
     const bottoms = ordered.map((f, i) => {
-      const depth = f.properties.depth ?? Math.max(0, ...(f.properties.strip ?? []).map((s) => s[1]))
+      const depth = holeDepth(f.properties)
       return byElevation ? tops[i] - depth : depth
     })
     const diameter = route.diameterM != null && route.diameterM > 0 ? route.diameterM : 0
@@ -119,7 +192,8 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
   const from = active?.from ?? 0, to = active?.to ?? Math.max(1, layout.total)
   const low = active?.low ?? (byElevation ? layout.vMin : 0)
   const high = Math.max(low + 0.1, active?.high ?? (byElevation ? layout.vMax : layout.vMin))
-  const xs = layout.positions.map((metres) => MARGIN.left + COL / 2 + ((metres - from) / (to - from)) * layout.plotWidth)
+  const xAt = (station: number) => PLOT_LEFT + ((station - from) / (to - from)) * layout.plotWidth
+  const xs = layout.positions.map(xAt)
   const y = (v: number) =>
     byElevation
       ? MARGIN.top + ((high - v) / Math.max(0.1, high - low)) * PLOT_H
@@ -179,7 +253,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     })) visibleLabels.add(label.index)
   }
   const placeTooltip = (event: ScreenPoint, content: HTMLElement) => {
-    if (drag.current?.zooming) return
+    if (boxZoom.zooming()) return
     const host = section.current, tip = tooltip.current
     if (!host || !tip) return
     tip.firstElementChild?.replaceChildren(content)
@@ -226,62 +300,14 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     placeTooltip(event, content)
   }
   const hideTooltip = () => { if (tooltip.current) tooltip.current.hidden = true }
-  const pointerPosition = (event: ReactPointerEvent<SVGSVGElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect()
-    return {
-      x: clamp(event.clientX - rect.left, MARGIN.left + COL / 2, MARGIN.left + COL / 2 + layout.plotWidth),
-      y: clamp(event.clientY - rect.top, MARGIN.top, MARGIN.top + PLOT_H),
-    }
+  const zoomTo = ({ x0, x1, y0, y1 }: ZoomSelection) => {
+    const nextFrom = layout.total ? from + (x0 - PLOT_LEFT) / layout.plotWidth * (to - from) : 0
+    const nextTo = layout.total ? from + (x1 - PLOT_LEFT) / layout.plotWidth * (to - from) : 1
+    const nextLow = byElevation ? high - (y1 - MARGIN.top) / PLOT_H * (high - low) : low + (y0 - MARGIN.top) / PLOT_H * (high - low)
+    const nextHigh = byElevation ? high - (y0 - MARGIN.top) / PLOT_H * (high - low) : low + (y1 - MARGIN.top) / PLOT_H * (high - low)
+    setViewport({ key: sectionKey, from: nextFrom, to: nextTo, low: nextLow, high: nextHigh })
   }
-  const startSelection = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (event.button !== 0) return
-    suppressClick.current = false
-    const { x, y } = pointerPosition(event)
-    const rect = event.currentTarget.getBoundingClientRect()
-    if (event.clientX - rect.left < MARGIN.left || event.clientX - rect.left > layout.svgWidth - MARGIN.right ||
-        event.clientY - rect.top < MARGIN.top || event.clientY - rect.top > MARGIN.top + PLOT_H) return
-    const target = event.target as Element
-    const holeId = target.closest<SVGGElement>('.section-hole')?.dataset.holeId ?? null
-    drag.current = { pointerId: event.pointerId, x, y, holeId, zooming: false }
-    event.currentTarget.setPointerCapture(event.pointerId)
-    event.preventDefault()
-  }
-  const moveSelection = (event: ReactPointerEvent<SVGSVGElement>) => {
-    const start = drag.current
-    if (!start || start.pointerId !== event.pointerId) return
-    const { x, y } = pointerPosition(event)
-    if (!start.zooming && Math.hypot(x - start.x, y - start.y) < 4) return
-    if (!start.zooming) { start.zooming = true; hideTooltip() }
-    event.preventDefault()
-    setSelection({ x0: start.x, y0: start.y, x1: x, y1: y })
-  }
-  const finishSelection = (event: ReactPointerEvent<SVGSVGElement>) => {
-    const start = drag.current
-    if (!start || start.pointerId !== event.pointerId) return
-    const { x, y } = pointerPosition(event)
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    suppressClick.current = true
-    if (start.zooming && Math.abs(x - start.x) >= 16 && Math.abs(y - start.y) >= 16) {
-      const x0 = Math.min(start.x, x), x1 = Math.max(start.x, x)
-      const y0 = Math.min(start.y, y), y1 = Math.max(start.y, y)
-      const left = MARGIN.left + COL / 2
-      const nextFrom = layout.total ? from + (x0 - left) / layout.plotWidth * (to - from) : 0
-      const nextTo = layout.total ? from + (x1 - left) / layout.plotWidth * (to - from) : 1
-      const nextLow = byElevation ? high - (y1 - MARGIN.top) / PLOT_H * (high - low) : low + (y0 - MARGIN.top) / PLOT_H * (high - low)
-      const nextHigh = byElevation ? high - (y0 - MARGIN.top) / PLOT_H * (high - low) : low + (y1 - MARGIN.top) / PLOT_H * (high - low)
-      setViewport({ key: sectionKey, from: nextFrom, to: nextTo, low: nextLow, high: nextHigh })
-    } else if (!start.zooming && start.holeId) {
-      onSelect(start.holeId)
-    }
-    drag.current = null
-    setSelection(null)
-  }
-  const cancelSelection = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (drag.current?.pointerId !== event.pointerId) return
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    drag.current = null
-    setSelection(null)
-  }
+  const boxZoom = useBoxZoom({ plotWidth: layout.plotWidth, svgWidth: layout.svgWidth, onZoom: zoomTo, onPick: onSelect, onDragStart: hideTooltip })
 
   return (
     <section ref={section} className="section" aria-label="Section view">
@@ -309,9 +335,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
       </header>
       <div ref={box} className="section-plot">
         <svg width={layout.svgWidth} height={HEIGHT} role="img" aria-label={`Section with ${ordered.length} boreholes over ${fmtDistance(layout.total)}`}
-          onPointerDown={startSelection} onPointerMove={moveSelection} onPointerUp={finishSelection}
-          onPointerCancel={cancelSelection}
-          onClickCapture={(event) => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false } }}>
+          {...boxZoom.handlers}>
           <defs><clipPath id="section-plot-clip"><rect x={MARGIN.left} y={MARGIN.top} width={layout.svgWidth - MARGIN.left - MARGIN.right} height={PLOT_H} /></clipPath></defs>
           <g clipPath="url(#section-plot-clip)">
           {layerBands.flatMap((bands, j) => bands.map((band, k) => {
@@ -339,9 +363,9 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
           <text x={14} y={MARGIN.top + PLOT_H / 2} className="section-tick" transform={`rotate(-90 14 ${MARGIN.top + PLOT_H / 2})`} textAnchor="middle">
             {byElevation ? 'Level (m)' : 'Depth (m)'}
           </text>
-          <line x1={MARGIN.left + COL / 2} x2={MARGIN.left + COL / 2 + layout.plotWidth} y1={HEIGHT - 33} y2={HEIGHT - 33} className="section-axis" />
+          <line x1={PLOT_LEFT} x2={PLOT_LEFT + layout.plotWidth} y1={HEIGHT - 33} y2={HEIGHT - 33} className="section-axis" />
           {horizontalTicks.map((v) => {
-            const x = MARGIN.left + COL / 2 + (v - from) / (to - from) * layout.plotWidth
+            const x = xAt(v)
             return <g key={v}>
               <line x1={x} x2={x} y1={HEIGHT - 33} y2={HEIGHT - 27} className="section-axis" />
               <text x={x} y={HEIGHT - 14} textAnchor="middle" className="section-tick">{fmtDistance(v)}</text>
@@ -374,16 +398,16 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
           {waterJoins.map(([j, line]) => <polyline key={`water-${j}`} points={line} className="section-water-join" />)}
           {layout.tunnel && layout.tunnel.length > 1 && <>
             {layout.diameter > 0 && <polygon className="section-tunnel-band" points={[
-              ...layout.tunnel.map(([station, value]) => `${MARGIN.left + COL / 2 + (station - from) / (to - from) * layout.plotWidth},${y(value + layout.diameter / 2)}`),
-              ...[...layout.tunnel].reverse().map(([station, value]) => `${MARGIN.left + COL / 2 + (station - from) / (to - from) * layout.plotWidth},${y(value - layout.diameter / 2)}`),
+              ...layout.tunnel.map(([station, value]) => `${xAt(station)},${y(value + layout.diameter / 2)}`),
+              ...[...layout.tunnel].reverse().map(([station, value]) => `${xAt(station)},${y(value - layout.diameter / 2)}`),
             ].join(' ')} />}
             <polyline className="section-tunnel-axis" points={layout.tunnel.map(([station, value]) =>
-              `${MARGIN.left + COL / 2 + (station - from) / (to - from) * layout.plotWidth},${y(value)}`).join(' ')}>
+              `${xAt(station)},${y(value)}`).join(' ')}>
               <title>Planned tunnel axis{layout.diameter > 0 ? ` · ${layout.diameter} m diameter` : ''}</title>
             </polyline>
           </>}
           {layout.tunnel?.length === 1 && <circle className="section-tunnel-point"
-            cx={MARGIN.left + COL / 2 + (layout.tunnel[0][0] - from) / (to - from) * layout.plotWidth}
+            cx={xAt(layout.tunnel[0][0])}
             cy={y(layout.tunnel[0][1])} r={4}><title>Planned tunnel axis at this borehole</title></circle>}
           {ordered.map((f, i) => {
             const p = f.properties
@@ -391,7 +415,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
             const x = xs[i]
             if (x < MARGIN.left - COL || x > layout.svgWidth - MARGIN.right + COL) return null
             const base = byElevation ? layout.tops[i] : 0
-            const depth = p.depth ?? Math.max(0, ...(p.strip ?? []).map((layer) => layer[1]))
+            const depth = holeDepth(p)
             const nearest = Math.min(i > 0 ? x - xs[i - 1] : Infinity,
               i < ordered.length - 1 ? xs[i + 1] - x : Infinity)
             const lineWidth = Math.max(1, Math.min(COL, nearest * 0.7))
@@ -439,8 +463,9 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
             {f.properties.id === selectedId && xs[i] >= MARGIN.left && xs[i] <= layout.svgWidth - MARGIN.right &&
               <text x={xs[i] + 9} y={MARGIN.top - 5} className="section-x" onClick={() => onRemove(f.properties.id)}>×<title>Remove from section</title></text>}
           </g>)}
-          {selection && <rect className="section-zoom-selection" x={Math.min(selection.x0, selection.x1)} y={Math.min(selection.y0, selection.y1)}
-            width={Math.abs(selection.x1 - selection.x0)} height={Math.abs(selection.y1 - selection.y0)} />}
+          {boxZoom.selection && <rect className="section-zoom-selection" x={Math.min(boxZoom.selection.x0, boxZoom.selection.x1)}
+            y={Math.min(boxZoom.selection.y0, boxZoom.selection.y1)} width={Math.abs(boxZoom.selection.x1 - boxZoom.selection.x0)}
+            height={Math.abs(boxZoom.selection.y1 - boxZoom.selection.y0)} />}
         </svg>
       </div>
       <div ref={tooltip} className="section-tooltip map-tooltip" hidden><div className="maplibregl-popup-content" /></div>
