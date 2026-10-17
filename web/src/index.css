@@ -375,7 +375,8 @@ button, input, select { font: inherit; color: inherit; }
 .tests { margin: 0; padding-left: 0; list-style: none; font-size: 14px; }
 .tests li { padding: 3px 0; border-bottom: 1px solid var(--rule-soft); }
 .tests .num { display: inline-block; min-width: 64px; color: var(--graphite); }
-.similar-here { margin: 0 0 8px; font-size: 14px; }
+.similar-here { margin: 0 0 8px; font-size: 14px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.similar-find { margin-left: auto; }
 .similar { margin: 0; padding: 0; list-style: none; }
 .similar li + li { border-top: 1px solid var(--rule-soft); }
 .similar-item {
@@ -546,6 +547,9 @@ button, input, select { font: inherit; color: inherit; }
 .section-water-join { fill: none; stroke: var(--water); stroke-width: 1.2; stroke-dasharray: 2 3; pointer-events: none; }
 .section-boundary-join { fill: none; stroke: var(--ink); stroke-width: 1.2; stroke-dasharray: 1.5 3; stroke-linecap: round; }
 .section-help-toggle { display: none; }
+.ground-menu { display: grid; gap: 8px; }
+.ground-field { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.ground-field input { width: 56px; }
 .section-correlate { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 .section-rock { stroke: var(--ink); stroke-width: 2.4; }
 .section-weathered { stroke: var(--ink); stroke-width: 1.2; stroke-dasharray: 2 2; }

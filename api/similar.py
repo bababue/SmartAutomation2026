@@ -10,6 +10,8 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 
+from fastapi import HTTPException
+
 from pipeline.ground import NO_DATA, SOIL
 from schema.borehole import Lithology
 
@@ -128,6 +130,67 @@ def similar(con: sqlite3.Connection, borehole_id: str, limit: int = 5) -> dict |
             found.append((d, r, profiles[rid]))
     found.sort(key=lambda x: (x[0], x[1]["name"] or ""))
     return {"ground": reason(mine) if any(mine.bands) else None,
+            "like": like(mine, layers.get(target["rid"], [])) if any(mine.bands) else None,
             "similar": [{"id": r["id"], "name": r["name"], "project": r["project"], "country": r["country"],
                          "review_status": r["review_status"], "score": r["score"], "similarity": round(1 - d, 2),
                          "reason": reason(p)} for d, r, p in found[:limit]]}
+
+
+def codes(group_name: str) -> list[str]:
+    return [c.value for c in Lithology if group(c.value) == group_name]
+
+
+def material_conditions(values: list[str]) -> list[tuple[str, float, float, float]]:
+    """'group:from:to:metres' -> (group, from, to, metres): at least `metres` of the group between from and to."""
+    out = []
+    for value in values:
+        parts = value.split(":")
+        try:
+            name, top, bottom, metres = parts[0], *(float(v) for v in parts[1:])
+        except ValueError:
+            raise HTTPException(422, f"material: expected group:from_m:to_m:metres, got {value!r}") from None
+        if name not in GROUPS or not 0 <= top < bottom or metres <= 0:
+            raise HTTPException(422, f"material: unknown group or empty range in {value!r}; groups: {', '.join(GROUPS)}")
+        out.append((name, top, bottom, metres))
+    return out
+
+
+def ground_filters(rock_head_max: float | None, groundwater_max: float | None,
+                   materials: list[tuple[str, float, float, float]]) -> tuple[list[str], list]:
+    """WHERE clauses for the ground search. A hole without a rock head, or without a water level, does not
+    match a bound on it; a material counts only where the log describes it, so a shallow hole cannot reach
+    metres below its end."""
+    where, params = [], []
+    if rock_head_max is not None:
+        where.append("json_extract(ground, '$.rock_head_m') <= ?")
+        params.append(rock_head_max)
+    if groundwater_max is not None:
+        where.append("json_extract(ground, '$.groundwater_m') <= ?")
+        params.append(groundwater_max)
+    for name, top, bottom, metres in materials:
+        members = codes(name)
+        where.append(f"rid IN (SELECT rid FROM layers WHERE primary_code IN ({','.join('?' * len(members))}) "
+                     "AND top_m < ? AND bottom_m > ? GROUP BY rid HAVING SUM(MIN(bottom_m, ?) - MAX(top_m, ?)) >= ?)")
+        params += [*members, bottom, top, bottom, top, metres - 1e-9]
+    return where, params
+
+
+def like(p: Profile, layers: list[tuple[float | None, float | None, str]]) -> dict:
+    """Ground filters that find holes like this one: its rock head and water level with some room, and its main
+    soil above the rock (or in the top 20 m) as a material condition."""
+    out: dict = {"rock_head_max": None, "groundwater_max": None, "material": []}
+    if p.rock_head_m is not None:
+        out["rock_head_max"] = round(p.rock_head_m + max(2.0, 0.25 * p.rock_head_m))
+    if p.groundwater_m is not None:
+        out["groundwater_max"] = round(p.groundwater_m + 1.0, 1)
+    window = min(p.rock_head_m, 20.0) if p.rock_head_m is not None else 20.0
+    metres: dict[str, float] = {}
+    for t, b, code in layers:
+        g = group(code) if t is not None and b is not None else None
+        if g and g != "rock" and (overlap := min(b, window) - max(t, 0.0)) > 0:
+            metres[g] = metres.get(g, 0.0) + overlap
+    if metres and window > 0:
+        main = max(metres, key=metres.get)
+        if metres[main] >= 1.0:
+            out["material"].append(f"{main}:0:{window:g}:{max(1, round(metres[main] * 0.6, 1)):g}")
+    return out

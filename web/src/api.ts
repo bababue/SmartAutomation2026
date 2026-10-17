@@ -23,6 +23,9 @@ function filterParams(f: Filters): URLSearchParams {
   if (f.minPosition != null) params.set('min_position', String(f.minPosition))
   if (f.status !== 'all') params.set('status', f.status)
   if (f.group) params.set('group', f.group)
+  if (f.rockMax != null) params.set('rock_head_max', String(f.rockMax))
+  if (f.waterMax != null) params.set('groundwater_max', String(f.waterMax))
+  f.material.forEach((m) => params.append('material', m))
   return params
 }
 

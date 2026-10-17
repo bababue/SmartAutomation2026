@@ -388,6 +388,10 @@ export default function App() {
           onToggleSection={() => toggleSection(detail.borehole.borehole_id)}
           onSourceToggle={onSourceToggle}
           onSelect={setSelectedId}
+          onFindLike={(like) => {
+            setFilters((f) => ({ ...f, group: null, rockMax: like.rock_head_max, waterMax: like.groundwater_max, material: like.material }))
+            setSelectedId(null)
+          }}
         />
       )}
     </div>

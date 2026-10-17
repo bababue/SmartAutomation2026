@@ -295,6 +295,11 @@ export interface Filters {
   status: StatusFilter
   /** Only the holes of this document group. */
   group: string | null
+  /** Ground search: rock head and groundwater at most this deep (m). */
+  rockMax: number | null
+  waterMax: number | null
+  /** At least so many metres of a material group in a depth range, as 'group:from:to:metres'. */
+  material: string[]
 }
 
 export interface SimilarHole {
@@ -310,5 +315,7 @@ export interface SimilarHole {
 
 export interface SimilarGround {
   ground: string | null // this hole's ground in a few words; null: too few layers to compare
+  /** Ground filters that find holes like this one. */
+  like: { rock_head_max: number | null; groundwater_max: number | null; material: string[] } | null
   similar: SimilarHole[]
 }

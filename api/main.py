@@ -212,6 +212,9 @@ def list_boreholes(
     status: Literal["all", "released", "pending", "rejected"] = "all",
     id: list[str] = Query(default_factory=list, max_length=500, description="only these borehole ids"),
     group: str | None = Query(None, description="only this document group (see the 'groups' facet)"),
+    rock_head_max: float | None = Query(None, description="rock head at most this deep (m)"),
+    groundwater_max: float | None = Query(None, description="groundwater at most this deep (m)"),
+    material: list[str] = Query(default_factory=list, description="group:from_m:to_m:metres, e.g. sand:0:20:5"),
     fields: Literal["list", "map", "layers"] = Query("list", description="'map': slim points; 'layers': depth strips for visible columns"),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
@@ -223,6 +226,9 @@ def list_boreholes(
         raise HTTPException(422, "bbox is required for layer strips")
     where, params = _filters(q, bbox, _conditions(lithology, "lithology"), _conditions(lab, "lab"), country,
                              min_depth, min_position, status, id, group)
+    ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max,
+                                                         similar.material_conditions(material))
+    where, params = where + ground_where, params + ground_params
     sql_where = " AND ".join(where)
     if fields == "layers":
         rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {sql_where}", params).fetchall()

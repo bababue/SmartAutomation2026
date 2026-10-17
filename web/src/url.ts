@@ -47,6 +47,9 @@ export function readUrl(search: string): UrlState {
       minPosition: num(p.get('position')),
       status: status && STATUSES.includes(status) ? status : 'all',
       group: p.get('group'),
+      rockMax: num(p.get('rock')),
+      waterMax: num(p.get('water')),
+      material: p.getAll('mat').filter(Boolean),
     },
   }
 }
@@ -65,6 +68,9 @@ export function writeUrl(s: UrlState): string {
   if (f.minPosition != null) p.set('position', String(f.minPosition))
   if (f.status !== 'all') p.set('status', f.status)
   if (f.group) p.set('group', f.group)
+  if (f.rockMax != null) p.set('rock', String(f.rockMax))
+  if (f.waterMax != null) p.set('water', String(f.waterMax))
+  f.material.forEach((m) => p.append('mat', m))
   const qs = p.toString()
   return qs ? `?${qs}` : window.location.pathname
 }
