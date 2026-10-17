@@ -89,7 +89,7 @@ export function postReview(id: string, decision: ReviewStatus, reviewer: string,
 export function postUpload(files: File[]) {
   const body = new FormData()
   files.forEach((f) => body.append('files', f))
-  return request<{ job_id: string; pages: number; files: string[] }>('/api/upload', { method: 'POST', body })
+  return request<{ job_id: string; pages: number; files: string[]; skipped: string[] }>('/api/upload', { method: 'POST', body })
 }
 
 export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/upload/${enc(jobId)}`)

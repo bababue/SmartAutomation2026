@@ -178,6 +178,18 @@ def test_zip_keeps_only_documents_and_skips_archive_metadata(client, monkeypatch
     res = client.post("/api/upload", files={"files": ("batch.zip", archive, "application/zip")})
     assert res.status_code == 200
     assert res.json()["files"] == ["logs/a.pdf"]
+    assert res.json()["skipped"] == ["notes.txt"]
+
+
+def test_batch_skips_other_files_beside_its_documents(client, monkeypatch):
+    monkeypatch.setattr("pipeline.__main__.run", lambda *a, **k: None)
+    res = client.post("/api/upload", files=[("files", ("log.pdf", _pdf_bytes(1), "application/pdf")),
+                                            ("files", ("layers.xlsx", b"x", "application/octet-stream")),
+                                            ("files", ("export.txt", b"x", "text/plain"))])
+    assert res.status_code == 200
+    assert res.json()["files"] == ["log.pdf"]
+    assert res.json()["skipped"] == ["layers.xlsx", "export.txt"]
+    assert [p.name for p in (config.UPLOADS_DIR / f"upload-{res.json()['job_id']}").iterdir()] == ["log.pdf"]
 
 
 def test_rejects_zip_with_a_traversing_entry_and_leaves_nothing_behind(client):

@@ -10,6 +10,8 @@ type Status = 'uploading' | UploadStatus['status']
 interface Batch {
   key: string
   files: string[]
+  /** Not a document (data exports, spreadsheets, GIS files): left out of the batch. */
+  skipped: string[]
   jobId: string | null
   status: Status
   ahead?: number | null
@@ -34,9 +36,9 @@ export function useUploadQueue(onUploaded: () => void, onSelect: (id: string) =>
     const files = Array.from(list)
     if (!files.length) return
     const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    setBatches((bs) => [...bs, { key, files: files.map((f) => f.name), jobId: null, status: 'uploading' }])
+    setBatches((bs) => [...bs, { key, files: files.map((f) => f.name), skipped: [], jobId: null, status: 'uploading' }])
     postUpload(files)
-      .then((res) => update(key, { jobId: res.job_id, files: res.files, status: 'queued' }))
+      .then((res) => update(key, { jobId: res.job_id, files: res.files, skipped: res.skipped, status: 'queued' }))
       .catch((err) => update(key, { status: 'error', error: err.message }))
   }, [])
 
@@ -76,7 +78,7 @@ export function UploadQueue({ batches, onDismiss }: { batches: Batch[]; onDismis
   return (
     <div className="upload-queue" role="status">
       {batches.map((b) => {
-        const single = b.files.length === 1
+        const single = b.files.length === 1 && !b.skipped.length
         return (
           <div key={b.key} className={`upload-batch upload-${b.status}`}>
             {!single && b.files.map((f, i) => (
@@ -85,8 +87,14 @@ export function UploadQueue({ batches, onDismiss }: { batches: Batch[]; onDismis
                 <span className="upload-state">{STATUS_TEXT[b.status]}</span>
               </div>
             ))}
+            {b.skipped.map((f, i) => (
+              <div key={`skipped-${i}`} className="upload-row upload-skipped">
+                <span className="upload-name" title={f}>{f}</span>
+                <span className="upload-state" title="Only PDF, image and DOCX files are read">Skipped: not a document</span>
+              </div>
+            ))}
             <div className="upload-row upload-summary">
-              <span className="upload-name" title={b.files.join(', ')}>{single ? b.files[0] : `Batch of ${b.files.length} files`}</span>
+              <span className="upload-name" title={b.files.join(', ')}>{single ? b.files[0] : `Batch of ${b.files.length} ${b.jobId ? 'document' : 'file'}${b.files.length === 1 ? '' : 's'}`}</span>
               <span className="upload-state" title={outcome(b)}>{outcome(b)}</span>
               {!pending(b.status) && (
                 <button className="upload-dismiss" onClick={() => onDismiss(b.key)} aria-label={`Dismiss ${single ? b.files[0] : 'batch'}`}>×</button>

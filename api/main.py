@@ -510,12 +510,17 @@ def correct(borehole_id: str, body: Correction, con: DB):
 @app.post("/api/upload")
 async def upload_documents(files: list[UploadFile] = File(...)):
     """One batch of files, or zips of them, becomes one document group assembled in a single run, so
-    records of one hole spread over several files are combined."""
-    names = [_safe_part((f.filename or "").replace("\\", "/").rsplit("/", 1)[-1]) or "upload" for f in files]
-    for name in names:
-        suffix = Path(name).suffix.lower()
-        if suffix not in ingest.SUPPORTED and suffix != ".zip":
-            raise HTTPException(415, f"unsupported file type {suffix or '(none)'}; use PDF, JPG, PNG, TIFF, DOCX or ZIP")
+    records of one hole spread over several files are combined. Other files in the batch (data exports,
+    spreadsheets, GIS files) are skipped and reported, not a reason to reject the documents beside them."""
+    batch, skipped = [], []
+    for file in files:
+        name = _safe_part((file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]) or "upload"
+        if Path(name).suffix.lower() in ingest.SUPPORTED | {".zip"}:
+            batch.append((file, name))
+        else:
+            skipped.append(name)
+    if not batch:
+        raise HTTPException(415, "no PDF, JPG, PNG, TIFF, DOCX or ZIP file in the upload")
     from pipeline.__main__ import _missing_credentials
     if msg := _missing_credentials():
         raise HTTPException(503, msg)
@@ -526,13 +531,13 @@ async def upload_documents(files: list[UploadFile] = File(...)):
     docs: list[ingest.SourceDoc] = []
     try:
         budget = _ByteBudget()
-        for file, name in zip(files, names):
+        for file, name in batch:
             if name.lower().endswith(".zip"):
                 with tempfile.TemporaryFile() as archive:
                     while chunk := await file.read(1 << 20):
                         budget.received(len(chunk))
                         archive.write(chunk)
-                    await run_in_threadpool(_extract_zip, archive, name, upload_dir, budget)
+                    skipped += await run_in_threadpool(_extract_zip, archive, name, upload_dir, budget)
             else:
                 with _unique_path(upload_dir, name).open("wb") as out:
                     while chunk := await file.read(1 << 20):
@@ -555,7 +560,7 @@ async def upload_documents(files: list[UploadFile] = File(...)):
         if isinstance(exc, uploads.QueueFull):
             raise HTTPException(503, "the upload queue is full; try again after a document finishes processing") from exc
         raise
-    return {"job_id": job_id, "pages": pages, "files": [Path(d.path).as_posix() for d in docs]}
+    return {"job_id": job_id, "pages": pages, "files": [Path(d.path).as_posix() for d in docs], "skipped": skipped}
 
 
 class _ByteBudget:
@@ -594,7 +599,9 @@ def _unique_path(folder: Path, rel: str) -> Path:
     return dest
 
 
-def _extract_zip(archive: IO[bytes], name: str, upload_dir: Path, budget: _ByteBudget) -> None:
+def _extract_zip(archive: IO[bytes], name: str, upload_dir: Path, budget: _ByteBudget) -> list[str]:
+    """Extracts the documents; returns the other files it skipped."""
+    skipped = []
     try:
         zf = zipfile.ZipFile(archive)
     except zipfile.BadZipFile:
@@ -606,8 +613,10 @@ def _extract_zip(archive: IO[bytes], name: str, upload_dir: Path, budget: _ByteB
                 raise HTTPException(400, f"{name} contains an unsafe path: {info.filename}")
             parts = [p for p in parts if p not in ("", ".")]
             # Entries starting with '.' or '__MACOSX' are archive metadata, not documents.
-            if (info.is_dir() or not parts or any(p.startswith((".", "__MACOSX")) for p in parts)
-                    or Path(parts[-1]).suffix.lower() not in ingest.SUPPORTED):
+            if info.is_dir() or not parts or any(p.startswith((".", "__MACOSX")) for p in parts):
+                continue
+            if Path(parts[-1]).suffix.lower() not in ingest.SUPPORTED:
+                skipped.append("/".join(parts))
                 continue
             dest = _unique_path(upload_dir, "/".join(_safe_part(p) or "_" for p in parts))
             if upload_dir.resolve() not in dest.resolve().parents:
@@ -619,6 +628,7 @@ def _extract_zip(archive: IO[bytes], name: str, upload_dir: Path, budget: _ByteB
                         out.write(chunk)
             except (RuntimeError, zipfile.BadZipFile, NotImplementedError) as exc:  # encrypted, corrupt, unknown method
                 raise HTTPException(422, f"could not extract {info.filename} from {name}: {exc}") from None
+    return skipped
 
 
 _MUPDF = threading.Lock()  # PyMuPDF is not thread-safe; concurrent uploads must not render at the same time
