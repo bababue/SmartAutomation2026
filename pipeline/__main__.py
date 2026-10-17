@@ -18,6 +18,7 @@ import argparse
 from pathlib import Path
 import os
 import sys
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config, corrections, evaluate, experiment, ingest, knowledge, llm, store
@@ -205,6 +206,9 @@ def _missing_credentials() -> str | None:
     if config.LLM_BACKEND == "api" and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
         return ("No Anthropic credentials: put ANTHROPIC_API_KEY=... into .env (git-ignored), "
                 "or set LLM_BACKEND=claude-code to use the local Claude Code login.")
+    local = urllib.parse.urlsplit(config.OPENAI_BASE_URL).hostname in ("localhost", "127.0.0.1")
+    if config.LLM_BACKEND == "openai" and not local and not os.getenv("OPENAI_API_KEY"):
+        return f"No key for {config.OPENAI_BASE_URL}: put OPENAI_API_KEY=... into .env (git-ignored)."
     return None
 
 

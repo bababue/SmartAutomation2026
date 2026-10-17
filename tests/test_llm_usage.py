@@ -1,5 +1,6 @@
 """Token usage recorded with cached LLM answers, and the cost derived from it (no LLM calls)."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -24,7 +25,7 @@ def test_usage_of_all_rounds_is_cached_and_priced(tmp_path, monkeypatch):
         llm._anthropic_usage(response("claude-opus-5-5", 1_000, 500, read=2_000))  # repair round
         return PageClassification(kind="other", logs=[], language=None, has_coordinates=False, crs_text=None)
 
-    llm._cached("classify", page, "k", PageClassification, produce)
+    llm._cached("classify", page, lambda m, e: "k", "m", "e", PageClassification, produce)
     (n, usd), = llm.measured_costs().values()
     # 2000 in + 1000 out + 2000 cache write + 2000 cache read at $4 / $20 per million
     assert n == 1
@@ -53,8 +54,27 @@ def test_openai_compatible_call_repairs_once_and_keeps_billed_cost(tmp_path, mon
 
     monkeypatch.setattr(llm, "_post_chat", post_chat)
     produce = lambda: llm._call_openai("vendor/model", "system", image, "hint", PageClassification, 2000, True)
-    result = llm._cached("classify", page, "k", PageClassification, produce)
+    result = llm._cached("classify", page, lambda m, e: "k", "m", "e", PageClassification, produce)
     assert result.kind.value == "other"
     assert len(sent[1]["messages"]) == 4  # the invalid answer and the validation error went back once
     (n, usd), = llm.measured_costs().values()
     assert (n, usd) == (1, pytest.approx(0.02))
+
+
+def test_rebuild_keeps_pages_of_the_previous_model_and_a_run_replaces_them(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "PAGES_DIR", tmp_path)
+    (tmp_path / "t.jpg").write_bytes(b"\xff\xd8")
+    page = PageImage(doc_id="d", page=1, image="t.jpg", thumb="t.jpg", text="", width=1, height=1)
+    answer = lambda kind: lambda: PageClassification(kind=kind, logs=[], language=None, has_coordinates=False,
+                                                     crs_text=None)
+    monkeypatch.setattr(config, "CLASSIFY_MODEL", "old-model")
+    monkeypatch.setattr(llm, "_produce", lambda *a, **k: answer("borehole_log"))
+    llm.classify_page(page)
+
+    monkeypatch.setattr(config, "CLASSIFY_MODEL", "new-model")
+    assert llm.cached_classification(page).kind.value == "borehole_log"  # rebuild: the old model's page
+
+    monkeypatch.setattr(llm, "_produce", lambda *a, **k: answer("other"))
+    assert llm.classify_page(page).kind.value == "other"  # run: the configured model extracts anew
+    assert json.loads(llm.cache_path("classify", page).read_text())["model"] == "new-model"

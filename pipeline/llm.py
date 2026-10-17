@@ -18,6 +18,7 @@ import os
 import subprocess
 import threading
 import time
+from functools import partial
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -146,16 +147,14 @@ def _cache_key(*parts: str | bytes) -> str:
     return h.hexdigest()
 
 
-def _classify_key(page: PageImage) -> str:
+def _classify_key(page: PageImage, model: str, effort: str) -> str:
     thumb = config.PAGES_DIR / page.thumb
-    return _cache_key(config.PROMPT_VERSION, config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT, thumb.read_bytes(),
-                      page.text[:1500])
+    return _cache_key(config.PROMPT_VERSION, model, effort, thumb.read_bytes(), page.text[:1500])
 
 
-def _extract_key(page: PageImage, kind: str, context: str) -> str:
+def _extract_key(page: PageImage, kind: str, context: str, model: str, effort: str) -> str:
     image = config.PAGES_DIR / page.image
-    return _cache_key(config.PROMPT_VERSION, config.EXTRACT_MODEL, config.EXTRACT_EFFORT, image.read_bytes(),
-                      page.text[:8000], kind, context)
+    return _cache_key(config.PROMPT_VERSION, model, effort, image.read_bytes(), page.text[:8000], kind, context)
 
 
 def sheet_context(prev: PageExtraction | None) -> str:
@@ -416,8 +415,10 @@ def _strip_fences(text: str) -> str:
     return text
 
 
-def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
+def _cached(stage: str, page: PageImage, key_for, model: str, effort: str, out: type[T], produce) -> T:
+    """The cached answer of the configured model, else a new call. key_for(model, effort) is the cache key."""
     path = cache_path(stage, page)
+    key = key_for(model, effort)
     if path.exists():
         cached = json.loads(path.read_text())
         if cached.get("key") == key:
@@ -429,7 +430,8 @@ def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
         usage = _usage.acc
     finally:
         _usage.acc = None
-    entry = {"key": key, "result": result.model_dump(mode="json"), "seconds": round(time.monotonic() - start, 1)}
+    entry = {"key": key, "model": model, "effort": effort, "result": result.model_dump(mode="json"),
+             "seconds": round(time.monotonic() - start, 1)}
     if usage:  # the CLI backend reports no token counts
         entry["usage"] = usage
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -437,19 +439,21 @@ def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
     return result
 
 
-def _from_cache(stage: str, page: PageImage, key: str, out: type[T]) -> T | None:
-    """Cached result only if it was produced from the same input and settings."""
+def _from_cache(stage: str, page: PageImage, key_for, model: str, effort: str, out: type[T]) -> T | None:
+    """Cached result if it was produced from the same input and prompt, checked with the model and effort recorded
+    in the entry: a rebuild keeps the pages extracted before the configured model changed (a run re-extracts
+    them, see _cached). Entries without a record count as made with the configured settings."""
     path = cache_path(stage, page)
     if not path.exists():
         return None
     cached = json.loads(path.read_text())
+    key = key_for(cached.get("model", model), cached.get("effort", effort))
     return out.model_validate(cached["result"]) if cached.get("key") == key else None
 
 
-def _lab_key(page: PageImage) -> str:
+def _lab_key(page: PageImage, model: str, effort: str) -> str:
     image = config.PAGES_DIR / page.image
-    return _cache_key(config.LAB_PROMPT_VERSION, config.EXTRACT_MODEL, config.EXTRACT_EFFORT, image.read_bytes(),
-                      page.text[:8000])
+    return _cache_key(config.LAB_PROMPT_VERSION, model, effort, image.read_bytes(), page.text[:8000])
 
 
 def _produce(model: str, effort: str, system: str, image: Path, hint: str, out: type[T], max_tokens: int,
@@ -465,22 +469,26 @@ def _produce(model: str, effort: str, system: str, image: Path, hint: str, out: 
 
 
 def cached_lab_results(page: PageImage) -> PageLabResults | None:
-    return _from_cache("lab", page, _lab_key(page), PageLabResults)
+    return _from_cache("lab", page, partial(_lab_key, page), config.EXTRACT_MODEL, config.EXTRACT_EFFORT,
+                       PageLabResults)
 
 
 def extract_lab_results(page: PageImage) -> PageLabResults:
     image = config.PAGES_DIR / page.image
     hint = f"Text layer (may be empty or scrambled):\n{page.text[:8000]}"
     produce = _produce(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, LAB_SYSTEM, image, hint, PageLabResults, 32000)
-    return _cached("lab", page, _lab_key(page), PageLabResults, produce)
+    return _cached("lab", page, partial(_lab_key, page), config.EXTRACT_MODEL, config.EXTRACT_EFFORT,
+                   PageLabResults, produce)
 
 
 def cached_classification(page: PageImage) -> PageClassification | None:
-    return _from_cache("classify", page, _classify_key(page), PageClassification)
+    return _from_cache("classify", page, partial(_classify_key, page), config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT,
+                       PageClassification)
 
 
 def cached_extraction(page: PageImage, kind: str, context: str = "") -> PageExtraction | None:
-    return _from_cache("extract", page, _extract_key(page, kind, context), PageExtraction)
+    return _from_cache("extract", page, partial(_extract_key, page, kind, context), config.EXTRACT_MODEL,
+                       config.EXTRACT_EFFORT, PageExtraction)
 
 
 def classify_page(page: PageImage) -> PageClassification:
@@ -488,7 +496,8 @@ def classify_page(page: PageImage) -> PageClassification:
     hint = f"Text layer (may be empty or scrambled):\n{page.text[:1500]}"
     produce = _produce(config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT, CLASSIFY_SYSTEM, thumb, hint,
                        PageClassification, 2000, strict=True)
-    return _cached("classify", page, _classify_key(page), PageClassification, produce)
+    return _cached("classify", page, partial(_classify_key, page), config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT,
+                   PageClassification, produce)
 
 
 def extract_page(page: PageImage, kind: str, context: str = "", knowledge: str = "") -> PageExtraction:
@@ -502,4 +511,5 @@ def extract_page(page: PageImage, kind: str, context: str = "", knowledge: str =
     if knowledge:
         hint += f"\n\n{knowledge}"
     produce = _produce(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, EXTRACT_SYSTEM, image, hint, PageExtraction, 32000)
-    return _cached("extract", page, _extract_key(page, kind, context), PageExtraction, produce)
+    return _cached("extract", page, partial(_extract_key, page, kind, context), config.EXTRACT_MODEL,
+                   config.EXTRACT_EFFORT, PageExtraction, produce)

@@ -208,6 +208,8 @@ Ollama's default context window can be smaller than the extraction needs: the pr
 - `--max-pages N` treats the first N pages of each document as the whole document (cheap demo runs).
 - Runs above ~$5 estimated cost ask for `--yes`.
 - Every LLM answer is cached per page in `data/cache/`. Interrupted runs resume; repeated runs are free.
+- Each cached answer records the model and effort that produced it. After a change of `EXTRACT_MODEL`,
+  `rebuild` still uses the pages extracted earlier; only `run` extracts them again with the new model.
 - `rebuild` re-runs assembly, georeferencing and scoring from the cache only – use it after code changes
   (pass the same `--doc` / `--max-pages` as the run):
 
