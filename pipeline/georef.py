@@ -232,7 +232,7 @@ def parse_tokens(coords_raw: str) -> list[Token]:
 # at most three digits and stand alone, so projected metres ('E 312456.78') never match.
 GEO_COMPONENT = re.compile(
     r"(?:(?P<label>latitude|longitude|lat|lon|long)\.?\s*[:=]?\s*)?"
-    r"(?:(?P<pre>[NSEW])\s*)?"
+    r"(?:(?<![A-Za-z])(?P<pre>[NSEW])\s*)?"  # not the last letter of a datum name ('WGS84', 'ETRS89')
     r"(?<![\d.,])(?P<sign>-)?(?P<deg>\d{1,3}(?:[.,]\d+)?)(?!\d|[.,]\d)\s*(?P<degsym>°|º|˚|\bdeg\b)?\s*"
     r"(?:(?P<min>\d{1,2}(?:[.,]\d+)?)\s*(?:['′’]|\bmin\b)\s*)?"
     r"(?:(?P<sec>\d{1,2}(?:[.,]\d+)?)\s*(?:[\"″”]|''|′′|\bsec\b)\s*)?"
