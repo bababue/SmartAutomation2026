@@ -241,8 +241,6 @@ button, input, select { font: inherit; color: inherit; }
 .sheet-resizer::after { content: ''; position: absolute; inset: 0 3px; background: transparent; transition: background 120ms; }
 .sheet-resizer:hover::after, .sheet-resizer:focus-visible::after, .sheet-resizer-active::after { background: var(--water); }
 .result-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; font-size: 13px; color: var(--graphite); border-bottom: 1px solid var(--grid); }
-.link { color: var(--water); text-decoration: none; font-weight: 500; }
-.link:hover { text-decoration: underline; }
 .error { margin: 10px 16px; padding: 8px 10px; border-left: 3px solid var(--low); background: var(--rejected-soft); font-size: 14px; }
 .empty { padding: 24px 16px; }
 .empty p { margin: 0 0 4px; }
@@ -272,7 +270,7 @@ button, input, select { font: inherit; color: inherit; }
 .result-flags:empty { display: none; }
 .flag { font-size: 12px; padding: 0 6px; border-radius: 2px; background: var(--flag-bg); color: var(--graphite); }
 .flag-warn { background: var(--pending-soft); color: var(--warn-ink); }
-.flag-ok, .flag-auto_approved, .flag-approved { background: var(--approved-soft); color: var(--high); }
+.flag-auto_approved, .flag-approved { background: var(--approved-soft); color: var(--high); }
 .flag-pending_review { background: var(--pending-soft); color: var(--warn-ink); }
 .flag-rejected { background: var(--rejected-soft); color: var(--low); }
 
@@ -332,7 +330,6 @@ button, input, select { font: inherit; color: inherit; }
 .detail-actions .btn-icon { width: 38px; }
 .btn { height: 32px; padding: 0 12px; border: 1px solid var(--grid); border-radius: 3px; background: var(--panel); cursor: pointer; font-weight: 500; }
 .btn:hover { border-color: var(--graphite); }
-.btn-on { border-color: var(--high); color: var(--high); background: var(--approved-soft); }
 .btn-icon { width: 32px; padding: 0; }
 .level { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
 .level-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--grid); }

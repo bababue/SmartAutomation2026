@@ -3,7 +3,7 @@ import { fmtNum } from './format'
 import { lithStyle } from './lithology'
 import type { BoreholeSummary } from './types'
 
-export type TooltipBorehole = BoreholeSummary & {
+type TooltipBorehole = BoreholeSummary & {
   layer_top?: number
   layer_bottom?: number
   layer_lithology?: string

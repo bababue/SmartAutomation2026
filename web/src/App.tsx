@@ -61,7 +61,7 @@ export default function App() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId)
   const [detail, setDetail] = useState<Detail | null>(null)
-  const [refresh, setRefresh] = useState(0) // bump after a review decision
+  const [refresh, setRefresh] = useState(0)  // bump to reload map, list, queue and stats
   const [routeHoleIds, setRouteHoleIds] = useState<string[]>(initial.routeHoleIds)
   const closedRouteHoleIds = useRef<string[]>([])
   const [blockingOnly, setBlockingOnly] = useState(initial.blockingOnly)

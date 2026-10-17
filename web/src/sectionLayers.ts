@@ -86,7 +86,7 @@ const GROUP: Record<string, string> = Object.fromEntries([
 ])
 
 /** Material group of a lithology; null for core loss and unreadable layers, which match nothing. */
-export const lithologyGroup = (code: string) =>
+const lithologyGroup = (code: string) =>
   code === 'unknown' || code === 'no_recovery' ? null : GROUP[code] ?? 'rock'
 
 interface Unit { top: number; bottom: number; group: string | null }
@@ -101,7 +101,7 @@ function units(strip: Strip): Unit[] {
   return result
 }
 
-export interface BoundaryJoin {
+interface BoundaryJoin {
   leftDepth: number // metres below ground in the left hole
   rightDepth: number
   above: string // material group above the boundary

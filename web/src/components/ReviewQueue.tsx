@@ -7,7 +7,7 @@ import type { CrsGroup, QueueItem } from '../types'
 interface Props {
   items: QueueItem[]
   /** All waiting records (the items are the weakest of them). */
-  total?: number
+  total: number
   loading: boolean
   selectedId: string | null
   threshold: number
@@ -96,13 +96,13 @@ export function ReviewQueue({ items, total, loading, selectedId, threshold, audi
             </p>
             <label className="check queue-filter">
               <input type="checkbox" checked={blockingOnly} onChange={(e) => onBlockingOnly(e.target.checked)} />
-              Only records with blocking findings{blockingOnly && total != null ? ` (${total.toLocaleString('en')})` : ''}
+              Only records with blocking findings{blockingOnly ? ` (${total.toLocaleString('en')})` : ''}
             </label>
           </>
         )}
       </header>
       {!auditOnly && <CrsConfirmations refreshKey={items} onChanged={onChanged} />}
-      {total != null && total > items.length && (
+      {total > items.length && (
         <p className="muted">{auditOnly
           ? `Showing ${items.length} of ${total.toLocaleString('en')} sampled records.`
           : `Showing the ${items.length} weakest of ${total.toLocaleString('en')} waiting records; approving them brings up the next.`}</p>

@@ -15,7 +15,7 @@ export function Profile({ borehole, hovered, onHover }: Props) {
   const pxPerM = Math.min(48, Math.max(9, 620 / depth))
   const top = 34
   const height = depth * pxPerM
-  const x0 = 54 // depth axis
+  const x0 = 54
   const strat = { x: 64, w: 54 }
   const lith = { x: 126, w: 74 }
   const width = 236
@@ -35,7 +35,6 @@ export function Profile({ borehole, hovered, onHover }: Props) {
       <text x={strat.x + strat.w / 2} y={18} className="profile-head" textAnchor="middle">Stratigraphy</text>
       <text x={lith.x + lith.w / 2} y={18} className="profile-head" textAnchor="middle">Lithology</text>
 
-      {/* depth axis */}
       <line x1={x0} x2={x0} y1={top} y2={top + height} className="axis" />
       {ticks.map((t) => (
         <g key={t}>
@@ -87,7 +86,10 @@ export function Profile({ borehole, hovered, onHover }: Props) {
 }
 
 /** Horizontal miniature of the profile, like a core box tray. Surface on the left. */
-export function CoreStrip({ strip, depth, width = 168 }: { strip: [number, number, string][] | null; depth: number | null; width?: number }) {
+const STRIP_WIDTH = 168
+
+export function CoreStrip({ strip, depth }: { strip: [number, number, string][] | null; depth: number | null }) {
+  const width = STRIP_WIDTH
   if (!strip?.length) return <div className="core-strip core-strip-empty" style={{ width }} />
   const total = Math.max(depth ?? 0, ...strip.map((s) => s[1]), 0.1)
   const x = (m: number) => (m / total) * width

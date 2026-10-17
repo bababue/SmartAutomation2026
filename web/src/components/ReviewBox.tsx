@@ -16,7 +16,7 @@ export interface QueueNav {
 interface Props {
   detail: Detail
   onChange: (update: DetailUpdate) => void
-  nav?: QueueNav | null
+  nav: QueueNav | null
   /** Shown next to the summary heading. */
   children?: ReactNode
   /** Findings shown in the summary below the score reasons. */

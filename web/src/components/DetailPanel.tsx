@@ -12,10 +12,10 @@ interface Props {
   detail: Detail
   onClose: () => void
   onReviewChange: (update: DetailUpdate) => void
-  nav?: QueueNav | null
-  onSourceToggle?: (open: boolean) => void
-  onSelect?: (id: string) => void
-  onFindLike?: (like: NonNullable<SimilarGround['like']>) => void
+  nav: QueueNav | null
+  onSourceToggle: (open: boolean) => void
+  onSelect: (id: string) => void
+  onFindLike: (like: NonNullable<SimilarGround['like']>) => void
 }
 
 const METHOD_TEXT: Record<string, string> = {
@@ -183,7 +183,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
               <p className="notes">{bh.notes ?? <span className="muted">No notes.</span>}</p>
             </div>
           )}
-          {onSelect && <SimilarHoles boreholeId={bh.borehole_id} onSelect={onSelect} onFindLike={onFindLike} />}
+          <SimilarHoles boreholeId={bh.borehole_id} onSelect={onSelect} onFindLike={onFindLike} />
         </section>
 
         {sourceOpen && (
@@ -227,7 +227,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
         </section>
         )}
       </div>
-      <button className="edge-tab source-toggle" onClick={() => { setSourceOpen(!sourceOpen); onSourceToggle?.(!sourceOpen) }} aria-expanded={sourceOpen} aria-controls="detail-source"
+      <button className="edge-tab source-toggle" onClick={() => { setSourceOpen(!sourceOpen); onSourceToggle(!sourceOpen) }} aria-expanded={sourceOpen} aria-controls="detail-source"
         title={sourceOpen ? 'Hide the source page' : 'Show the source page'}>
         {sourceOpen ? '›' : '‹'} <span>Source</span>
       </button>
