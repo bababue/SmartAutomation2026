@@ -21,3 +21,16 @@ conversion in assembly, a run-offset field, defaults for omitted fields) and are
 | 9 | Handwritten series write a site reference next to a short hole name ('P-1' plus a reference number); the model puts it into `name` on some sheets, into `notes` on others and into `project_id` on a few, so two holes of one name are told apart only by their drilling dates | `name`: the hole name with any reference written next to it, exactly as printed; `project_id`: the report, archive or job number of the sheet | sheets of one name whose depths restart are split when the report number, drilling date, sheet count or two header texts differ; the holes are named with their page and always go to review |
 | 10 | The system prompt asks to list everything "not printed or not readable" in `unreadable`, so blank header fields, header text cut off by a punch hole, sample depths and sheet-break tops taken from the depth scale are reported there; only about one entry in ten concerns a layer depth, yet each one lowers the extraction confidence and keeps most records below the release threshold | Blank or unprinted fields are null and not listed; depths a log only draws and tops continued from the previous sheet are not listed; every entry starts with its field (`depth:`, `lithology:`, `name:`, `coordinates:`, `header:`, `tests:`). Arm `unreadable-fields` on the reference pages: 113 entries → 46, of which 17 still count; quality against the reference within the spread of a plain re-extraction (`baseline-rerun`) | entries starting with `header:` or `tests:` do not lower the score; entries without a field name count as before |
 | 11 | About a quarter of the extraction output is `null` fields (measured on all cached log pages), and generating the answer takes most of the time per page | Leave out fields that are not printed instead of writing `null`; needs `None` defaults on the nullable fields in `pipeline/extraction_models.py` and a JSON instruction for the `openai` backend that no longer calls every property required | none (shorter output means proportionally faster and cheaper pages) |
+
+## Measured so far
+
+Arms on the reference pages, rebuilt on the same code and compared with `baseline-rerun` (v3 re-extracted,
+the spread of a plain re-extraction), not with `baseline` (the reference was approved from its output):
+
+- Items 1, 2, 3, 6 and 7 together (`v4-candidate`): worse on boundaries, lithology and final depth; one page
+  returned no log at all. Without item 2 (`v4-no-weathered`): boundaries and lithology within the spread,
+  final depth clearly worse. Blocking findings are the same in all arms.
+- Item 1 leaves `final_depth_m` empty on logs that end without an end-of-hole statement, where reviewers
+  take the last layer's bottom. Drop it, or keep it only together with a code fallback to the last bottom.
+- Item 2 moves weathered rock to soil classes (sandstone → sand, tuff → sand). Drop it in this form.
+- Items 3, 6 and 7: no effect measurable on 24 reference records; re-test once the reference is larger.
