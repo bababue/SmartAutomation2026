@@ -2,8 +2,8 @@
 the model reports what it *sees* (raw strings, parsed numbers, its reading of the page);
 IDs, CRS resolution, WGS84 positions, confidence and review state are set by our code.
 
-Every field is required-but-nullable so structured outputs stay strict and the model
-must decide explicitly between a value and null.
+Every field is required-but-nullable, so the model decides explicitly between a value and null. Classification
+runs as strict structured output; extraction is too large for that and is validated here after the answer.
 """
 
 from __future__ import annotations
