@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from datetime import date as date_type
 
@@ -67,17 +67,24 @@ def _feature(r: sqlite3.Row) -> dict:
     return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]}, "properties": props}
 
 
-@app.get("/api/boreholes")
-def list_boreholes(
-    con: DB,
-    q: str | None = None,
-    bbox: str | None = Query(None, description="minLon,minLat,maxLon,maxLat"),
-    lithology: list[str] = Query(default_factory=list),
-    country: str | None = None,
-    min_depth: float | None = None,
-    min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
-    status: Literal["all", "released", "pending", "rejected"] = "all",
-):
+MAP_COLUMNS = "id, name, lat, lon, review_status, score, loc_method"
+
+
+def _bbox_clause(bbox: str) -> tuple[str, list]:
+    """R-tree candidates by overlap (its coordinates are rounded outwards), then the exact position. A box
+    crossing the antimeridian (min lon > max lon) is split in two."""
+    min_lon, min_lat, max_lon, max_lat = (float(v) for v in bbox.split(","))
+    spans = [(min_lon, max_lon)] if min_lon <= max_lon else [(min_lon, 180.0), (-180.0, max_lon)]
+    parts, params = [], []
+    for lo, hi in spans:
+        parts.append("(rid IN (SELECT rid FROM boreholes_rtree WHERE max_lat >= ? AND min_lat <= ? AND max_lon >= ? "
+                     "AND min_lon <= ?) AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?)")
+        params += [min_lat, max_lat, lo, hi, min_lat, max_lat, lo, hi]
+    return "(" + " OR ".join(parts) + ")", params
+
+
+def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, country, min_depth, min_position,
+             status) -> tuple[list[str], list]:
     where, params = ["lat IS NOT NULL"], []
     if q and (fq := _fts_query(q)):
         # Text match, or every search word appears in the source document's file path (e.g. 'AUS01').
@@ -87,12 +94,29 @@ def list_boreholes(
                      f"OR doc_id IN (SELECT doc_id FROM documents WHERE {path_match}))")
         params += [fq, *(f"%{_like_escape(t)}%" for t in tokens)]
     if bbox:
-        min_lon, min_lat, max_lon, max_lat = (float(v) for v in bbox.split(","))
-        where.append("rid IN (SELECT rid FROM boreholes_rtree WHERE min_lat >= ? AND max_lat <= ? AND min_lon >= ? AND max_lon <= ?)")
-        params += [min_lat, max_lat, min_lon, max_lon]
-    for lith in lithology:
-        where.append("(',' || lithologies || ',') LIKE ?")
-        params.append(f"%,{lith},%")
+        clause, values = _bbox_clause(bbox)
+        where.append(clause)
+        params += values
+    for lith in lithology:  # each lithology somewhere in the hole, within the depth range if one is given
+        clause = "EXISTS (SELECT 1 FROM layers l WHERE l.rid = boreholes.rid AND l.primary_code = ?"
+        params.append(lith)
+        if depth_to is not None:
+            clause += " AND l.top_m < ?"
+            params.append(depth_to)
+        if depth_from is not None:
+            clause += " AND l.bottom_m > ?"
+            params.append(depth_from)
+        where.append(clause + ")")
+    if lab:
+        clause = "EXISTS (SELECT 1 FROM lab_values v WHERE v.rid = boreholes.rid AND v.parameter = ?"
+        params.append(lab)
+        if lab_min is not None:
+            clause += " AND v.value >= ?"
+            params.append(lab_min)
+        if lab_max is not None:
+            clause += " AND v.value <= ?"
+            params.append(lab_max)
+        where.append(clause + ")")
     if country:
         where.append("country = ?")
         params.append(country.upper())
@@ -106,25 +130,64 @@ def list_boreholes(
         values = STATUS_GROUPS[status]
         where.append(f"review_status IN ({','.join('?' * len(values))})")
         params += list(values)
-    rows = con.execute(f"SELECT {LIGHT_COLUMNS} FROM boreholes WHERE {' AND '.join(where)}", params).fetchall()
-    return {"type": "FeatureCollection", "features": [_feature(r) for r in rows]}
+    return where, params
+
+
+@app.get("/api/boreholes")
+def list_boreholes(
+    con: DB,
+    q: str | None = None,
+    bbox: str | None = Query(None, description="minLon,minLat,maxLon,maxLat (min > max crosses the antimeridian)"),
+    lithology: list[str] = Query(default_factory=list),
+    depth_from: float | None = Query(None, description="lithology filter: layer below this depth (m)"),
+    depth_to: float | None = Query(None, description="lithology filter: layer above this depth (m)"),
+    lab: str | None = Query(None, description="lab parameter, e.g. ucs, cai"),
+    lab_min: float | None = None,
+    lab_max: float | None = None,
+    country: str | None = None,
+    min_depth: float | None = None,
+    min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
+    status: Literal["all", "released", "pending", "rejected"] = "all",
+    fields: Literal["list", "map"] = Query("list", description="'map': only what map markers need, all matches"),
+    limit: int = Query(1000, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+):
+    """Filtered boreholes as GeoJSON. 'map' returns slim points for every match; 'list' returns a page of
+    summaries with the total and lithology counts of all matches."""
+    where, params = _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, country, min_depth,
+                             min_position, status)
+    sql_where = " AND ".join(where)
+    if fields == "map":
+        rows = con.execute(f"SELECT {MAP_COLUMNS} FROM boreholes WHERE {sql_where}", params).fetchall()
+        return {"type": "FeatureCollection", "total": len(rows), "features": [
+            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]},
+             "properties": {"id": r["id"], "name": r["name"], "review_status": r["review_status"], "score": r["score"],
+                            "loc_method": r["loc_method"]}} for r in rows]}
+    total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {sql_where}", params).fetchone()[0]
+    rows = con.execute(f"SELECT {LIGHT_COLUMNS} FROM boreholes WHERE {sql_where} ORDER BY project, name, id "
+                       "LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
+    facets = con.execute(
+        f"SELECT primary_code, COUNT(DISTINCT rid) n FROM layers WHERE rid IN (SELECT rid FROM boreholes WHERE {sql_where}) "
+        "GROUP BY primary_code ORDER BY n DESC", params).fetchall()
+    return {"type": "FeatureCollection", "total": total, "offset": offset, "limit": limit,
+            "facets": {"lithologies": [[r["primary_code"], r["n"]] for r in facets]},
+            "features": [_feature(r) for r in rows]}
 
 
 @app.get("/api/review-queue")
-def review_queue(con: DB):
-    """Everything waiting for a human, weakest first (also records without a position)."""
+def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0)):
+    """Everything waiting for a human, weakest first (also records without a position), a page at a time.
+    The total is in the X-Total-Count header so the response stays a plain list."""
+    total = con.execute("SELECT COUNT(*) FROM boreholes WHERE review_status = 'pending_review'").fetchone()[0]
     rows = con.execute(
         "SELECT id, name, project, location_name, country, score, confidence, loc_confidence, loc_method, "
-        "n_layers, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file, "
-        "data FROM boreholes WHERE review_status = 'pending_review' ORDER BY score ASC, name"
+        "n_layers, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file, reasons "
+        "FROM boreholes WHERE review_status = 'pending_review' ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
+        (limit, offset),
     ).fetchall()
-    return [
-        {**{k: r[k] for k in r.keys() if k != "data"}, "reasons": json.loads(r["data"]).get("score_reasons", [])}
-        for r in rows
-    ]
-
-
-INFERRED_CRS = re.compile(r"^coordinate system inferred, not stated: EPSG:(\d+)")
+    items = [{**{k: r[k] for k in r.keys() if k != "reasons"}, "reasons": json.loads(r["reasons"] or "[]")}
+             for r in rows]
+    return JSONResponse(items, headers={"X-Total-Count": str(total)})
 
 
 @app.get("/api/review-queue/crs-groups")
@@ -133,16 +196,13 @@ def crs_groups(con: DB):
     for all of them at once (a document-wide CRS correction)."""
     groups: dict[tuple[str, int], dict] = {}
     rows = con.execute(
-        "SELECT id, data, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file "
-        "FROM boreholes WHERE review_status = 'pending_review' ORDER BY id"
+        "SELECT b.id, f.epsg, (SELECT path FROM documents d WHERE d.doc_id = b.doc_id) AS source_file "
+        "FROM findings f JOIN boreholes b ON b.rid = f.rid "
+        "WHERE f.code = 'crs_inferred' AND b.review_status = 'pending_review' ORDER BY b.id"
     )
     for r in rows:
-        issues = json.loads(r["data"]).get("issues", [])
-        epsg = next((int(m.group(1)) for i in issues if (m := INFERRED_CRS.match(i))), None)
-        if epsg is None:
-            continue
-        key = (store.document_group(r["id"]), epsg)
-        g = groups.setdefault(key, {"group": key[0], "epsg": epsg, "name": export._crs_name(epsg),
+        key = (store.document_group(r["id"]), r["epsg"])
+        g = groups.setdefault(key, {"group": key[0], "epsg": r["epsg"], "name": export._crs_name(r["epsg"]),
                                     "count": 0, "borehole_id": r["id"], "source_file": r["source_file"]})
         g["count"] += 1
     # One CRS per document only: if a document has several inferred systems, a person looks at each hole.
@@ -153,26 +213,37 @@ def crs_groups(con: DB):
                   key=lambda g: -g["count"])
 
 
+@app.get("/api/corrections/orphans")
+def orphan_corrections(con: DB):
+    """Reviewer corrections of holes that no current record carries (renamed beyond recognition or gone)."""
+    return store.orphan_corrections(con)
+
+
 @app.get("/api/boreholes/{borehole_id:path}/detail")
 def get_borehole(borehole_id: str, con: DB):
     bh = store.load_borehole(con, borehole_id)
     if bh is None:
         raise HTTPException(404, "borehole not found")
     pages = {(s.file, s.page) for s in bh.sources}
-    docs = {r["path"]: r["doc_id"] for r in con.execute("SELECT doc_id, path FROM documents")}
-    stored = {(r["doc_id"], r["page"]) for r in con.execute("SELECT doc_id, page FROM pages")}
+    files = sorted({f for f, _ in pages})
+    marks = ",".join("?" * len(files))
+    docs = {r["path"]: r["doc_id"] for r in con.execute(f"SELECT doc_id, path FROM documents WHERE path IN ({marks})", files)}
+    stored = {(r["doc_id"], r["page"]) for r in con.execute(
+        f"SELECT doc_id, page FROM pages WHERE doc_id IN ({','.join('?' * len(docs))})", list(docs.values()))}
     source_pages = [
         {"file": f, "page": p, "url": f"/api/pages/{docs[f]}/{p}"}
         for f, p in sorted(pages, key=lambda x: (x[0], x[1] or 0))
         if f in docs and (docs[f], p) in stored
     ]
+    meta = con.execute("SELECT uid, version_id, review_revision FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
     return {
         "borehole": bh.model_dump(mode="json"),
         "source_pages": source_pages,
         "review_log": store.review_log(con, borehole_id),
-        "corrections": store.corrections_for(con, borehole_id),
+        "corrections": store.corrections_for(con, borehole_id, meta["uid"]),
         "blocking": _blocking(bh),
         "content_hash": _content_hash(con, borehole_id),
+        "uid": meta["uid"], "version_id": meta["version_id"], "review_revision": meta["review_revision"],
         "threshold": config.AUTO_APPROVE_THRESHOLD,
     }
 
@@ -187,6 +258,8 @@ class Review(BaseModel):
     reviewer: str = Field(min_length=1, max_length=80)
     comment: str | None = Field(None, max_length=2000)
     content_hash: str | None = Field(None, description="Version the reviewer saw; refused if it changed since")
+    review_revision: int | None = Field(None, description="Review state the reviewer saw; refused if another "
+                                        "decision was stored since")
 
 
 def _content_hash(con: sqlite3.Connection, borehole_id: str) -> str | None:
@@ -198,13 +271,14 @@ def _content_hash(con: sqlite3.Connection, borehole_id: str) -> str | None:
 def review(borehole_id: str, body: Review, con: DB):
     try:
         bh = store.record_review(con, borehole_id, ReviewStatus(body.decision), body.reviewer.strip(), body.comment,
-                                 body.content_hash)
+                                 body.content_hash, body.review_revision)
     except store.StaleReview:
         raise HTTPException(409, "the record changed since you opened it; reload it and check again")
     if bh is None:
         raise HTTPException(404, "borehole not found")
+    revision = con.execute("SELECT review_revision FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()[0]
     return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
-            "content_hash": _content_hash(con, borehole_id)}
+            "content_hash": _content_hash(con, borehole_id), "review_revision": revision}
 
 
 class CrsFix(BaseModel):
@@ -489,11 +563,24 @@ def lithologies():
 
 
 @app.get("/api/export.csv")
-def export_csv(con: DB, status: Literal["all", "released"] = "released"):
+def export_csv(status: Literal["all", "released"] = "released"):
     """Flat export in the spirit of BoreholeDataFormat.xlsx: one row per layer. Released records only
-    by default, so unreviewed extractions do not leak into downstream design work."""
+    by default, so unreviewed extractions do not leak into downstream design work. Streamed record by
+    record from its own connection, so memory stays flat however large the database is."""
+    return StreamingResponse(_csv_rows(status), media_type="text/csv",
+                             headers={"Content-Disposition": "attachment; filename=boreholes.csv"})
+
+
+def _csv_rows(status: str) -> Iterator[str]:
     buf = io.StringIO()
     w = csv.writer(buf)
+
+    def flush() -> str:
+        text = buf.getvalue()
+        buf.seek(0)
+        buf.truncate()
+        return text
+
     w.writerow([
         "BoreholeID", "BoreholeName", "SourceFile", "SourcePages", "ProjectName", "LocationName",
         "Latitude_WGS84", "Longitude_WGS84",
@@ -501,30 +588,39 @@ def export_csv(con: DB, status: Literal["all", "released"] = "released"):
         "LayerTop_m", "LayerBottom_m", "Lithology", "Description", "StratigraphicName", "StratigraphicCode",
         "GeologicAge", "Colour", "ReviewStatus", "ReviewedBy", "Score",
     ])
+    yield flush()
     where = "" if status == "all" else "WHERE review_status IN ('auto_approved', 'approved')"
-    rows = con.execute(
-        f"SELECT data, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file "
-        f"FROM boreholes {where}"
-    )
-    for row in rows:
-        bh = Borehole.model_validate_json(row["data"])
-        loc = bh.location
-        original_crs = f"EPSG:{loc.crs_epsg}" if loc.crs_epsg else loc.crs_raw
-        source_file = row["source_file"]
-        pages = {s.page for s in bh.sources if s.page is not None and (source_file is None or s.file == source_file)}
-        source_pages = ";".join(str(p) for p in sorted(pages)) or None
-        for layer in bh.layers or [None]:
-            w.writerow([
-                bh.borehole_id, bh.borehole_name, source_file, source_pages, bh.project_name, bh.location_name,
-                loc.lat, loc.lon,
-                loc.coords_raw, original_crs, bh.surface_elevation_m, bh.elevation_datum, bh.depth_m,
-                *((layer.top_m, layer.bottom_m, layer.primary.value, layer.description_en or layer.description_original,
-                   layer.stratigraphic_name, layer.stratigraphic_code, layer.geologic_age, layer.color)
-                  if layer else [None] * 8),
-                bh.review_status.value, bh.reviewed_by, bh.score,
-            ])
-    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
-                             headers={"Content-Disposition": "attachment; filename=boreholes.csv"})
+    con = store.connect()
+    try:
+        rows = con.execute(
+            f"SELECT data, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file "
+            f"FROM boreholes {where} ORDER BY id"
+        )
+        for row in rows:
+            _csv_record(w, row)
+            yield flush()
+    finally:
+        con.close()
+
+
+def _csv_record(w, row) -> None:
+    """The rows of one record (one per layer)."""
+    bh = Borehole.model_validate_json(row["data"])
+    loc = bh.location
+    original_crs = f"EPSG:{loc.crs_epsg}" if loc.crs_epsg else loc.crs_raw
+    source_file = row["source_file"]
+    pages = {s.page for s in bh.sources if s.page is not None and (source_file is None or s.file == source_file)}
+    source_pages = ";".join(str(p) for p in sorted(pages)) or None
+    for layer in bh.layers or [None]:
+        w.writerow([
+            bh.borehole_id, bh.borehole_name, source_file, source_pages, bh.project_name, bh.location_name,
+            loc.lat, loc.lon,
+            loc.coords_raw, original_crs, bh.surface_elevation_m, bh.elevation_datum, bh.depth_m,
+            *((layer.top_m, layer.bottom_m, layer.primary.value, layer.description_en or layer.description_original,
+               layer.stratigraphic_name, layer.stratigraphic_code, layer.geologic_age, layer.color)
+              if layer else [None] * 8),
+            bh.review_status.value, bh.reviewed_by, bh.score,
+        ])
 
 
 @app.get("/api/export.xlsx")
