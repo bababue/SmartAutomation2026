@@ -1,5 +1,5 @@
 import { encodeRange } from './url'
-import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, LayerStrips,
+import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, LayerStrips, MapPoint,
   QueuePage, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob, UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -39,7 +39,7 @@ export function fetchBoreholes(f: Filters, offset = 0, limit = 200, signal?: Abo
 }
 
 /** Every match as a slim point for the map (no strips or ground models). */
-export function fetchMapPoints(f: Filters, signal?: AbortSignal): Promise<FeatureCollection> {
+export function fetchMapPoints(f: Filters, signal?: AbortSignal): Promise<FeatureCollection<MapPoint>> {
   const params = filterParams(f)
   params.set('fields', 'map')
   return request(`/api/boreholes?${params}`, { signal })
@@ -54,8 +54,7 @@ export function fetchBoreholesById(ids: string[], signal?: AbortSignal): Promise
 }
 
 export function fetchLayerStrips(bbox: string, signal?: AbortSignal): Promise<LayerStrips> {
-  const params = new URLSearchParams({ fields: 'layers', bbox })
-  return request(`/api/boreholes?${params}`, { signal })
+  return request(`/api/boreholes/strips?${new URLSearchParams({ bbox })}`, { signal })
 }
 
 const enc = (id: string) => encodeURIComponent(id)

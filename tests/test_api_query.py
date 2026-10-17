@@ -3,6 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from api import main
 from api.main import app
 from pipeline import config, store
 from pipeline.scoring import score
@@ -69,7 +70,7 @@ def test_bbox_across_the_antimeridian_and_on_its_edge(client):
 
 def test_map_points_are_slim_and_lists_are_paged(client):
     m = client.get("/api/boreholes?fields=map").json()
-    assert m["total"] == 3 and set(m["features"][0]["properties"]) == {"id", "name", "location_name", "depth", "review_status", "score", "loc_method"}
+    assert m["total"] == 3 and set(m["features"][0]["properties"]) == {"id", "name", "depth", "review_status", "loc_method"}
     page = client.get("/api/boreholes?limit=2&offset=0").json()
     assert page["total"] == 3 and len(page["features"]) == 2
     assert dict(map(tuple, page["facets"]["lithologies"]))["clay"] == 2
@@ -78,12 +79,17 @@ def test_map_points_are_slim_and_lists_are_paged(client):
 
 
 def test_layer_strips_are_limited_to_the_visible_bbox(client):
-    assert client.get("/api/boreholes?fields=layers").status_code == 422
-    result = client.get("/api/boreholes?fields=layers&bbox=179,9,-179,11").json()
+    assert client.get("/api/boreholes/strips").status_code == 422
+    result = client.get("/api/boreholes/strips?bbox=179,9,-179,11").json()
     assert {item["id"]: item["strip"] for item in result["items"]} == {
         "q:A": [[0.0, 12.0, "sand"], [12.0, 30.0, "clay"]],
         "q:B": [[0.0, 5.0, "clay"], [5.0, 20.0, "limestone"]],
     }
+
+
+def test_layer_strips_are_capped(client, monkeypatch):
+    monkeypatch.setattr(main, "STRIPS_LIMIT", 1)
+    assert len(client.get("/api/boreholes/strips?bbox=-180,-90,180,90").json()["items"]) == 1
 
 
 def test_review_queue_pages(client):

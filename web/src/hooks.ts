@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchMapPoints } from './api'
 import { loadTunnelRoute, nearbyBoreholes, projectToRoute, saveTunnelRoute, validateRouteCoordinates,
   type RouteCandidate, type RoutePoint, type TunnelRoute } from './tunnelRoute'
-import type { Feature } from './types'
+import type { Feature, MapPoint } from './types'
 import { DEFAULT_FILTERS } from './url'
 
 /** A switch remembered in localStorage as `on` or `off`; without a stored choice `fallback` decides. */
@@ -27,7 +27,7 @@ export function useStoredFlag(key: string, on: string, off: string, fallback: ()
 export function useTunnelRoute(active: boolean, refresh: number, selectedIds: string[]) {
   const [route, setRoute] = useState<TunnelRoute | null>(loadTunnelRoute)
   const [draft, setDraft] = useState<RoutePoint[] | null>(null)
-  const [points, setPoints] = useState<Feature[]>([])
+  const [points, setPoints] = useState<Feature<MapPoint>[]>([])
   const [settled, setSettled] = useState<number | null>(null)  // the refresh the points or the error belong to
   const [error, setError] = useState<string | null>(null)
 

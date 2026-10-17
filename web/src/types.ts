@@ -159,20 +159,23 @@ export interface BoreholeSummary {
   review_status: ReviewStatus
 }
 
+/** A borehole on the map: the slim properties of every match. */
+export type MapPoint = Pick<BoreholeSummary, 'id' | 'name' | 'depth' | 'review_status' | 'loc_method'>
+
 /** Layer strips of the holes in a map box, for the 3D columns. */
 export interface LayerStrips {
   items: { id: string; strip: BoreholeSummary['strip'] }[]
 }
 
-export interface Feature {
+export interface Feature<P = BoreholeSummary> {
   type: 'Feature'
   geometry: { type: 'Point'; coordinates: [number, number] }
-  properties: BoreholeSummary
+  properties: P
 }
 
-export interface FeatureCollection {
+export interface FeatureCollection<P = BoreholeSummary> {
   type: 'FeatureCollection'
-  features: Feature[]
+  features: Feature<P>[]
   /** All matches (the features may be one page of them). */
   total?: number
   facets?: { lithologies: [string, number][]; groups: GroupFacet[] }

@@ -8,7 +8,7 @@ import { tooltipContent } from '../boreholeTooltip'
 import { cssColor, detailSheetRect, el } from '../dom'
 import { LITHOLOGY, lithStyle, patternId } from '../lithology'
 import { STATUS_LABEL } from '../review'
-import type { BoreholeSummary, FeatureCollection, ReviewStatus } from '../types'
+import type { BoreholeSummary, FeatureCollection, MapPoint, ReviewStatus } from '../types'
 import { COLUMN_MIN_ZOOM, circlePolygon, statusColors, updateColumns, type ColumnSpread } from '../mapColumns'
 import type { RoutePoint, TunnelRoute } from '../tunnelRoute'
 
@@ -20,7 +20,7 @@ setWorkerUrl(workerUrl)
 const STYLE = { light: 'https://tiles.openfreemap.org/styles/liberty', dark: 'https://tiles.openfreemap.org/styles/dark' }
 
 interface Props {
-  data: FeatureCollection
+  data: FeatureCollection<MapPoint>
   route: TunnelRoute | null
   routeDraft: RoutePoint[] | null
   onRoutePoint: (point: RoutePoint) => void
@@ -74,7 +74,7 @@ function fitRoute(m: MapLibre, coordinates: RoutePoint[]) {
   m.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 450 })
 }
 
-function pickerList(items: BoreholeSummary[], onPick: (id: string) => void) {
+function pickerList(items: MapPoint[], onPick: (id: string) => void) {
   const root = el('div', 'picker')
   root.append(el('p', 'picker-head', `${items.length} boreholes at this position`))
   const list = el('ul', 'picker-list')
@@ -221,7 +221,7 @@ export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, foc
         // Holes at (almost) the same position never split up: offer a list instead.
         const leaves = await source.getClusterLeaves(feature.properties.cluster_id, 50, 0)
         picker.remove()
-        picker.setLngLat(center).setDOMContent(pickerList(leaves.map((l) => l.properties as BoreholeSummary), (id) => {
+        picker.setLngLat(center).setDOMContent(pickerList(leaves.map((l) => l.properties as MapPoint), (id) => {
           picker.remove()
           latest.current.onSelect(id)
         })).addTo(m)
@@ -238,7 +238,7 @@ export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, foc
           const f = e.features?.[0]
           if (!f) return
           tooltip.setLngLat(f.geometry.type === 'Point' ? f.geometry.coordinates as [number, number] : e.lngLat)
-            .setDOMContent(tooltipContent(f.properties as BoreholeSummary)).addTo(m)
+            .setDOMContent(tooltipContent(f.properties as MapPoint)).addTo(m)
         })
         m.on('mouseleave', layer, () => {
           m.getCanvas().style.cursor = latest.current.routeDraft !== null ? 'crosshair' : ''
@@ -248,7 +248,7 @@ export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, foc
       for (const layer of ['depth-columns', 'depth-column-patterns']) {
         m.on('mousemove', layer, (e: MapLayerMouseEvent) => {
           const f = e.features?.[0]
-          if (f) tooltip.setLngLat(e.lngLat).setDOMContent(tooltipContent(f.properties as BoreholeSummary)).addTo(m)
+          if (f) tooltip.setLngLat(e.lngLat).setDOMContent(tooltipContent(f.properties as MapPoint)).addTo(m)
         })
       }
       m.on('mouseenter', 'clusters', () => (m.getCanvas().style.cursor = latest.current.routeDraft !== null ? 'crosshair' : 'pointer'))
@@ -355,7 +355,7 @@ function loadPatterns() {
 
 /** The borehole sources and layers on top of the basemap; a style switch drops them, so they are added again. */
 function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>>,
-  state: { data: FeatureCollection; route: TunnelRoute | null; routeDraft: RoutePoint[] | null; columns3d: boolean }) {
+  state: { data: FeatureCollection<MapPoint>; route: TunnelRoute | null; routeDraft: RoutePoint[] | null; columns3d: boolean }) {
   if (m.getSource('boreholes')) return
   const accent = cssColor('--water'), ink = cssColor('--ink'), panel = cssColor('--panel')
   const status = statusColors()
@@ -511,7 +511,7 @@ function uncovered(m: MapLibre) {
   return { left: 0, right, top: 0, bottom: 0 }
 }
 
-function fit(m: MapLibre, data: FeatureCollection) {
+function fit(m: MapLibre, data: FeatureCollection<MapPoint>) {
   if (!data.features.length) return
   const bounds = new LngLatBounds()
   data.features.forEach((f) => bounds.extend(f.geometry.coordinates))

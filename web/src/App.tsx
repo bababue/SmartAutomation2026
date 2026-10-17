@@ -11,7 +11,7 @@ import { ReviewQueue } from './components/ReviewQueue'
 import { StatsView } from './components/StatsView'
 import { SectionView } from './components/SectionView'
 import type { QueueNav } from './components/ReviewBox'
-import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats } from './types'
+import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, MapPoint, QueueItem, Stats } from './types'
 import { DEFAULT_FILTERS, readUrl, writeUrl, type View } from './url'
 import { detailSheetRect, isTyping } from './dom'
 import { SheetResizer } from './components/SheetResizer'
@@ -31,7 +31,7 @@ export default function App() {
   const [filters, setFilters] = useState<Filters>(initial.filters)
   const [query, setQuery] = useState(initial.filters.q)
   const [data, setData] = useState<FeatureCollection>(EMPTY)  // list: loaded pages of summaries
-  const [points, setPoints] = useState<FeatureCollection>(EMPTY)  // map: every match, slim
+  const [points, setPoints] = useState<FeatureCollection<MapPoint>>(EMPTY)  // map: every match, slim
   const [loadingMore, setLoadingMore] = useState(false)
   const [known, setKnown] = useState<Map<string, Feature>>(new Map())  // full features seen, for the route profile
   const [queue, setQueue] = useState<QueueItem[]>([])

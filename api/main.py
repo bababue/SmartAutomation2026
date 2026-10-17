@@ -105,7 +105,7 @@ def _feature(r: sqlite3.Row) -> dict:
     return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]}, "properties": props}
 
 
-MAP_COLUMNS = "id, name, location_name, lat, lon, depth, review_status, score, loc_method"
+MAP_COLUMNS = "id, name, lat, lon, depth, review_status, loc_method"
 
 
 def _bbox_clause(bbox: str) -> tuple[str, list]:
@@ -221,30 +221,35 @@ def list_filters(
 ListFilters = Annotated[Where, Depends(list_filters)]
 
 
+STRIPS_LIMIT = 5000  # the map asks from street zoom on; a wider box gets a part of its holes, not the database
+
+
+@app.get("/api/boreholes/strips")
+def layer_strips(con: DB, bbox: str = Query(description="minLon,minLat,maxLon,maxLat (min > max crosses the antimeridian)")):
+    """Depth strips of the holes in a map box, for the 3D columns."""
+    clause, params = _bbox_clause(bbox)
+    rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {clause} LIMIT ?", [*params, STRIPS_LIMIT])
+    return {"items": [{"id": r["id"], "strip": json.loads(r["strip"]) if r["strip"] else None} for r in rows]}
+
+
 @app.get("/api/boreholes")
 def list_boreholes(
     con: DB,
     filters: ListFilters,
     bbox: str | None = Query(None, description="minLon,minLat,maxLon,maxLat (min > max crosses the antimeridian)"),
     id: list[str] = Query(default_factory=list, max_length=500, description="only these borehole ids"),
-    fields: Literal["list", "map", "layers"] = Query("list", description="'map': slim points; 'layers': depth strips for visible columns"),
+    fields: Literal["list", "map"] = Query("list", description="'map': slim points of every match"),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
 ):
-    """Filtered boreholes with a position. 'map' returns slim GeoJSON points; 'layers' returns strips in a bbox;
-    'list' returns a GeoJSON page with the total, lithology counts and groups (document groups with their most
+    """Filtered boreholes with a position. 'map' returns slim GeoJSON points; 'list' returns a GeoJSON page with the total, lithology counts and groups (document groups with their most
     frequent project name, count, released count and bounding box) of all matches, ordered by group."""
-    if fields == "layers" and not bbox:
-        raise HTTPException(422, "bbox is required for layer strips")
     where = filters.also("lat IS NOT NULL")
     if bbox:
         where = where.also(*_bbox_clause(bbox))
     if id:
         where = where.also(f"id IN ({','.join('?' * len(id))})", id)
     sql_where, params = where.sql(), where.params
-    if fields == "layers":
-        rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {sql_where}", params).fetchall()
-        return {"items": [{"id": r["id"], "strip": json.loads(r["strip"]) if r["strip"] else None} for r in rows]}
     if fields == "map":
         rows = con.execute(f"SELECT {MAP_COLUMNS} FROM boreholes WHERE {sql_where}", params).fetchall()
         return {"type": "FeatureCollection", "total": len(rows), "features": [_feature(r) for r in rows]}

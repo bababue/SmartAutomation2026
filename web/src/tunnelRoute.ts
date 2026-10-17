@@ -1,4 +1,4 @@
-import type { Feature } from './types'
+import type { Feature, MapPoint } from './types'
 
 export type RoutePoint = [number, number]
 
@@ -72,7 +72,7 @@ export function projectToRoute(point: RoutePoint, coordinates: RoutePoint[]): Ro
   return nearest
 }
 
-export function nearbyBoreholes(features: Feature[], route: TunnelRoute): RouteCandidate[] {
+export function nearbyBoreholes(features: Feature<MapPoint>[], route: TunnelRoute): RouteCandidate[] {
   return features.flatMap((feature) => {
     const position = projectToRoute(feature.geometry.coordinates, route.coordinates)
     return position.offsetM <= route.corridorM

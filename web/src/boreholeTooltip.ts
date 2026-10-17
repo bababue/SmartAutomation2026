@@ -1,9 +1,9 @@
 import { el } from './dom'
 import { fmtNum } from './format'
 import { lithStyle } from './lithology'
-import type { BoreholeSummary } from './types'
+import type { MapPoint } from './types'
 
-type TooltipBorehole = BoreholeSummary & {
+type TooltipBorehole = MapPoint & {
   layer_top?: number
   layer_bottom?: number
   layer_lithology?: string
