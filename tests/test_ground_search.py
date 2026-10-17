@@ -25,8 +25,9 @@ def hole(bid: str, layers: list[tuple[float, float, str]], water: float | None =
 def client(tmp_path, monkeypatch):
     path = tmp_path / "test.sqlite"
     monkeypatch.setattr(config, "DB_PATH", path)
+    store.migrate(path)
     con = store.connect(path)
-    store.save_document(con, "DOC1", "logs.pdf", "pdf", [])
+    store.save_document(con, "DOC1", "logs.pdf", [])
     store.save_borehole(con, hole("DOC1:CLAYROCK", [(0, 6, "clay"), (6, 15, "limestone")], water=2.0))
     store.save_borehole(con, hole("DOC1:SAND", [(0, 25, "medium_sand")]))  # no rock head, no water level
     store.save_borehole(con, hole("DOC1:SHALLOW", [(0, 3, "fine_sand")], water=1.0))

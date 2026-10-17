@@ -109,6 +109,7 @@ def test_swapped_analytes_with_equal_values_do_not_match():
 def test_holdout_survives_snapshots(tmp_path):
     path = tmp_path / "reference.json"
     evaluate.set_holdout(["DOC2"], path)
+    store.migrate(tmp_path / "test.sqlite")
     con = store.connect(tmp_path / "test.sqlite")
     evaluate.snapshot(con, path)
     assert evaluate.load_holdout(path) == {"DOC2"}
@@ -119,6 +120,7 @@ def test_holdout_survives_snapshots(tmp_path):
 
 
 def test_snapshot_keeps_earlier_approvals(tmp_path):
+    store.migrate(tmp_path / "test.sqlite")
     con = store.connect(tmp_path / "test.sqlite")
     src = SourceRef(file="demo.pdf", page=1)
 
@@ -148,6 +150,7 @@ def test_corrected_record_still_shows_the_model_error(tmp_path, monkeypatch):
 
     path = tmp_path / "test.sqlite"
     monkeypatch.setattr(config, "DB_PATH", path)
+    store.migrate(path)
     con = store.connect(path)
     src = SourceRef(file="demo.pdf", page=1)
     bh = Borehole(borehole_id="DOC1:BH1", borehole_name="BH1", depth_m=5,
@@ -169,25 +172,6 @@ def test_corrected_record_still_shows_the_model_error(tmp_path, monkeypatch):
     assert evaluate.compare(reference, model)["DOC1"].lithology_same == 1  # the model's mistake shows
     final, _ = evaluate.current_entries(con, corrected=True)
     assert evaluate.compare(reference, final)["DOC1"].lithology_same == 2
-    con.close()
-
-
-def test_database_without_extracted_column_is_migrated(tmp_path):
-    import sqlite3
-
-    path = tmp_path / "old.sqlite"
-    old = sqlite3.connect(path)
-    # The schema as it was before the column existed
-    old.executescript(store.SCHEMA.replace(
-        "data TEXT,\n    extracted TEXT,  -- model output before reviewer corrections (layers, position), for evaluation\n"
-        "    ground TEXT  -- derived ground model values (pipeline/ground.py)",
-        "data TEXT"))
-    assert "extracted" not in {r[1] for r in old.execute("PRAGMA table_info(boreholes)")}
-    old.execute("INSERT INTO boreholes (id, doc_id, review_status, data) VALUES ('A:B', 'A', 'approved', '{}')")
-    old.commit()
-    old.close()
-    con = store.connect(path)
-    assert con.execute("SELECT id, extracted FROM boreholes").fetchone()[:] == ("A:B", None)
     con.close()
 
 
@@ -214,6 +198,7 @@ def test_lab_evaluation_distinguishes_range_upper_bounds():
 
 def test_release_audit_counts_corrected_and_rejected_releases_as_wrong(tmp_path):
     from tests.test_store import record
+    store.migrate(tmp_path / "a.sqlite")
     con = store.connect(tmp_path / "a.sqlite")
     for i in range(6):
         bh = record(bid=f"rep:BH{i}", name=f"BH {i}")

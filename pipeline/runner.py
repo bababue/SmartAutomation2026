@@ -50,25 +50,13 @@ def _ingest(docs, con, dataset_dir: Path | None = None) -> dict[str, list[ingest
     for d in docs:
         pages = ingest.render(d, dataset_dir)
         rendered[d.doc_id] = pages
-        existing = {r["page"]: r for r in store.page_rows(con, d.doc_id)}
-        store.save_document(
-            con, d.doc_id, d.path, d.kind,
-            [
-                {
-                    "doc_id": p.doc_id, "page": p.page, "image": p.image, "thumb": p.thumb,
-                    "width": p.width, "height": p.height,
-                    "kind": existing.get(p.page, {}).get("kind"),
-                    "language": existing.get(p.page, {}).get("language"),
-                    "logs": existing.get(p.page, {}).get("logs"),
-                }
-                for p in pages
-            ],
-        )
+        store.save_document(con, d.doc_id, d.path, [(p.page, p.image) for p in pages])
         print(f"  {d.doc_id}: {len(pages)} pages", flush=True)
     return rendered
 
 
 def ingest_docs(docs) -> dict[str, list[ingest.PageImage]]:
+    store.migrate()
     con = store.connect()
     try:
         return _ingest(docs, con)
@@ -202,6 +190,7 @@ def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = 
     if msg := missing_credentials():
         raise RuntimeError(msg)
     guard = guard or llm.CallGuard()
+    store.migrate()
     con, calls, calls_lock = store.connect(), store.connect(), threading.Lock()
 
     def record(call: dict) -> None:
@@ -237,11 +226,8 @@ def _run(con, docs, max_pages, yes, dataset_dir, progress, guard: llm.CallGuard)
     if progress:
         progress("classify", 0, len(pages))
     classes = _parallel(llm.classify_page, pages, "classify", progress)
-    for (doc_id, page_no), c in classes.items():
-        con.execute(
-            "UPDATE pages SET kind = ?, language = ?, logs = ? WHERE doc_id = ? AND page = ?",
-            (c.kind.value, c.language, store.as_json([log.model_dump() for log in c.logs]), doc_id, page_no),
-        )
+    con.executemany("UPDATE pages SET kind = ? WHERE doc_id = ? AND page = ?",
+                    [(c.kind.value, doc_id, page_no) for (doc_id, page_no), c in classes.items()])
     con.commit()
     _check(docs, guard)
 
@@ -277,6 +263,7 @@ def _run(con, docs, max_pages, yes, dataset_dir, progress, guard: llm.CallGuard)
 def rebuild(docs, max_pages: int | None = None, dry_run: bool = False) -> None:
     """Assemble, apply knowledge and corrections, and store, from the cache only (no API calls)."""
     _check_max_pages(max_pages)
+    store.migrate()
     con = store.connect()
     try:
         rendered, truncated = _truncate({d.doc_id: ingest.render(d) for d in docs}, max_pages)

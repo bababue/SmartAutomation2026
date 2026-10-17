@@ -226,7 +226,8 @@ image) it shows `fixtures/model_evaluation.json`, which holds aggregates only. [
 
 ## Data model
 
-One SQLite file; the schema version is in `PRAGMA user_version`.
+One SQLite file; the schema version is in `PRAGMA user_version`. The API and the pipeline create or upgrade it
+once at start (`store.migrate`); files older than version 3 are refused.
 
 | Table | Content |
 |---|---|

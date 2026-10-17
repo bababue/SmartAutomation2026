@@ -445,6 +445,7 @@ def cmd_eval(args) -> None:
     if args.action == "holdout":
         print(f"holdout: {', '.join(sorted(set_holdout(args.doc or []))) or 'none'}")
         return
+    store.migrate()
     con = store.connect()
     if args.action == "audit":
         if load_audit() is None or args.redraw:

@@ -14,6 +14,7 @@ def db_path(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", path)
     monkeypatch.setattr(config, "MAX_UPLOAD_WORKERS", 1)
     monkeypatch.setattr(config, "MAX_UPLOAD_JOBS", 2)
+    store.migrate(path)
     return path
 
 

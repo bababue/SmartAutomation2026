@@ -302,8 +302,7 @@ def prompt_context(con: sqlite3.Connection, doc_id: str) -> str:
     """Known facts for the extraction of a document's new pages ('' if none). Region and project come
     from earlier records of the document, if any."""
     group = store.document_group(doc_id)
-    rows = con.execute("SELECT country, project FROM boreholes WHERE doc_id = ? OR doc_id LIKE ? ESCAPE '\\'",
-                       (group, group.replace("_", "\\_") + "\\_\\_%")).fetchall()
+    rows = con.execute("SELECT country, project FROM boreholes WHERE grp = ?", (group,)).fetchall()
     keys = {"document": group, "global": None,
             "region": {(r["country"] or "").upper() for r in rows if r["country"]},
             "project": {norm_project(r["project"]) for r in rows if r["project"]}}

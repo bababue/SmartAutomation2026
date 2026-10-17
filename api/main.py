@@ -40,6 +40,7 @@ from . import models, similar
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    store.migrate()
     queue = uploads.UploadQueue(config.DB_PATH)
     app.state.upload_queue = queue
     try:
@@ -63,14 +64,11 @@ def db() -> Iterator[sqlite3.Connection]:
 
 DB = Annotated[sqlite3.Connection, Depends(db)]
 
-# A hole's group in the result list: its document group (the document, or the folder of single images), as
-# store.document_group derives it. The extracted project name varies from sheet to sheet (cut off, spelt
-# otherwise), so it labels a group but does not form one.
-GROUP = "CASE WHEN instr(doc_id, '__') > 0 THEN substr(doc_id, 1, instr(doc_id, '__') - 1) ELSE doc_id END"
-
 SOURCE_FILE = "(SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file"
 
-LIGHT_COLUMNS = (f"id, name, project, {GROUP} AS grp, location_name, country, lat, lon, depth, elevation, "
+# A hole's group in the result list is its document group (grp). The extracted project name varies from sheet
+# to sheet (cut off, spelt otherwise), so it labels a group but does not form one.
+LIGHT_COLUMNS = ("id, name, project, grp, location_name, country, lat, lon, depth, elevation, "
                  "loc_method, score, review_status, strip, ground")
 
 STATUS_GROUPS = {
@@ -176,7 +174,7 @@ def list_filters(
         where.append("score <= ?")
         params.append(score_max)
     if group:
-        where.append(f"{GROUP} = ?")
+        where.append("grp = ?")
         params.append(group)
     if q and (fq := _fts_query(q)):
         # Text match, or every search word appears in the source document's file path (e.g. 'report').
@@ -265,10 +263,10 @@ def list_boreholes(
         f"SELECT primary_code, COUNT(DISTINCT rid) n FROM layers WHERE rid IN (SELECT rid FROM boreholes WHERE {sql_where}) "
         "GROUP BY primary_code ORDER BY n DESC", params).fetchall()
     groups = con.execute(
-        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM({RELEASED}) released FROM boreholes WHERE {sql_where} "
+        f"SELECT grp, COUNT(*) total, SUM({RELEASED}) released FROM boreholes WHERE {sql_where} "
         "GROUP BY grp ORDER BY grp", params).fetchall()
     projects: dict[str, Counter] = {}
-    for r in con.execute(f"SELECT {GROUP} AS grp, TRIM(project) AS project, COUNT(*) n FROM boreholes "
+    for r in con.execute("SELECT grp, TRIM(project) AS project, COUNT(*) n FROM boreholes "
                          f"WHERE {sql_where} AND NULLIF(TRIM(project), '') IS NOT NULL GROUP BY grp, project", params):
         projects.setdefault(r["grp"], Counter())[r["project"]] = r["n"]
     return models.ListPage.model_validate({
@@ -315,7 +313,7 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
         where, params = _queue_filters(finding, position)
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}", params).fetchone()[0]
     rows = con.execute(
-        f"SELECT id, name, project, {GROUP} AS grp, location_name, country, score, review_status, loc_method, "
+        "SELECT id, name, project, grp, location_name, country, score, review_status, loc_method, "
         f"n_layers, {SOURCE_FILE}, reasons "
         f"FROM boreholes WHERE {where} ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
         (*params, limit, offset),
@@ -323,11 +321,11 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
     items = [{**{k: r[k] for k in r.keys() if k != "reasons"}, "reasons": json.loads(r["reasons"] or "[]")}
              for r in rows]
     group_rows = con.execute(
-        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM({RELEASED}) released "
+        f"SELECT grp, COUNT(*) total, SUM({RELEASED}) released "
         "FROM boreholes GROUP BY grp ORDER BY grp"
     ).fetchall()
     projects: dict[str, Counter] = {}
-    for r in con.execute(f"SELECT {GROUP} AS grp, TRIM(project) AS project, COUNT(*) n FROM boreholes "
+    for r in con.execute("SELECT grp, TRIM(project) AS project, COUNT(*) n FROM boreholes "
                          "WHERE NULLIF(TRIM(project), '') IS NOT NULL GROUP BY grp, project"):
         projects.setdefault(r["grp"], Counter())[r["project"]] = r["n"]
     groups = [{"group": r["grp"], "project": projects[r["grp"]].most_common(1)[0][0] if r["grp"] in projects else None,
@@ -931,10 +929,10 @@ def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
                   "FROM boreholes WHERE rid IN ({scope}) AND depth IS NOT NULL GROUP BY bin"):
         depths[r["bin"]] = r["n"]
     group_rows = rows(
-        f"SELECT {GROUP} grp, COUNT(*) n, SUM({RELEASED}) released "
+        f"SELECT grp, COUNT(*) n, SUM({RELEASED}) released "
         "FROM boreholes WHERE rid IN ({scope}) GROUP BY grp ORDER BY n DESC")
     top_finding: dict[str, dict] = {}  # most frequent finding that is no mere note, per group
-    for r in rows(f"SELECT {GROUP} grp, f.code, COUNT(DISTINCT f.rid) n FROM findings f "
+    for r in rows("SELECT grp, f.code, COUNT(DISTINCT f.rid) n FROM findings f "
                   "JOIN boreholes b ON b.rid = f.rid WHERE f.rid IN ({scope}) "
                   "AND f.severity IN ('blocking', 'needs_look', 'warning') GROUP BY grp, f.code ORDER BY n DESC"):
         top_finding.setdefault(r["grp"], {"code": r["code"], "records": r["n"]})
