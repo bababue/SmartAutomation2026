@@ -258,3 +258,19 @@ export interface Filters {
   minPosition: number | null
   status: StatusFilter
 }
+
+export interface SimilarHole {
+  id: string
+  name: string
+  project: string | null
+  country: string | null
+  review_status: ReviewStatus
+  score: number | null
+  similarity: number
+  reason: string
+}
+
+export interface SimilarGround {
+  ground: string | null // this hole's ground in a few words; null: too few layers to compare
+  similar: SimilarHole[]
+}

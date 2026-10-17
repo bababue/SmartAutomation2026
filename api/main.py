@@ -31,6 +31,8 @@ from pyproj.exceptions import CRSError
 from pipeline import config, corrections, export, ingest, scoring, store, uploads
 from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
+from . import similar
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -299,6 +301,15 @@ def get_borehole(borehole_id: str, con: DB):
         "uid": meta["uid"], "version_id": meta["version_id"], "review_revision": meta["review_revision"],
         "threshold": config.AUTO_APPROVE_THRESHOLD,
     }
+
+
+@app.get("/api/boreholes/{borehole_id:path}/similar")
+def similar_boreholes(borehole_id: str, con: DB, limit: int = Query(5, ge=1, le=20)):
+    """Holes of other documents with the most similar ground (lithology per depth band, water level)."""
+    found = similar.similar(con, borehole_id, limit)
+    if found is None:
+        raise HTTPException(404, "borehole not found")
+    return found
 
 
 def _blocking(bh: Borehole) -> list[str]:

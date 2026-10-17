@@ -43,7 +43,7 @@ from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, X
 from . import corrections
 from .georef import candidates, crs_from_hint, georeference, haversine_km
 from .knowledge import printed_pair
-from .scoring import SOURCE_CONFLICTS, STRUCTURAL, counts_against, score
+from .scoring import SOURCE_CONFLICTS, STRUCTURAL, counts_against, finding_severity, score
 
 LOG_KINDS = {"borehole_log", "test_pit_log", "probe_log"}
 
@@ -250,10 +250,31 @@ def _plain(text: str) -> str:
     return re.sub(r"\W+", " ", CONTINUED.sub(" ", SAME_AS_BEFORE.sub(" ", text)).lower()).strip()
 
 
+PROPERTIES = sorted(set(Layer.model_fields) - {"top_m", "bottom_m", "description_original", "description_en",
+                                               "language", "source", "confidence"})
+
+
 def _same_properties(a: Layer, b: Layer) -> bool:
-    fields = set(Layer.model_fields) - {"top_m", "bottom_m", "description_original", "description_en",
-                                       "language", "source", "confidence"}
-    return all(getattr(a, field) == getattr(b, field) for field in fields)
+    return all(getattr(a, field) == getattr(b, field) for field in PROPERTIES)
+
+
+def _carry_properties(prev: Layer, nxt: Layer) -> list[str]:
+    """Take what a continuation sheet says about a unit into it: empty fields are filled and secondary components
+    joined. A field both sheets fill differently is returned as a conflict."""
+    conflicts = []
+    for field in PROPERTIES:
+        a, b = getattr(prev, field), getattr(nxt, field)
+        if field == "primary" or b is None or a == b:
+            continue
+        if field == "secondary":
+            known = {s.lithology for s in a}
+            prev.secondary = a + [s for s in b if s.lithology not in known]
+        elif a is None:
+            setattr(prev, field, b)
+        else:
+            conflicts.append(f"{field} '{a}' on page {prev.source.page if prev.source else '?'}, "
+                             f"'{b}' on page {nxt.source.page if nxt.source else '?'}")
+    return conflicts
 
 
 def _sheet_join(prev: Layer, nxt: Layer) -> str | None:
@@ -393,6 +414,10 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
                 prev.description_original += f" / {layer.description_original}"
                 if prev.description_en and layer.description_en:
                     prev.description_en += f" / {layer.description_en}"
+            conflicts = _carry_properties(prev, layer)
+            if conflicts and notes is not None:
+                notes.append(f"properties differ across the sheet break: layer {prev.top_m:g}–{prev.bottom_m:g} m, "
+                             + "; ".join(conflicts))
             continue
         if join == "extend":
             if notes is not None:
@@ -828,6 +853,20 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     return bh, sum(map(counts_against, unreadable))
 
 
+def placeholder(doc_id: str, source_file: str, page: int | None, issue: str, name: str | None = None) -> Borehole:
+    """A blocking record for a log the run could not turn into a hole, so its page goes to a person: the hole
+    `name` that failed to assemble, else a log page that came back short. Its id and name never equal a real
+    hole's, so it cannot overwrite one."""
+    what = "not assembled" if name is not None else "not extracted"
+    stem = f"{id_key(name)}-" if name else ""
+    bh = Borehole(borehole_id=f"{doc_id}:{stem}p{page}-{what.replace(' ', '-')}",
+                  borehole_name=f"{name or 'log'} {what}, {doc_id} p{page}",
+                  sources=[SourceRef(file=source_file, page=page)])
+    bh.issues = [issue] + bh.validate_log()
+    score(bh, {}, 0)
+    return bh
+
+
 def _log_key(log: XLog, page_kind: str) -> tuple[str | None, str]:
     return hole_key(log.name, log.investigation_type if log.investigation_type in ("borehole", "test_pit", "probe")
                     else _KINDS.get(page_kind))
@@ -972,6 +1011,11 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
                     if failed_docs is not None:
                         failed_docs.update(r.doc_id for r in pages)
                     print(f"  ! could not assemble {doc_id}:{logs[0][0].name}: {type(exc).__name__}: {exc}")
+                    page = logs[0][1].page
+                    bh = placeholder(doc_id, pages[0].source_file, page, f"log not assembled: {logs[0][0].name} on "
+                                     f"page {page} ({type(exc).__name__})", logs[0][0].name)
+                    built[group].append((bh, 0, page_texts))
+                    doc_records.append(bh)
         _unique_ids(doc_records)
         _unique_ids_by_type(doc_records)
     for group, records in built.items():
@@ -991,7 +1035,8 @@ PRECISE_METHODS = (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)
 DEPTH_TOLERANCE_M = 0.05
 # Findings that describe a record's layer sequence or its position travel with the layers or the position.
 LAYER_FINDINGS = STRUCTURAL + ("no layers extracted", "layer ", "minor discontinuity", "core loss inferred",
-                               "lithology of layer", "missing sheets", "page ", "depths printed in feet")
+                               "lithology of layer", "missing sheets", "page ", "depths printed in feet",
+                               "properties differ")
 POSITION_FINDINGS = ("coordinate", "CRS", "position", "printed coordinates", "not georeferenced", "invalid WGS84",
                      "no place to cross-check")
 
@@ -1076,16 +1121,22 @@ _FILLED = ("project_id", "project_name", "client", "contractor", "location_name"
            *SOURCE_CONFLICTS)
 
 
-def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dict[str, set]) -> Borehole:
+def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dict[str, set],
+            judged: dict[str, Borehole]) -> Borehole:
     """One record of a hole from two documents, built on the record that keeps its id: a reviewed one first, the
     one the review was made under before one reached by its uid. Otherwise the layers come from one log: the
     better-checked one when both read the same boundaries, else the more detailed one, and the other sequence
-    goes to review. Missing header values and the better position are taken from the other record; values that
+    goes to review. "Better checked" is judged on the record as it will be stored (`judged`: knowledge and
+    corrections applied), and a blocking finding outweighs any score. Missing header values and the better position are taken from the other record; values that
     disagree stay with the layer record and become findings. Tests and lab values of both are kept once."""
     same = _same_layers(a, b)
     reviewed = lambda r: (r.borehole_id in protected.get(r.borehole_id, ()), r.borehole_id in protected)
-    checked = lambda r: (r.review_status == ReviewStatus.auto_approved,
-                         min(r.confidence or 0.0, r.location.confidence or 0.0), r.confidence or 0.0)
+    def checked(r: Borehole) -> tuple:
+        j = judged.get(r.borehole_id, r)
+        return (not any(finding_severity(i) == "blocking" for i in j.issues),
+                j.review_status == ReviewStatus.auto_approved,
+                min(j.confidence or 0.0, j.location.confidence or 0.0), j.confidence or 0.0)
+
     # The layer count only breaks ties between copies of one sequence: more layers can mean over-segmented.
     rank = (lambda r: (*reviewed(r), _complete(r), *checked(r), len(r.layers))) if same else \
         (lambda r: (*reviewed(r), _complete(r), len(r.layers), *checked(r)))
@@ -1136,7 +1187,7 @@ def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dic
         return [x for x in theirs if key(x) not in seen]
 
     samples = new(bh.samples, other.samples, lambda s: (s.name, s.top_m, s.bottom_m))
-    spt = new(bh.spt, other.spt, lambda s: (s.depth_m, s.blows, s.n_value))
+    spt = new(bh.spt, other.spt, lambda s: (s.depth_m, tuple(s.blows or ()), s.n_value))
     runs = new(bh.core_runs, other.core_runs, lambda c: (c.top_m, c.bottom_m))
     bh.samples, bh.spt, bh.core_runs = bh.samples + samples, bh.spt + spt, bh.core_runs + runs
     water = _unique_groundwater(bh.groundwater + other.groundwater)
@@ -1155,14 +1206,16 @@ def _kind(bh: Borehole) -> str | None:
     return bh.investigation_type.value if bh.investigation_type else hole_key(bh.borehole_name, None)[0]
 
 
-def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None) -> list[Borehole]:
+def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
+           judged: dict[str, Borehole] | None = None) -> list[Borehole]:
     """One record per hole across documents (a log, its image export, a drawing of the same hole). Records of one
     name and type from different documents are combined by `_match`; records whose evidence points both ways stay
     apart and go to a person. Holes of one document were told apart by assembly and are never combined, nor are
     records whose own sheets disagree. `protected` maps the records a reviewer decided or corrected to what
     identifies that review (uid, correction ids): such a record keeps its id and takes in an unreviewed copy; two
-    records reviewed independently of each other both stay. Changed records are scored again."""
-    protected = protected or {}
+    records reviewed independently of each other both stay. `judged` holds the records as they will be stored, for
+    choosing the better-checked copy. Changed records are scored again."""
+    protected, judged = protected or {}, judged or {}
     clusters: dict[str, list[dict]] = defaultdict(list)
     kept: list[dict] = []
     for bh in sorted(boreholes, key=lambda b: b.borehole_id):
@@ -1196,7 +1249,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None) -
             continue
         cluster, how, agree = best
         kept.pop()
-        cluster["bh"] = combine(cluster["bh"], bh, how, agree, protected)
+        cluster["bh"] = combine(cluster["bh"], bh, how, agree, protected, judged)
         cluster["ids"].add(bh.borehole_id)
         cluster["docs"].add(_document(bh))
         cluster["changed"] = True

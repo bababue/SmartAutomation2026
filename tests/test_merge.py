@@ -4,7 +4,7 @@ from datetime import date
 
 from pipeline.assemble import dedupe
 from pipeline.scoring import finding_severity
-from schema.borehole import Borehole, GeorefMethod, Layer, Location, ReviewStatus, SourceRef
+from schema.borehole import SPT, Borehole, GeorefMethod, Layer, Location, ReviewStatus, SourceRef
 
 # Freiburg Minster; the second point is about 10 m east of it.
 MINSTER = (47.99552, 7.85291)
@@ -117,3 +117,12 @@ def test_holes_of_one_document_are_never_combined():
     second = record("report", [(0, 5)], NEAR_MINSTER)
     second.borehole_id = "report:B2-p3"
     assert len(merge(first, second)) == 2
+
+
+def test_spt_of_both_documents_is_kept_once():
+    log = record("report", [(0, 9.0)], MINSTER)
+    drawing = record("drawing", [(0, 9.0)], NEAR_MINSTER)
+    log.spt = [SPT(depth_m=1.5, blows=[3, 4, 5], n_value=9)]
+    drawing.spt = [SPT(depth_m=1.5, blows=[3, 4, 5], n_value=9), SPT(depth_m=3.0, blows=[6, 7, 8], n_value=15)]
+    kept, = merge(log, drawing)
+    assert [(s.depth_m, s.n_value) for s in kept.spt] == [(1.5, 9), (3.0, 15)]

@@ -8,6 +8,7 @@ from pipeline import config, store
 from pipeline import __main__ as cli
 from pipeline.extraction_models import LogRef, PageClassification, PageExtraction
 from pipeline.ingest import PageImage, SourceDoc
+from pipeline.scoring import finding_severity
 from schema.borehole import ReviewStatus
 from tests.test_assemble import _log
 from tests.test_store import record
@@ -117,6 +118,19 @@ def test_a_reviewed_record_takes_in_its_unreviewed_copy(con, monkeypatch):
     assert store.orphan_corrections(con) == []
 
 
+
+def test_dedupe_judges_copies_as_they_will_be_stored():
+    from pipeline.assemble import dedupe
+    a, b = record(bid="a:BH1"), record(bid="b:BH1")
+    a.confidence, a.location.confidence = 1.0, 0.5
+    b.confidence, b.location.confidence = 0.95, 0.95
+    fixed = a.model_copy(deep=True)  # a correction settles a's position
+    fixed.location.confidence = 1.0
+    assert dedupe([a, b], judged={"a:BH1": fixed, "b:BH1": b}) == [a]
+    blocked = fixed.model_copy(deep=True)  # but a blocking finding weighs more than any score
+    blocked.issues = blocked.issues + ["gap 2–3 m"]
+    assert dedupe([a, b], judged={"a:BH1": blocked, "b:BH1": b}) == [b]
+
 def test_two_reviewed_copies_of_a_hole_both_stay():
     from pipeline.assemble import dedupe
     a, b = record(bid="a:BH1"), record(bid="b:BH1")
@@ -144,6 +158,24 @@ def test_continued_layers_keep_distinct_properties(field, first, second):
     b.layers[0] = b.layers[0].model_copy(update={field: second, "description_original": f"SAND, {second} (continued)"})
     layers = _layers([(a, SourceRef(file="r.pdf", page=1)), (b, SourceRef(file="r.pdf", page=2))], 20)
     assert [(l.top_m, l.bottom_m, getattr(l, field)) for l in layers] == [(0, 10, first), (10, 20, second)]
+
+
+def test_a_continued_unit_keeps_what_the_next_sheet_says_and_flags_conflicts():
+    from pipeline.assemble import _layers
+    from schema.borehole import SourceRef
+    a, b = _log("BH1", None, None, [(0, 8)]), _log("BH1", None, None, [(8, 12)])
+    a.layers[0] = a.layers[0].model_copy(update={"description_original": "SAND", "moisture": "moist"})
+    b.layers[0] = b.layers[0].model_copy(update={"description_original": "SAND", "moisture": "moist",
+                                                 "relative_density": "loose"})
+    notes: list[str] = []
+    [layer] = _layers([(a, SourceRef(file="r.pdf", page=1)), (b, SourceRef(file="r.pdf", page=2))], 12, notes)
+    assert layer.relative_density == "loose" and not notes  # only the next sheet states it
+
+    b.layers[0] = b.layers[0].model_copy(update={"description_original": "As above", "moisture": "wet"})
+    notes = []
+    [layer] = _layers([(a, SourceRef(file="r.pdf", page=1)), (b, SourceRef(file="r.pdf", page=2))], 12, notes)
+    [conflict] = notes
+    assert "moist" in conflict and "wet" in conflict and finding_severity(conflict) == "needs_look"
 
 
 @pytest.mark.parametrize("text", ["Clayey SAND, grey", "As above"])
@@ -189,13 +221,40 @@ def test_invalid_page_cap_is_rejected_before_processing(monkeypatch, max_pages):
             command([], max_pages=max_pages)
 
 
-def test_fresh_database_stores_a_document_with_a_lost_hole_as_blocking(con):
+def test_fresh_database_stores_a_lost_log_page_as_one_blocking_placeholder(con):
     args = inputs(names=("BH1", "BH2"))
     args[3][("report", 1)].logs = args[3][("report", 1)].logs[:1]
     assert cli._store(con, *args) == {"report"}
-    bh = store.load_borehole(con, "report:BH1")
-    assert "log not extracted: page 1 shows 2 logs, 1 came back" in bh.issues
-    assert bh.review_status == ReviewStatus.pending_review
+    # BH1 was read from the page that came back short: it may hold the lost hole's layers.
+    assert any(finding_severity(i) == "blocking" for i in store.load_borehole(con, "report:BH1").issues)
+    lost = store.load_borehole(con, "report:p1-not-extracted")
+    assert "log not extracted: page 1 shows 2 logs, 1 came back" in lost.issues
+    assert lost.review_status == ReviewStatus.pending_review and [s.page for s in lost.sources] == [1]
+    assert any(finding_severity(i) == "blocking" for i in lost.issues)
+
+
+def test_placeholders_never_take_the_id_of_a_real_hole_or_of_each_other():
+    from pipeline.assemble import placeholder
+    ids = {placeholder("d", "d.pdf", 1, "x", "BH2").borehole_id, placeholder("d", "d.pdf", 1, "x", "").borehole_id,
+           placeholder("d", "d.pdf", 1, "x").borehole_id, "d:BH2", "d:p1"}
+    assert len(ids) == 5
+
+
+def test_fresh_database_stores_a_hole_that_failed_to_assemble_as_a_blocking_placeholder(con, monkeypatch):
+    import pipeline.assemble as assembly
+    build = assembly.build_borehole
+
+    def fail_second(doc_id, source, logs, *args):
+        if logs[0][0].name == "BH2":
+            raise ValueError("unreadable synthetic result")
+        return build(doc_id, source, logs, *args)
+
+    monkeypatch.setattr(assembly, "build_borehole", fail_second)
+    assert cli._store(con, *inputs(names=("BH1", "BH2"))) == {"report"}
+    assert store.load_borehole(con, "report:BH1").layers
+    failed = store.load_borehole(con, "report:BH2-p1-not-assembled")
+    assert not failed.layers and any(i.startswith("log not assembled: BH2") for i in failed.issues)
+    assert any(finding_severity(i) == "blocking" for i in failed.issues)
 
 
 def test_eval_snapshot_keeps_lab_values_merged_from_a_duplicate(con, monkeypatch):
