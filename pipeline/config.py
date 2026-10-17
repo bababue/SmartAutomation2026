@@ -56,6 +56,6 @@ THUMB_LONG_EDGE = int(os.getenv("THUMB_LONG_EDGE", "900"))
 AUTO_APPROVE_THRESHOLD = float(os.getenv("AUTO_APPROVE_THRESHOLD", "0.9"))
 
 # Bump when prompts or extraction models change so cached responses are not reused.
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 # Lab-sheet extraction has its own prompt and cache, so it can change without re-extracting logs.
 LAB_PROMPT_VERSION = "lab-v1"
