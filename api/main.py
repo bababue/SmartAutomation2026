@@ -288,8 +288,20 @@ QUEUE_POSITION = {
 QueuePosition = Literal["printed", "estimated", "crs_inferred", "none"]
 
 
-def _queue_filters(finding: str | None, position: QueuePosition | None) -> tuple[str, list]:
-    where, params = ["review_status = 'pending_review'"], []
+def _queue_filters(finding: str | None, position: QueuePosition | None, status: StatusFilter,
+                   score_min: float | None, score_max: float | None) -> tuple[str, list]:
+    where, params = [], []
+    if status != "all":
+        values = STATUS_GROUPS[status]
+        where.append(f"review_status IN ({','.join('?' * len(values))})")
+        params += list(values)
+    # A record without a score fails every score bound.
+    if score_min is not None:
+        where.append("score >= ?")
+        params.append(score_min)
+    if score_max is not None:
+        where.append("score <= ?")
+        params.append(score_max)
     if finding in ("blocking", "needs_look"):
         where.append("rid IN (SELECT rid FROM findings WHERE severity = ?)")
         params.append(finding)
@@ -298,21 +310,25 @@ def _queue_filters(finding: str | None, position: QueuePosition | None) -> tuple
         params.append(finding)
     if position:
         where.append(QUEUE_POSITION[position])
-    return " AND ".join(where), params
+    return " AND ".join(where) or "1", params
 
 
 @app.get("/api/review-queue")
 def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
                  finding: str | None = Query(None, description="a finding code, or a severity: 'blocking', 'needs_look'"),
                  position: QueuePosition | None = Query(None, description="where the position comes from"),
+                 status: StatusFilter = "pending",
+                 score_min: float | None = Query(None, ge=0, le=1, description="lowest release score"),
+                 score_max: float | None = Query(None, ge=0, le=1, description="highest release score"),
                  audit: bool = Query(False, description="the release audit sample instead (any status)")
                  ) -> models.QueuePage:
-    """Everything waiting for a human, weakest first (also records without a position), a page at a time."""
+    """Records of one release state (by default everything waiting for a human), weakest first (also records
+    without a position), a page at a time."""
     if audit:  # automatic releases drawn for a person to check (`pipeline eval audit`)
         uids = [r["uid"] for r in (evaluate.load_audit() or {"records": []})["records"]]
         where, params = f"uid IN ({','.join('?' * len(uids)) or 'NULL'})", uids
     else:
-        where, params = _queue_filters(finding, position)
+        where, params = _queue_filters(finding, position, status, score_min, score_max)
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}", params).fetchone()[0]
     rows = con.execute(
         f"SELECT id, name, project, {GROUP} AS grp, location_name, country, score, review_status, loc_method, "
@@ -336,10 +352,12 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
 
 
 @app.get("/api/review-queue/findings")
-def queue_findings(con: DB, position: QueuePosition | None = None) -> list[models.QueueFinding]:
-    """Findings among the waiting records (of one position source, if given), for the queue filter. Notes that
-    hold nothing back are left out."""
-    where, params = _queue_filters(None, position)
+def queue_findings(con: DB, position: QueuePosition | None = None, status: StatusFilter = "pending",
+                   score_min: float | None = Query(None, ge=0, le=1), score_max: float | None = Query(None, ge=0, le=1)
+                   ) -> list[models.QueueFinding]:
+    """Findings among the records of one release state (and position source, if given), for the queue filter.
+    Notes that hold nothing back are left out."""
+    where, params = _queue_filters(None, position, status, score_min, score_max)
     rows = con.execute(
         "SELECT code, severity, COUNT(DISTINCT rid) records FROM findings WHERE severity != 'info' AND rid IN "
         f"(SELECT rid FROM boreholes WHERE {where}) GROUP BY code, severity ORDER BY records DESC", params)

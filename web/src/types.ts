@@ -142,6 +142,10 @@ export interface ReviewFilters {
   /** A finding code, or a severity: 'blocking', 'needs_look'. */
   finding: string | null
   position: QueuePosition | null
+  status: StatusFilter
+  /** Release score bounds on the 0–100 scale shown in the UI. */
+  scoreMin: number | null
+  scoreMax: number | null
 }
 
 export interface CrsGroup {

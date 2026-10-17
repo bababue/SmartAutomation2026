@@ -3,7 +3,7 @@ import { fetchQuality, fetchStatsDetail } from '../api'
 import { fmtCount as n, fmtError, percentOf as pct, words } from '../format'
 import { lithStyle, patternId } from '../lithology'
 import { SEVERITY_LABEL } from '../review'
-import { DEFAULT_FILTERS, hasFilters, type StatsTab } from '../url'
+import { DEFAULT_FILTERS, DEFAULT_REVIEW_FILTERS, hasFilters, type StatsTab } from '../url'
 import type { CrsDetermination, Filters, Quality, ReviewFilters, StatsDetail } from '../types'
 import { QualityView } from './QualityView'
 import { Bar, Shares } from './StatsParts'
@@ -159,7 +159,7 @@ function Claims({ whole, quality, onOpen, onReview }: {
         <Claim goal="Work for people" hint="Open the review queue"
           figure={whole ? n(whole.status.pending_review) : loading} label="records waiting for review"
           note={whole && `${n(whole.waiting_blocking)} of them with a blocking finding, which no score can release`}
-          onClick={() => onReview({ finding: null, position: null })} />
+          onClick={() => onReview(DEFAULT_REVIEW_FILTERS)} />
       </ul>
     </section>
   )
@@ -397,7 +397,7 @@ function Coordinates({ s, quality, onReview }: { s: StatsDetail; quality: Qualit
         <b>{n(s.positions_withheld)}</b> {s.positions_withheld === 1 ? 'hole' : 'holes'} deliberately left without a
         position: several holes of one folder would share one place-name point, so a reviewer places them.{' '}
         {p.none > 0 && (
-          <button className="link-button" onClick={() => onReview({ finding: null, position: 'none' })}>
+          <button className="link-button" onClick={() => onReview({ ...DEFAULT_REVIEW_FILTERS, position: 'none' })}>
             Holes without a position in the review queue
           </button>
         )}

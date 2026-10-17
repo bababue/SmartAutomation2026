@@ -12,7 +12,7 @@ import { TunnelList } from './components/TunnelList'
 import { ReviewList } from './components/ReviewList'
 import { StatsView } from './components/StatsView'
 import { SectionView } from './components/SectionView'
-import type { CrsGroup, Detail, DetailUpdate, Feature, FeatureCollection, FindingFacet, Filters, GroupFacet, MapPoint, QueueItem, ReviewFilters, Stats } from './types'
+import type { CrsGroup, Detail, DetailUpdate, Feature, FeatureCollection, FindingFacet, Filters, GroupFacet, MapPoint, QueueItem, ReviewFilters, Stats, StatusFilter } from './types'
 import { DEFAULT_FILTERS, DEFAULT_REVIEW_FILTERS, readUrl, writeUrl, type View } from './url'
 import { detailSheetRect, isTyping } from './dom'
 import { SheetResizer } from './components/SheetResizer'
@@ -27,6 +27,7 @@ const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
 const EMPTY_IDS: string[] = []
 const prefersDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 const always = () => true
+const QUEUE_NOUN: Record<StatusFilter, string> = { pending: 'waiting', released: 'released', rejected: 'rejected', all: 'listed' }
 
 export default function App() {
   const [initial] = useState(() => readUrl(window.location.search))
@@ -204,14 +205,14 @@ export default function App() {
   }, [filters, data.features.length, remember])
 
   // The queue is loading until a response for the current request has landed.
-  const queueKey = `${refresh}|${reviewFilters.finding}|${reviewFilters.position}|${auditOnly}`
+  const queueKey = `${refresh}|${JSON.stringify(reviewFilters)}|${auditOnly}`
   const [queueLoadedKey, setQueueLoadedKey] = useState<string | null>(null)
   useEffect(() => {
     const ctrl = new AbortController()
     fetchQueue(reviewFilters, ctrl.signal, 2000, auditOnly)
       .then(({ items, total, groups }) => { setQueue(items); setQueueTotal(total); setQueueGroups(groups); setQueueLoadedKey(queueKey) })
       .catch((e) => { if (e.name !== 'AbortError') setQueueLoadedKey(queueKey) })
-    fetchQueueFindings(reviewFilters.position, ctrl.signal).then(setQueueFindings).catch(() => undefined)
+    fetchQueueFindings(reviewFilters, ctrl.signal).then(setQueueFindings).catch(() => undefined)
     fetchCrsGroups(ctrl.signal).then(setCrsGroups).catch(() => undefined)
     fetchStats().then(setStats).catch(() => undefined)
     return () => ctrl.abort()
@@ -292,6 +293,8 @@ export default function App() {
       ? [selected, ...data.features] : data.features
   }, [data.features, known, selectedId])
   const inTunnel = routeActive && view === 'map'
+  // Statistics take the whole width: no list, no record sheet.
+  const inStats = view === 'stats'
   const activeRoute = inTunnel ? route : null
   const inactiveRoutes = useMemo(() => inTunnel ? tunnels.filter((tunnel) => tunnel.id !== activeTunnelId)
     .map((tunnel) => tunnel.route).filter((item): item is TunnelRoute => item !== null) : [], [inTunnel, tunnels, activeTunnelId])
@@ -364,7 +367,7 @@ export default function App() {
 
   return (
     <div
-      className={`app${listOpen ? '' : ' list-closed'}${inTunnel && activeTunnel && !selectedId ? ' tunnel-detail-open' : ''}`}
+      className={`app${listOpen && !inStats ? '' : ' list-closed'}${inTunnel && activeTunnel && !selectedId ? ' tunnel-detail-open' : ''}`}
       style={sheetWidth ? { '--sheet-w': `${sheetWidth}px` } as CSSProperties : undefined}
       {...dropTarget}
     >
@@ -398,7 +401,7 @@ export default function App() {
             (Released/Total) ·{' '}
             {stats.boreholes > stats.located ? <button className="link-button muted" onClick={() => {
               setRouteActive(false); setSelectedId(null); setListOpen(true); setAuditOnly(false)
-              setReviewFilters({ finding: null, position: 'none' }); setView('review')
+              setReviewFilters({ ...DEFAULT_REVIEW_FILTERS, position: 'none' }); setView('review')
             }}>{(stats.boreholes - stats.located).toLocaleString('en')} without position</button>
               : <span>0 without position</span>}
           </p>}
@@ -408,11 +411,11 @@ export default function App() {
         </div>
       </header>
 
-      <button className="edge-tab list-toggle" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} aria-controls="sidebar"
+      {!inStats && <button className="edge-tab list-toggle" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} aria-controls="sidebar"
         aria-label={listOpen ? 'Hide filters and results' : 'Show filters and results'} title={listOpen ? 'Hide list' : 'Show list'}>
         {listOpen ? '‹' : '›'}
-      </button>
-      <aside className="sidebar" id="sidebar" inert={!listOpen}>
+      </button>}
+      <aside className="sidebar" id="sidebar" inert={!listOpen || inStats}>
         <div className="filters view-tabs">
           <div className="filter-bar" role="group" aria-label="Views">
             <button className={`pill${inTunnel ? ' pill-on pill-mode' : ''}`} onClick={inTunnel ? closeTunnel : openTunnel}
@@ -440,9 +443,10 @@ export default function App() {
         )}
         {error && <p className="error" role="alert">{error}</p>}
         <ReviewList items={queue} groups={queueGroups} total={queueTotal} loading={queueLoadedKey !== queueKey} audit={auditOnly}
+          noun={auditOnly ? 'sampled' : QUEUE_NOUN[reviewFilters.status]}
           grouped={grouped} onGroupedChange={setGrouped}
           selectedId={selectedId} onSelect={setSelectedId}
-          crsGroups={!auditOnly && reviewFilters.position === 'crs_inferred' ? crsGroups : []} onChanged={() => setRefresh((n) => n + 1)} />
+          crsGroups={!auditOnly && reviewFilters.status === 'pending' && reviewFilters.position === 'crs_inferred' ? crsGroups : []} onChanged={() => setRefresh((n) => n + 1)} />
         </> : <>
         <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies} />
         <div className="result-head">
@@ -517,8 +521,8 @@ export default function App() {
         onDelete={() => { setTunnels((items) => items.filter((item) => item.id !== activeTunnelId)); setActiveTunnelId(null); setRouteDraft(null) }}
         onClose={() => { setActiveTunnelId(null); setRouteDraft(null) }} />}
 
-      {detail && <SheetResizer onResize={setSheetWidth} />}
-      {detail && (
+      {detail && !inStats && <SheetResizer onResize={setSheetWidth} />}
+      {detail && !inStats && (
         <DetailPanel
           key={detail.borehole.borehole_id}
           detail={detail}

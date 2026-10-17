@@ -1,6 +1,6 @@
 import { encodeRange } from './url'
 import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, FindingFacet, Filters, LayerStrips,
-  LlmUsage, MapPoint, Quality, QueuePage, QueuePosition, ReviewFilters, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob,
+  LlmUsage, MapPoint, Quality, QueuePage, ReviewFilters, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob,
   UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -70,16 +70,22 @@ export const fetchStatsDetail = (f: Filters, signal?: AbortSignal) =>
 export const fetchQuality = (signal?: AbortSignal) => request<Quality>('/api/stats/quality', { signal })
 /** Waiting records, weakest first, with the total of all that match; or the release audit sample. */
 export function fetchQueue(f: ReviewFilters, signal?: AbortSignal, limit = 200, audit = false): Promise<QueuePage> {
-  const params = new URLSearchParams({ limit: String(limit) })
-  if (audit) params.set('audit', 'true')
-  else {
-    if (f.finding) params.set('finding', f.finding)
-    if (f.position) params.set('position', f.position)
-  }
+  const params = audit ? new URLSearchParams({ audit: 'true' }) : reviewParams(f)
+  params.set('limit', String(limit))
+  if (!audit && f.finding) params.set('finding', f.finding)
   return request<QueuePage>(`/api/review-queue?${params}`, { signal })
 }
-export const fetchQueueFindings = (position: QueuePosition | null, signal?: AbortSignal) =>
-  request<FindingFacet[]>(`/api/review-queue/findings${position ? `?position=${position}` : ''}`, { signal })
+/** Findings of the records the other review filters leave, for the finding filter. */
+export const fetchQueueFindings = (f: ReviewFilters, signal?: AbortSignal) =>
+  request<FindingFacet[]>(`/api/review-queue/findings?${reviewParams(f)}`, { signal })
+
+function reviewParams(f: ReviewFilters): URLSearchParams {
+  const params = new URLSearchParams({ status: f.status })
+  if (f.position) params.set('position', f.position)
+  if (f.scoreMin != null) params.set('score_min', String(f.scoreMin / 100))
+  if (f.scoreMax != null) params.set('score_max', String(f.scoreMax / 100))
+  return params
+}
 export const fetchCrsGroups = (signal?: AbortSignal) => request<CrsGroup[]>('/api/review-queue/crs-groups', { signal })
 
 export function postCorrection(id: string, kind: CorrectionKind, payload: Record<string, unknown>, reviewer: string,
