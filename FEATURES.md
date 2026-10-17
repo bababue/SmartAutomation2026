@@ -17,7 +17,7 @@ how a document flows through the pipeline, with diagrams, is in [docs/pipeline.m
   in code, never by the model. A log page that returns fewer logs than the classification counted is read once
   more.
 - Merges multi-sheet logs by hole name and sheet number, including descriptions and back-references across a
-  sheet break; continuation sheets get a summary of the previous sheet. Missing sheets ("2 of 3") are reported.
+  sheet break; continuation sheets get a summary of the previous sheet. Missing sheets ("2 of 3") are a blocking finding.
   A continuation sheet whose hole number lost a digit joins the hole it continues when numbering, depths and
   date agree, with a finding to look at.
 - Combines copies of one hole across documents (a log, its image export, a drawing); within one folder or upload
@@ -54,7 +54,7 @@ how a document flows through the pipeline, with diagrams, is in [docs/pipeline.m
 
 - Release score = the weaker of extraction and position confidence, computed from evidence rather than the
   model's own estimate.
-- Auto-release only at a score of 90 or more and without blocking findings.
+- Auto-release only at a score of 0.9 (shown as 90) or more and without blocking findings.
 - Blocking findings include layer gaps or overlaps, depth contradictions, an ambiguous CRS, a second coordinate
   reading that disagrees, a position far from the document's other holes, empty or missing log sheets, depths
   printed in feet, combined copies that disagree on depths, ground level or the lithology at the same
@@ -73,8 +73,8 @@ how a document flows through the pipeline, with diagrams, is in [docs/pipeline.m
   lapsed approval stays open on every later run until a person decides again.
 - Decisions and corrections follow a durable hole uid, so they survive a change of borehole id.
 - Hovering a value outlines where it was read on the source page.
-- Learns from reviewers: confirmed coordinate systems per country, local terms mapped to DIN 4023 classes.
-  Every learned item is visible and removable.
+- Learns from reviewers: confirmed coordinate systems count for the country, and positions a reviewer set
+  become control points for a fitted local grid.
 
 ### Evaluation
 
@@ -92,7 +92,7 @@ how a document flows through the pipeline, with diagrams, is in [docs/pipeline.m
 
 - SQLite with an R-tree for the map box, FTS5 full-text search, queryable layer, lab and finding tables,
   versioned records and a review audit log. The schema is created or upgraded once at start.
-- Load-tested with 50,000 synthetic boreholes (map points 0.8 s, list page 0.3 s, "clay between 10 and 20 m"
+- Load-tested once with 50,000 generated boreholes (map points 0.8 s, list page 0.3 s, "clay between 10 and 20 m"
   0.2 s).
 - FastAPI with typed response models: `/api/boreholes` (list, map points), `/api/boreholes/strips`,
   `/api/boreholes/{id}` with `/similar`, `/review` and `/corrections`, `/api/review-queue` with `/findings` and

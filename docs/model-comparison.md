@@ -1,7 +1,8 @@
 # Model comparison: extraction with Opus 5.5 and Haiku 5.5
 
 Which model reads the logs, at what price, and how well. Built from existing runs only; the numbers are
-from 17 Oct 2026. How the runs are made: README → Prompt experiments.
+from 17 Oct 2026. How the runs are made: [README → Evaluation](../README.md#evaluation). The current figures are on the
+statistics page.
 
 ## Against human-checked records
 

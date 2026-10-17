@@ -149,8 +149,13 @@ def cmd_share(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="pipeline")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name, fn in [("ingest", cmd_ingest), ("estimate", cmd_estimate), ("run", cmd_run), ("rebuild", cmd_rebuild)]:
-        p = sub.add_parser(name)
+    for name, fn, text in [
+        ("ingest", cmd_ingest, "render all pages and list document ids (no model calls)"),
+        ("estimate", cmd_estimate, "page count and cost before a run"),
+        ("run", cmd_run, "classify, extract and store documents (calls the model)"),
+        ("rebuild", cmd_rebuild, "reassemble every record from the page cache (free)"),
+    ]:
+        p = sub.add_parser(name, help=text)
         p.add_argument("--doc", action="append", help="document id or folder prefix (repeatable)")
         p.set_defaults(fn=fn)
         if name == "run":

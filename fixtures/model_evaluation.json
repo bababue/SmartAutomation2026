@@ -1,42 +1,42 @@
 {
  "generated": "2026-10-17",
  "reference": {
-  "records": 133,
+  "records": 144,
   "documents": 24,
   "created": "2026-10-17"
  },
  "current": {
-  "records": 133,
+  "records": 144,
   "missing": 0,
-  "corrected": 74,
+  "corrected": 85,
   "boundaries": {
-   "hit": 823,
-   "of": 840
+   "hit": 885,
+   "of": 904
   },
   "precision": {
-   "hit": 823,
-   "of": 854
+   "hit": 885,
+   "of": 916
   },
   "lithology_depth": {
-   "hit": 2035.56,
-   "of": 2161.15
+   "hit": 2228.86,
+   "of": 2359.25
   },
   "final_depth": {
-   "hit": 131,
-   "of": 133
+   "hit": 142,
+   "of": 144
   },
   "groundwater": {
-   "hit": 88,
-   "of": 88
+   "hit": 104,
+   "of": 104
   },
   "lab": {
-   "hit": 902,
-   "of": 923
+   "hit": 911,
+   "of": 932
   },
   "position_median_m": 0.0,
   "position_max_m": 4007.4,
   "without_position": 0,
-  "crs_changed": 2
+  "crs_changed": 5
  },
  "models": {
   "prompt": "0c2e3063414e",
@@ -138,7 +138,7 @@
     "name": "baseline",
     "date": "2026-10-17",
     "prompt": null,
-    "covered": 80,
+    "covered": 89,
     "pages": 0,
     "model": null,
     "seconds_per_page": null,

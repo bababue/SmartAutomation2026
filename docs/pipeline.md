@@ -20,7 +20,7 @@ flowchart TD
     G --> H[Apply learned knowledge<br/>and reviewer corrections]
     H --> M[Combine copies of one hole<br/>across documents]
     M --> S[Score and decide<br/>scoring.py]
-    S -->|score ≥ 90 and no blocking finding| R[Released]
+    S -->|score ≥ 0.9 and no blocking finding| R[Released]
     S -->|otherwise| Q[Review queue]
     Q --> P((Person))
     P -->|approve / reject| R
@@ -74,7 +74,8 @@ flowchart LR
 - Every answer is cached per page. An interrupted run resumes, and a page is extracted again only when its
   image, the prompt version or the model changes.
 - The backend is a setting: Claude through the API or a subscription, OpenRouter, or a local model. The corpus
-  runs on Opus; live web uploads use Haiku for speed (comparison in [model-comparison.md](model-comparison.md)).
+  was extracted with Opus through the CLI backend; `.env.example` sets Haiku through OpenRouter for fast, cheap
+  uploads (comparison in [model-comparison.md](model-comparison.md)).
 
 ## Example: one page in, one record out
 
@@ -120,9 +121,9 @@ flowchart TD
     A --> P[Position confidence<br/>from georeferencing]
     X --> S["Score = min(extraction, position)"]
     P --> S
-    S --> B{Blocking finding?<br/>gaps or overlaps, depth contradiction,<br/>ambiguous CRS, empty or lost log,<br/>depths in feet}
+    S --> B{Blocking finding?<br/>e.g. gaps or overlaps, depth contradiction,<br/>ambiguous CRS, empty or lost log,<br/>missing sheet, depths in feet}
     B -->|yes| Q[Review queue]
-    B -->|no| T{Score ≥ 90?}
+    B -->|no| T{Score ≥ 0.9?}
     T -->|no| Q
     T -->|yes| R[Released automatically]
     Q -->|approved by a person| R2[Released]

@@ -22,6 +22,19 @@ for this challenge and deleted after the event. The Docker image and `make demo`
 public places; the statistics page then shows the committed evaluation snapshot
 (`fixtures/model_evaluation.json`, aggregates only).
 
+## For reviewers
+
+- **Build and test without data or key:** the Docker build above runs lint, web unit tests, the TypeScript check,
+  the production build and the full pytest suite; locally `make install && make check`.
+- **Run:** UI on <http://localhost:8000>, OpenAPI on <http://localhost:8000/docs>, synthetic boreholes.
+- **Architecture:** [docs/pipeline.md](docs/pipeline.md) (diagrams), [schema/README.md](schema/README.md) (record
+  model and design decisions), [Repository layout](#repository-layout) (module map).
+- **Core rules in code:** release score and blocking findings in [`pipeline/scoring.py`](pipeline/scoring.py),
+  coordinate parsing and CRS resolution in [`pipeline/georef.py`](pipeline/georef.py), sheet assembly in
+  [`pipeline/assemble.py`](pipeline/assemble.py), review persistence in [`pipeline/store.py`](pipeline/store.py)
+  and [`pipeline/corrections.py`](pipeline/corrections.py).
+- **Known limits:** [Limitations](#limitations).
+
 ## Challenge goal and how we meet it
 
 > Automatically extract borehole profiles from PDFs, scans and images, convert them into a standardised
@@ -31,11 +44,11 @@ public places; the statistics page then shows the committed evaluation snapshot
 
 | Criterion | How | Evidence |
 |---|---|---|
-| **Extraction** | Every page is classified on a thumbnail; only log, coordinate-table and lab pages are read at full resolution by a vision LLM (Claude Opus 5.5) into a slim schema. Multi-sheet logs are joined in code. | 50 challenge documents, 1,037 pages, 364 holes. Against 124 records a person checked: **97.9 %** of layer boundaries found within 0.1 m (96.4 % of the model's boundaries are in the reference), **96.0 %** same lithology, **98.4 %** final depth, all groundwater levels and **97.7 %** of lab values ([Evaluation](#evaluation)). |
+| **Extraction** | Every page is classified on a thumbnail; only log, coordinate-table and lab pages are read at full resolution by a vision LLM (the corpus with Claude Opus 5.5) into a slim schema. Multi-sheet logs are joined in code. | 50 challenge documents, 1,037 pages, 364 holes. Against 144 records a person checked: **97.9 %** of layer boundaries found within 0.1 m (96.6 % of the model's boundaries are in the reference), **94.5 %** of the logged metres with the same lithology, **98.6 %** final depth, all groundwater levels and **97.7 %** of lab values ([Evaluation](#evaluation)). |
 | **Standardisation** | One Pydantic model ([`schema/borehole.py`](schema/borehole.py)): depths in metres, lithology as DIN 4023 classes, stratigraphy code and colour, description in the original language plus English, lab values with qualifiers and ranges. | Export in Herrenknecht's *BoreholeDataFormat* (all seven sheets) and as CSV. |
 | **Georeferencing** | The model copies coordinates and CRS text verbatim; code parses every notation, resolves the CRS to an EPSG code, transforms to WGS84 and checks the result against the named place. Printed coordinates are read a second time. | Notations tested with public landmarks in [`tests/test_georef.py`](tests/test_georef.py): UTM, national grids, DMS, decimal minutes, hemisphere letters, packed and unsigned values. Ambiguous or merely inferred systems never release automatically. |
 | **Reliability** | Release score = min(extraction, position confidence), computed from evidence, never self-reported by the model. Blocking findings always go to review; human decisions stay bound to the record's content. | Audit of 73 randomly drawn automatic releases, each checked by a person: 0 needed a correction (95 % CI 0–5 %). |
-| **Storage and search** | SQLite with R-tree (map box) and FTS5 (full text), queryable layer and lab tables, every review decision logged. | 50,000 synthetic holes: map points 0.8 s, list page 0.3 s, "clay between 10 and 20 m" 0.2 s ([Data model](#data-model)). |
+| **Storage and search** | SQLite with R-tree (map box) and FTS5 (full text), queryable layer and lab tables, every review decision logged. | Measured once with 50,000 generated holes: map points 0.8 s, list page 0.3 s, "clay between 10 and 20 m" 0.2 s ([Data model](#data-model)). |
 | **World map** | React + MapLibre: clusters, filters, 3D columns, profile next to the source page, tunnel route section, similar ground. | Modelled on the LGRB borehole portal (bohrungen.lgrb-bw.de). |
 | **Data security** | Pages are processed one by one, locally rendered; the model provider is a setting (Claude, zero-data-retention OpenRouter, or a local model); offline gazetteer. | [Data security](#data-security). |
 
@@ -53,20 +66,21 @@ flowchart LR
     C -->|other| X[skip]
     D --> K[(Page cache)]
     K --> E[Assemble holes] --> G[Georeference] --> H[Knowledge and<br/>reviewer corrections] --> S{Score}
-    S -->|≥ 90, nothing blocking| R[Released]
+    S -->|≥ 0.9, nothing blocking| R[Released]
     S -->|otherwise| Q[Review queue] --> P((Person)) --> R
     R --> DB[(SQLite)] --> UI[Map, search, profile, export]
 ```
 
-Only the two LLM steps call a model; everything after the cache is code, so a rule change needs only
+Simplified; [docs/pipeline.md](docs/pipeline.md) has the full diagrams with lab sheets and combined copies.
+Only the LLM steps call a model; everything after the cache is code, so a rule change needs only
 `pipeline rebuild` (seconds, free).
 
 1. **Ingest:** every page of a PDF (text, scanned, vector-only), JPG/PNG/TIFF or DOCX (converted to PDF with LibreOffice)
    is rendered to an image; plain-text logs and Excel workbooks are laid out on A4 pages first. Text layers are
    only a hint, because many are scrambled.
 2. **Classify:** a thumbnail per page; large reports contain only a few log pages.
-3. **Extract:** full-resolution log pages into a slim schema: values as printed, page regions, unreadable
-   items. Continuation sheets get a summary of the previous sheet. IDs, CRS, WGS84, confidence and review
+3. **Extract:** full-resolution log pages into a slim schema: coordinates, CRS and lab values as printed, layer
+   depths in metres, page regions, unreadable items. Continuation sheets get a summary of the previous sheet. IDs, CRS, WGS84, confidence and review
    state are set by code, never by the model.
 4. **Assemble:** sheets joined by hole name and sheet number, coordinate tables and lab sheets linked to holes,
    copies of one hole across documents combined; depths compared with the PDF's text layer.
@@ -75,12 +89,12 @@ Only the two LLM steps call a model; everything after the cache is code, so a ru
 
 ## Human in the loop
 
-- Score ≥ `AUTO_APPROVE_THRESHOLD` (0.9) and no blocking finding → released automatically; otherwise the
-  record waits in the review queue, weakest first.
-- Blocking: layer gaps or overlaps, depth contradictions, an ambiguous coordinate system, a second coordinate
+- Score ≥ `AUTO_APPROVE_THRESHOLD` (0.9, shown as 90 in the UI) and no blocking finding → released
+  automatically; otherwise the record waits in the review queue, weakest first.
+- Blocking findings ([`pipeline/scoring.py`](pipeline/scoring.py)) include layer gaps or overlaps, depth contradictions, an ambiguous coordinate system, a second coordinate
   reading that disagrees, a position far from the document's other holes (checked again after reviewer
   corrections), copies of a hole that disagree on depths or on the lithology at the same boundaries, an empty or
-  lost log page, depths in feet.
+  lost log page, missing sheets, depths in feet and text that addresses the model.
 - An inferred coordinate system, or a notation whose readings lie a few hundred metres apart, stays below the
   threshold until a person confirms it, once per document.
 - Reviewers approve, reject or correct a value; every decision is logged with name and time. A decision holds
@@ -88,8 +102,8 @@ Only the two LLM steps call a model; everything after the cache is code, so a ru
   queue with a note and stays there on every later run until a person decides again or the content is back to
   what was approved.
 - Corrections are stored apart from the extraction and applied again on every run, so they survive
-  re-extraction. Reviewer knowledge generalises: a confirmed CRS counts for the country, hand-placed holes
-  become control points for a fitted local grid, local terms map to DIN 4023 classes.
+  re-extraction. Reviewer knowledge generalises: a confirmed CRS counts for the country, and hand-placed holes
+  become control points for a fitted local grid.
 - A release audit (`pipeline eval audit`) draws automatic releases at random for a person to check and reports
   the error rate with a confidence interval.
 - Exports contain released records only, unless `?status=all`.
@@ -113,7 +127,7 @@ call an LLM; they use cached or hand-written page results. The same checks run l
 | Tool | Version | Needed for |
 |---|---|---|
 | Python | 3.12 or newer | pipeline and API |
-| Node.js | 22 or newer | web UI |
+| Node.js | 22.18 or newer (the Docker build uses 24) | web UI; the unit tests run TypeScript natively |
 | OpenRouter key | `sk-or-…` from openrouter.ai | processing documents and web uploads only |
 | LibreOffice | any recent | optional: renders DOCX files (`brew install --cask libreoffice`, `apt install libreoffice-writer-nogui`; the Docker image installs it); without it only their embedded images are read |
 
@@ -140,8 +154,9 @@ The dataset is confidential and git-ignored. Unpack it to `temp/HKBoreholeChalle
 .venv/bin/python -m pipeline.gazetteer download
 ```
 
-The pipeline and the web upload reach the model through OpenRouter, with **Claude Haiku 5.5** for
-classification and extraction. Copy the settings and put in your OpenRouter key:
+Without a `.env` the pipeline uses the Anthropic API (`LLM_BACKEND=api`). The template reaches the model through
+OpenRouter instead, with **Claude Haiku 5.5** for classification and extraction, which suits fast, cheap web
+uploads. Copy the settings and put in your OpenRouter key:
 
 ```bash
 cp .env.example .env        # git-ignored; replace sk-or-... with your key
@@ -236,8 +251,8 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
 `eval` compares the model's own output, before reviewer corrections, so a fixed record still counts the
 model's mistake. Columns: boundaries found within 0.1 m and their precision, primary lithology per layer and
 per metre of log, position error and EPSG code, final depth, groundwater levels, lab values. The reference was
-approved from the pipeline's own output, which flatters it somewhat; a fresh re-extraction of the reference
-pages scores 95.2 % on boundaries.
+approved from the pipeline's own output, which flatters it somewhat; a fresh re-extraction of 26 reference
+records with Opus finds 96.1 % of the boundaries (arm `baseline-rerun` in the snapshot).
 
 A prompt change is tried on the reference documents before it becomes the next `PROMPT_VERSION`
 (`pipeline experiment init|run|compare`): each arm has its own cache and a fresh database without corrections,
@@ -261,7 +276,7 @@ once at start (`store.migrate`); files older than version 3 are refused.
 | `documents`, `pages`, `upload_jobs` | inputs and the web upload queue |
 | `llm_calls` | every model call a run made: what went where, as sizes |
 
-Measured with 50,000 synthetic holes (1 GB): map points 0.8 s / 1.5 MB gzipped, a list page 0.3 s, "clay between
+Measured once on a laptop with 50,000 generated holes (1 GB): map points 0.8 s / 1.5 MB gzipped, a list page 0.3 s, "clay between
 10 and 20 m" 0.2 s, "UCS ≥ 80 MPa" 0.1 s, a review-queue page 6 ms; the CSV export streams from the first row.
 
 ## Repository layout
@@ -269,13 +284,27 @@ Measured with 50,000 synthetic holes (1 GB): map points 0.8 s / 1.5 MB gzipped, 
 | Path | Content |
 |---|---|
 | `schema/` | canonical Pydantic model, generated JSON Schema, mapping to the BoreholeDataFormat |
-| `pipeline/` | ingest, classify, extract, assemble, georeference, score, store; CLI `python -m pipeline` |
+| `pipeline/` | the pipeline and its CLI `python -m pipeline`, one module per step (below) |
 | `api/` | FastAPI: search, map data, detail, source pages, review, corrections, upload, statistics, export |
 | `web/` | React 19, Vite, TypeScript, MapLibre |
 | `tests/` | pytest suite; public landmarks and invented values only |
 | `fixtures/` | synthetic demo boreholes, evaluation snapshot for the statistics page (aggregates only) |
 | `docs/` | pipeline diagrams, model comparison, prompt backlog |
 | `temp/`, `data/` | dataset, pages, cache and database: confidential and git-ignored |
+
+| Module in `pipeline/` | Step |
+|---|---|
+| `ingest` | discover files, render pages, text layers |
+| `llm`, `extraction_models` | classification and extraction calls, page cache, the slim extraction schema |
+| `runner`, `uploads` | command-line runs and the web upload queue |
+| `assemble` | join sheets into holes, link coordinate tables and lab sheets, combine copies |
+| `georef`, `coordcheck`, `gazetteer` | parse coordinates, resolve the CRS, second coordinate reading, offline place lookup |
+| `knowledge`, `corrections` | reviewer knowledge and corrections applied on every run |
+| `scoring`, `injection` | release score, findings, prompt-injection check |
+| `ground` | rock head and groundwater level derived from the layers, for search and tunnel sections |
+| `store` | SQLite schema, migration, review persistence |
+| `export` | BoreholeDataFormat workbook and CSV |
+| `evaluate`, `quality`, `experiment` | evaluation against the reference, aggregates for the statistics page, prompt and model experiments |
 
 ## Configuration
 
@@ -355,7 +384,7 @@ The brief asks for data security at every step:
   provider the team approved for this data, or to a local model. The provider is one setting.
 - Place names are looked up in an offline gazetteer before anything else.
 - Source files, pages, cache and database stay local, in git-ignored folders, and are deleted after the event.
-- Not in the prototype: user accounts. Run it on a trusted network.
+- Not in the prototype: user accounts (see [Limitations](#limitations)).
 - Every model call of a run is recorded in `llm_calls` (document, page, stage, model, endpoint, image size and
   text length sent, tokens, cost, outcome), never its content; `GET /api/llm/usage` shows the day against the limits.
 - Documents are untrusted input. The model has no tools and its answer must pass the schema; text that addresses
@@ -365,3 +394,15 @@ The brief asks for data security at every step:
 The challenge dataset contains confidential data from real projects. It is used only for this challenge, is not
 shared outside the event and is deleted afterwards. Nothing from it is committed: tests, fixtures and docs use
 public landmarks and invented values.
+
+## Limitations
+
+- No user accounts: reviewer names are free text and the write endpoints are open. Run it on a trusted network.
+- One API process per database (SQLite, upload queue in the same file).
+- Extraction itself cannot be reproduced without an LLM key and the confidential documents; the build covers
+  everything after the page cache.
+- The reference was approved from the pipeline's own output, which flatters the scores (see
+  [Evaluation](#evaluation)).
+- Text inside page images is not scanned for prompt injection; only text layers are.
+- Lithology patterns follow the DIN 4023 chart, without a claim of full compliance.
+- The map receives all matching points at once, which suits up to about 100,000 holes.

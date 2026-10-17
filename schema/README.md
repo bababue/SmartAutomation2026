@@ -2,7 +2,7 @@
 
 `borehole.py` (Pydantic v2) is the canonical, stored model; `borehole.schema.json` is generated from it.
 
-It is **not** meant to be handed to the LLM as is: system fields (`borehole_id`, `lat/lon`, `crs_epsg`, `confidence`, `issues`, `reviewed`) must be set by our code. The extraction step gets its own slimmer schema (to do, together with the pipeline), adapted to the provider's structured-output rules (closed objects, required/nullable convention, no tuple `bbox`).
+It is **not** meant to be handed to the LLM as is: system fields (`borehole_id`, `lat/lon`, `crs_epsg`, `confidence`, `issues`, `score`, `review_status`, `reviewed_by`) are set by our code. The extraction step uses its own slimmer schema, [`pipeline/extraction_models.py`](../pipeline/extraction_models.py), adapted to the provider's structured-output rules (closed objects, required/nullable convention, no tuple `bbox`).
 
 ```bash
 ../.venv/bin/python -c "import json; from borehole import Borehole; json.dump(Borehole.model_json_schema(), open('borehole.schema.json','w'), indent=2, ensure_ascii=False)"
@@ -55,10 +55,8 @@ It is **not** meant to be handed to the LLM as is: system fields (`borehole_id`,
 
 ## Open points (from review, deliberately deferred)
 
-- Slim extraction schema + assembly step for multi-page logs and several boreholes per page/document.
 - Raw text + unit for every numeric value (layer depths, recovery, sample depths), not only coordinates/SPT/lab.
-- Lab results with qualifiers (`<0.01`, ranges, text) and stable sample IDs for linking appendices to logs.
-- Field-level evidence (page/bbox) for critical values instead of object-level provenance only.
+- Stable sample IDs for linking lab appendices to logs (they are linked by hole name and depth).
 - Date precision (year/month only, ambiguous day/month order).
 - Separate stratigraphic intervals if formation boundaries differ from lithology boundaries (for now layers are split at every boundary).
 - Versioned colour palettes for formations and lithology as fallback when the source has no colours.

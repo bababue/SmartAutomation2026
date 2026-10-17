@@ -53,8 +53,9 @@ Python runs in `.venv` (`source .venv/bin/activate`). The frontend uses `npm` in
 
 | Command | Purpose |
 |---|---|
-| `python -m pytest -q` | all tests, about 3 s |
+| `python -m pytest -q` | all tests, about 10 s |
 | `cd web && npm run lint` | oxlint |
+| `cd web && npm test` | unit tests of the pure helpers (Node ≥ 22.18) |
 | `cd web && npm run build` | type check (`tsc -b`) and production build |
 | `python -m pipeline estimate` | page count and cost before a run |
 | `python -m pipeline run --doc <id>` | extract one document (costs money or quota) |
@@ -81,8 +82,8 @@ Proportionate, not ceremonial. This is a hackathon prototype that has to work re
 demo day.
 
 - Any Python change: `python -m pytest -q` is green.
-- Any frontend change: `npm run lint` shows no errors (existing warnings are fine) and
-  `npm run build` passes.
+- Any frontend change: `npm run lint` shows no errors (existing warnings are fine), and
+  `npm test` and `npm run build` pass.
 - UI changes that affect layout or interaction: look at them once in the browser.
 - Cosmetic edits (comments, copy, renames within a file) need only the matching linter or
   the tests.
@@ -172,7 +173,7 @@ that old data or clients can't handle.
 ```text
 feat(georef): read packed DDMMSS coordinates
 fix(assemble): keep the last layer open when the sheet continues
-feat(prompt): report depths as printed and convert in code (PROMPT_VERSION v4)
+feat(prompt): take the country only from evidence on the sheet
 docs(readme): add troubleshooting for the CLI backend
 ```
 

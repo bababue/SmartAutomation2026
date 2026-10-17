@@ -133,7 +133,7 @@ def lookup(text: str | None, country: str | None, path: Path | None = None) -> L
     # Not split at '/': 'Street A / City B' names a crossing, often of streets named after towns.
     parts = [normalize(p) for p in re.split(r"[,;()|]| - ", text)]
     for key in reversed([p for p in parts if len(p) >= 3 and not p.isdigit()]):
-        if _is_region(con, key, country):  # 'Hulu Langat, Selangor': the state, not the town named after it
+        if _is_region(con, key, country):  # 'Pasadena, California': the state, not a town named after it
             continue
         hits = _distinct(_places(con, key))
         if not hits:
