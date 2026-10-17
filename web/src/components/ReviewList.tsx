@@ -49,6 +49,7 @@ export function ReviewList({ items, groups, total, loading, audit, noun, selecte
   function renderItem(it: QueueItem) {
     return <li key={it.id}>
       <button className={`review-item${it.id === selectedId ? ' result-selected' : ''}`} onClick={() => onSelect(it.id)}
+        data-list-item
         aria-current={it.id === selectedId}>
         <span className="queue-score" style={{ ['--s' as string]: it.score ?? 0 }}>{scoreText(it.score)}</span>
         <span className="review-item-text">

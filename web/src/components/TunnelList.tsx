@@ -40,7 +40,7 @@ export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onCreate,
   function renderItem(tunnel: SavedTunnel) {
     return <li key={tunnel.id}>
       <button className={`tunnel-result${selectedId === tunnel.id ? ' tunnel-result-selected' : ''}`}
-        aria-current={selectedId === tunnel.id} onClick={() => onSelect(tunnel.id)}>
+        aria-current={selectedId === tunnel.id} onClick={() => onSelect(tunnel.id)} data-list-item>
         <strong>{tunnel.name || 'Tunnel'}</strong>
         <span>{tunnel.route ? formatLength(routeLength(tunnel.route.coordinates)) : 'Route not drawn'}
           {' · '}{tunnel.holeIds.length} borehole{tunnel.holeIds.length === 1 ? '' : 's'}</span>

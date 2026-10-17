@@ -13,7 +13,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from schema.borehole import Borehole, ReviewStatus
+from schema.borehole import Borehole, ReviewStatus, ScoreFactor
 
 from . import config, ground, scoring
 
@@ -242,7 +242,7 @@ def llm_calls_today(con: sqlite3.Connection) -> int:
 def content_hash(bh: Borehole) -> str:
     """Hash of everything a reviewer judged and the export publishes (not review fields): an approval
     stays only while exactly this content is stored."""
-    payload = bh.model_dump(mode="json", exclude={"borehole_id", "confidence", "issues", "score", "score_reasons",
+    payload = bh.model_dump(mode="json", exclude={"borehole_id", "confidence", "issues", "score", "score_factors",
                                                   "review_status", "reviewed_by", "reviewed_at", "review_comment"})
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -325,12 +325,12 @@ def _carry_decision(bh: Borehole, old: Borehole, old_digest: str, digest: str) -
         bh.reviewed_at, bh.review_comment = old.reviewed_at, old.review_comment
     elif old_digest == digest:
         bh.review_status = ReviewStatus.pending_review
-        bh.score_reasons = [f"New blocking finding since the approval by {old.reviewed_by or 'a reviewer'}: "
-                            + "; ".join(new_blocking)] + bh.score_reasons
+        bh.score_factors.insert(0, ScoreFactor(part="review", effect="negative", text=(
+            f"New blocking finding since the approval by {old.reviewed_by or 'a reviewer'}: " + "; ".join(new_blocking))))
     else:
         bh.review_status = ReviewStatus.pending_review
-        bh.score_reasons = [f"Data changed since the {old.review_status.value} decision by "
-                            f"{old.reviewed_by or 'a reviewer'}"] + bh.score_reasons
+        bh.score_factors.insert(0, ScoreFactor(part="review", effect="negative", text=(
+            f"Data changed since the {old.review_status.value} decision by {old.reviewed_by or 'a reviewer'}")))
 
 
 def _new_blocking(old: Borehole, bh: Borehole) -> list[str]:
@@ -445,7 +445,7 @@ def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str |
             loc.method.value if loc.method else None, bh.score, bh.review_status.value, len(bh.layers),
             as_json([[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers]),
             digest, bh.model_dump_json(), extracted, ground.summarize(bh).model_dump_json(),
-            as_json(bh.score_reasons), uid, version_id, review_revision,
+            as_json([f.text for f in bh.score_factors if f.effect == "negative"]), uid, version_id, review_revision,
         ),
     )
     _write_projections(con, cur.lastrowid, bh)

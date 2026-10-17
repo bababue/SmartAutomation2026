@@ -25,22 +25,6 @@ interface Props {
   onFindLike: (like: NonNullable<SimilarGround['like']>) => void
 }
 
-const METHOD_TEXT: Record<string, string> = {
-  stated_coordinates: 'from coordinates printed on the log',
-  linked_table: 'from the coordinate table in the same report',
-  geocoded_place: 'approximate, estimated from the place name',
-  manual: 'set manually',
-}
-
-function Level({ value, label }: { value: number | null; label: string }) {
-  const level = value == null ? 'none' : value >= 0.7 ? 'high' : value >= 0.4 ? 'medium' : 'low'
-  return (
-    <span className="level" title={value == null ? undefined : `${Math.round(value * 100)} %`}>
-      {label}: {level === 'none' ? 'unknown' : level}
-    </span>
-  )
-}
-
 export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsConfirmed, onSourceToggle, onSelect, backTo, onBack,
   onFindLike }: Props) {
   const bh = detail.borehole
@@ -52,10 +36,6 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
   const done = () => setEditing(null)
   const [sourceOpen, setSourceOpen] = useState(false)
 
-  // Findings in the order a reviewer needs them: what blocks the release, other checks, then the model's notes.
-  const blocking = new Set(detail.blocking ?? [])
-  const notes = bh.issues.filter((i) => i.startsWith('unreadable:'))
-  const others = bh.issues.filter((i) => !blocking.has(i) && !i.startsWith('unreadable:') && !i.startsWith('corrected by'))  // corrections are listed below
   const [pageIndex, setPageIndex] = useState(0)
   const pages = detail.source_pages
   const page = pages[Math.min(pageIndex, pages.length - 1)]  // the panel is keyed by id; clamp anyway
@@ -111,21 +91,9 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
           </div>
         </>)}
       </header>
-      <ReviewBox detail={detail} onChange={onReviewChange} onDecided={onDecided} findings={<>
-        {blocking.size > 0 && (<><h4>Needs a person</h4><ul>{[...blocking].map((i) => <li key={i}>{i}</li>)}</ul></>)}
-        {others.length > 0 && (<><h4>Other findings</h4><ul>{others.map((i) => <li key={i}>{i}</li>)}</ul></>)}
-        {notes.length > 0 && (
-          <details className="model-notes">
-            <summary>What the model could not read ({notes.length})</summary>
-            <ul>{notes.map((i) => <li key={i}>{i.replace(/^unreadable:\s*/, '')}</li>)}</ul>
-          </details>
-        )}
-      </>}>
-        <Level value={bh.confidence} label="Extraction" />
-        <span title={`Position ${METHOD_TEXT[loc.method ?? ''] ?? 'unknown'}`}><Level value={loc.confidence} label="Position" /></span>
-      </ReviewBox>
+      <div className="detail-scroll">
+      <ReviewBox detail={detail} onChange={onReviewChange} onDecided={onDecided} />
       {onCrsConfirmed && detail.crs_group && <ConfirmCrs crs={detail.crs_group} onChanged={onCrsConfirmed} />}
-
       <div className={`detail-body${sourceOpen ? '' : ' source-closed'}`}>
         <section className="card detail-profile">
           <h3 className="card-head">Profile <span className="muted card-unit">m</span></h3>
@@ -245,6 +213,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
           )}
         </section>
         )}
+      </div>
       </div>
       <button className="edge-tab source-toggle" onClick={() => { setSourceOpen(!sourceOpen); onSourceToggle(!sourceOpen) }} aria-expanded={sourceOpen} aria-controls="detail-source"
         title={sourceOpen ? 'Hide the source page' : 'Show the source page'}>

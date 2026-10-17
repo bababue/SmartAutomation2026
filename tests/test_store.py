@@ -59,7 +59,7 @@ def test_id_change_keeps_uid_corrections_and_review_history(con):
     assert store.orphan_corrections(con) == []
     bh = store.load_borehole(con, "rep:BH1")  # the correction changed what the reviewer rejected
     assert bh.review_status == ReviewStatus.pending_review
-    assert bh.score_reasons[0] == "Data changed since the rejected decision by Ana"
+    assert bh.score_factors[0].text == "Data changed since the rejected decision by Ana"
 
 
 @pytest.mark.parametrize("decision", [ReviewStatus.approved, ReviewStatus.rejected])
@@ -80,7 +80,7 @@ def test_changed_data_keeps_an_approval_open_on_every_later_save(con):
         store.save_borehole(con, record(ucs=55.0))
         bh = store.load_borehole(con, "rep:BH01")
         assert bh.review_status == ReviewStatus.pending_review
-        assert bh.score_reasons[0] == "Data changed since the approved decision by Ana"
+        assert bh.score_factors[0].text == "Data changed since the approved decision by Ana"
     store.save_borehole(con, record())  # back to what Ana approved
     assert store.load_borehole(con, "rep:BH01").review_status == ReviewStatus.approved
 
@@ -136,7 +136,7 @@ def test_new_blocking_finding_reopens_an_approval(con):
     store.save_borehole(con, rebuilt("same printed coordinates as BH-02", "sheet header differs from sheet 1"))
     bh = store.load_borehole(con, "rep:BH01")
     assert bh.review_status == ReviewStatus.pending_review
-    assert "sheet header differs" in bh.score_reasons[0]
+    assert "sheet header differs" in bh.score_factors[0].text
     with pytest.raises(store.StaleReview):  # approving from a screen opened before the new finding
         store.record_review(con, "rep:BH01", ReviewStatus.approved, "Ben", None,
                             expected_hash=store.content_hash(bh), expected_revision=1)

@@ -1,7 +1,7 @@
-import { useEffect, useEffectEvent, useState, type ReactNode } from 'react'
+import { useEffect, useEffectEvent, useState } from 'react'
 import { postReview } from '../api'
 import { isTyping } from '../dom'
-import { STATUS_LABEL, fmtDateTime, loadReviewer, saveReviewer, scoreText } from '../review'
+import { SEVERITY_LABEL, STATUS_LABEL, fmtDateTime, loadReviewer, saveReviewer, scoreText } from '../review'
 import type { Detail, DetailUpdate, ReviewStatus } from '../types'
 
 interface Props {
@@ -9,14 +9,18 @@ interface Props {
   onChange: (update: DetailUpdate) => void
   /** Review mode: called after an approval or rejection, to open the next record. */
   onDecided?: () => void
-  /** Shown next to the summary heading. */
-  children?: ReactNode
-  /** Findings shown in the summary below the score reasons. */
-  findings?: ReactNode
 }
 
-/** Release status, why it needs a human, and the decision controls. */
-export function ReviewBox({ detail, onChange, onDecided, children, findings }: Props) {
+const PARTS = [['extraction', 'Layers'], ['position', 'Position']] as const
+const EFFECT_MARK = { positive: '✓', negative: '−', neutral: '·' }
+
+function Level({ value }: { value: number | null }) {
+  const [filled, label] = value == null ? [0, 'unknown'] : value >= 0.7 ? [3, 'high'] : value >= 0.4 ? [2, 'medium'] : [1, 'low']
+  return <span className="level" role="img" aria-label={label} title={label}>{'●'.repeat(filled)}{'○'.repeat(3 - filled)}</span>
+}
+
+/** Release status, what a reviewer has to check, why the score is what it is, and the decision controls. */
+export function ReviewBox({ detail, onChange, onDecided }: Props) {
   const bh = detail.borehole
   const [reviewer, setReviewer] = useState(loadReviewer)
   const [comment, setComment] = useState('')
@@ -25,6 +29,17 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
   const [open, setOpen] = useState(false)
   const status = bh.review_status
   const decided = status === 'approved' || status === 'rejected'
+  const severity = detail.severity ?? {}
+  // What keeps the record from release, then what would raise its score; the rest of the findings into the details.
+  const todo = [
+    ...bh.score_factors.filter((f) => f.part === 'review' && f.effect === 'negative').map((f) => f.text),
+    ...bh.issues.filter((i) => severity[i] === 'blocking' || severity[i] === 'needs_look'),
+    ...new Set(bh.score_factors.flatMap((f) => f.todo ?? [])),
+  ]
+  const unreadable = bh.issues.filter((i) => i.startsWith('unreadable:'))
+  const explained = new Set(bh.score_factors.map((f) => f.text.toLowerCase()))
+  const others = bh.issues.filter((i) => (severity[i] === 'warning' || severity[i] === 'info') && !explained.has(i.toLowerCase())
+    && !i.startsWith('unreadable:') && !i.startsWith('corrected by'))  // corrections are listed in the panel
 
   async function decide(decision: ReviewStatus) {
     if (busy || decision === status) return
@@ -63,7 +78,6 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // Closed: beside the score, to decide at a glance; open: below the summary, after reading it.
   const decisions = (<>
     {decided && (
       <button className="btn" disabled={busy} onClick={() => decide('pending_review')}>Reopen</button>
@@ -84,7 +98,8 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
 
   return (
     <section className={`review review-${status}`} aria-label="Release status">
-      <div className="review-head">
+      {/* The whole head toggles; the button keeps it reachable by keyboard and its click bubbles here. */}
+      <div className="review-head" onClick={() => setOpen(!open)}>
         <div className="review-score" title={`Release threshold ${scoreText(detail.threshold)}`}>
           <span className="review-score-n">{scoreText(bh.score)}</span>
           <span className="review-score-of">/100</span>
@@ -97,10 +112,9 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
           {STATUS_LABEL[status]}
         </span>
         <div className="review-buttons">
-          {!open && decisions}
           <button className={`btn btn-decide review-toggle${open ? ' review-toggle-open' : ''}`} aria-expanded={open}
             aria-controls="review-summary" aria-label={open ? 'Hide the review summary' : 'Show the review summary'}
-            title={open ? 'Hide the review summary' : 'Show the review summary'} onClick={() => setOpen(!open)}>
+            title={open ? 'Hide the review summary' : 'Show the review summary'}>
             <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
           </button>
         </div>
@@ -108,13 +122,58 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
       {!open && error && <p className="error" role="alert">{error}</p>}
 
       {open && <div id="review-summary" className="review-summary">
-      <div className="checks checks-score">
-        <h3>Summary <span className="checks-levels">{children}</span></h3>
-        <ul>
-          {bh.score_reasons.map((r) => <li key={r}>{r}</li>)}
+      <h4>To do</h4>
+      {todo.length ? (
+        <ul className="review-todo">
+          {todo.map((t) => (
+            <li key={t}><label>
+              <input type="checkbox" />
+              <span>{t[0].toUpperCase() + t.slice(1)}</span>
+            </label></li>
+          ))}
         </ul>
-        {findings}
-      </div>
+      ) : <p className="muted">Nothing to do.</p>}
+
+      <details className="review-details">
+        <summary>Details</summary>
+        <h4>Why this score</h4>
+        <dl className="review-factors">
+          {PARTS.map(([part, label]) => (
+            <div key={part}>
+              <dt>{label} <Level value={part === 'extraction' ? bh.confidence : bh.location.confidence} /></dt>
+              <dd><ul>
+                {bh.score_factors.filter((f) => f.part === part).map((f) => (
+                  <li key={f.text} className={`factor factor-${f.effect}`}>
+                    <span className="factor-mark" aria-label={f.effect}>{EFFECT_MARK[f.effect]}</span>{f.text}
+                  </li>
+                ))}
+              </ul></dd>
+            </div>
+          ))}
+        </dl>
+        {others.length > 0 && (<>
+          <h4>Other findings</h4>
+          <ul className="review-findings">{others.map((i) => (
+            <li key={i}><span className={`sev sev-${severity[i]}`}>{SEVERITY_LABEL[severity[i]]}</span> {i[0].toUpperCase() + i.slice(1)}</li>
+          ))}</ul>
+        </>)}
+        {unreadable.length > 0 && (<>
+          <h4>What the model could not read</h4>
+          <ul>{unreadable.map((i) => <li key={i}>{i.replace(/^unreadable:\s*/, '')}</li>)}</ul>
+        </>)}
+        {detail.review_log.length > 0 && (<>
+          <h4>Decision history</h4>
+          <ul>
+            {detail.review_log.map((e, i) => (
+              <li key={i}>
+                {fmtDateTime(e.at)}: {STATUS_LABEL[e.decision]} by {e.reviewer}
+                {e.comment ? `, “${e.comment}”` : ''}
+              </li>
+            ))}
+          </ul>
+        </>)}
+      </details>
+
       <div className="review-form">
         <label>
           Your name
@@ -129,20 +188,6 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
         <div className="review-buttons">{decisions}</div>
       </div>
       {error && <p className="error" role="alert">{error}</p>}
-
-      {detail.review_log.length > 0 && (
-        <details className="review-log">
-          <summary>Decision history ({detail.review_log.length})</summary>
-          <ul>
-            {detail.review_log.map((e, i) => (
-              <li key={i}>
-                {fmtDateTime(e.at)}: {STATUS_LABEL[e.decision]} by {e.reviewer}
-                {e.comment ? `, “${e.comment}”` : ''}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
       </div>}
     </section>
   )

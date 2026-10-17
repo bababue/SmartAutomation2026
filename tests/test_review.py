@@ -25,6 +25,10 @@ def make(position: float = 0.95, method=GeorefMethod.stated_coordinates, layers=
     return bh
 
 
+def reasons(bh: Borehole) -> list[str]:
+    return [f.text for f in bh.score_factors if f.effect == "negative"]
+
+
 def test_clean_record_is_released_automatically():
     bh = make()
     score(bh, {}, unreadable=0)
@@ -36,7 +40,17 @@ def test_approximate_position_needs_review():
     bh = make(position=0.3, method=GeorefMethod.geocoded_place)
     score(bh, {}, unreadable=0)
     assert bh.review_status == ReviewStatus.pending_review
-    assert any("place name" in r for r in bh.score_reasons)
+    assert any("place name" in r for r in reasons(bh))
+
+
+def test_score_factors_show_what_raised_and_lowered_trust():
+    bh = make(position=0.3, method=GeorefMethod.geocoded_place)
+    text = "Borehole log " + "x" * 300 + " 1.20 4.50 9.00"
+    score(bh, {("demo.pdf", 1): text}, unreadable=0)
+    effects = {(f.part, f.effect) for f in bh.score_factors}
+    assert ("extraction", "positive") in effects and ("position", "negative") in effects
+    assert ("extraction", "negative") not in effects and ("position", "positive") not in effects
+    assert all(f.todo for f in bh.score_factors if f.part == "position")  # a weak position says what to do
 
 
 def test_gap_lowers_score_below_threshold():
@@ -138,7 +152,7 @@ def test_inferred_crs_is_explained_in_review_reasons():
     bh.issues.append("coordinate system inferred, not stated: EPSG:32632")
     score(bh, {}, unreadable=0)
     assert bh.review_status == ReviewStatus.pending_review
-    assert bh.score_reasons == ["Coordinate system inferred, not stated: EPSG:32632"]
+    assert reasons(bh) == ["Coordinate system inferred, not stated: EPSG:32632"]
 
 
 def test_scientific_notation():
@@ -171,7 +185,7 @@ def test_human_decision_resets_when_content_changes(con):
     store.save_borehole(con, changed)
     saved = store.load_borehole(con, bh.borehole_id)
     assert saved.review_status == ReviewStatus.pending_review
-    assert "Data changed" in saved.score_reasons[0]
+    assert "Data changed" in saved.score_factors[0].text
 
 
 def test_review_api(con):
@@ -276,7 +290,7 @@ def test_release_needs_positive_evidence():
     bh.issues = bh.validate_log()
     score(bh, {}, unreadable=0)
     assert bh.confidence <= 0.85 and bh.review_status == ReviewStatus.pending_review
-    assert any("confirms" in r for r in bh.score_reasons)
+    assert any("confirms" in r for r in reasons(bh))
 
     text = "Borehole log " + "x" * 300 + " 1.20 4.50 9.00"  # text layer confirms the boundaries
     score(bh, {("demo.pdf", 1): text}, unreadable=0)
@@ -424,7 +438,7 @@ def test_log_without_printed_depths_is_not_penalised():
     bh = make()
     text = "Borehole log " + "x" * 300 + " Undr. shear strength 100 200 300 400 Job 1241009 Date 2012"
     score(bh, {("demo.pdf", 1): text}, unreadable=0)
-    assert bh.confidence >= 0.85 and any("not printed" in r for r in bh.score_reasons)
+    assert bh.confidence >= 0.85 and any(f.effect == "neutral" and "not printed" in f.text for f in bh.score_factors)
 
 
 def test_boreholes_and_test_pits_with_the_same_number_stay_apart():

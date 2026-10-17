@@ -265,6 +265,26 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // Up and down step through the list in the sidebar as it is shown: whatever list is open, collapsed groups skipped.
+  const sidebar = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.target instanceof Element && e.target.closest('.maplibregl-map, [role="menu"], [role="listbox"]')) return
+      if (!sidebar.current || sidebar.current.inert) return
+      const items = [...sidebar.current.querySelectorAll<HTMLButtonElement>('[data-list-item]')]
+      const i = items.findIndex((b) => b.getAttribute('aria-current') === 'true')
+      const next = items[i < 0 ? 0 : i + (e.key === 'ArrowDown' ? 1 : -1)]
+      e.preventDefault()
+      if (!next || next === items[i]) return
+      next.click()  // the list's own selection; a click on the current item would close it
+      next.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  const toggleSelected = (id: string) => setSelectedId((current) => (current === id ? null : id))
+
   // The start page: map view, default filters, nothing open; the reload fits the map to all matches.
   const goHome = useCallback(() => {
     setView('map')
@@ -417,7 +437,7 @@ export default function App() {
         aria-label={listOpen ? 'Hide filters and results' : 'Show filters and results'} title={listOpen ? 'Hide list' : 'Show list'}>
         {listOpen ? '‹' : '›'}
       </button>}
-      <aside className="sidebar" id="sidebar" inert={!listOpen || inStats}>
+      <aside className="sidebar" id="sidebar" ref={sidebar} inert={!listOpen || inStats}>
         <div className="filters view-tabs">
           <div className="filter-bar" role="group" aria-label="Views">
             <button className={`pill${inTunnel ? ' pill-on pill-mode' : ''}`} onClick={inTunnel ? closeTunnel : openTunnel}
@@ -433,7 +453,7 @@ export default function App() {
         {inTunnel ? <TunnelList tunnels={tunnels} boreholes={known} selectedId={activeTunnelId}
           grouped={grouped} onGroupedChange={setGrouped}
           onCreate={createTunnel}
-          onSelect={(id) => { setActiveTunnelId(id); setRouteDraft(null); setSelectedId(null) }} /> : view === 'review' ? <>
+          onSelect={(id) => { setActiveTunnelId((current) => (current === id ? null : id)); setRouteDraft(null); setSelectedId(null) }} /> : view === 'review' ? <>
         {auditOnly ? (
           <div className="result-head">
             <span>Release audit: automatic releases drawn for a person to check</span>
@@ -447,7 +467,7 @@ export default function App() {
         <ReviewList items={queue} groups={queueGroups} total={queueTotal} loading={queueLoadedKey !== queueKey} audit={auditOnly}
           noun={auditOnly ? 'sampled' : QUEUE_NOUN[reviewFilters.status]}
           grouped={grouped} onGroupedChange={setGrouped}
-          selectedId={selectedId} onSelect={setSelectedId}
+          selectedId={selectedId} onSelect={toggleSelected}
           crsGroups={!auditOnly && reviewFilters.status === 'pending' && reviewFilters.position === 'crs_inferred' ? crsGroups : []} onChanged={() => setRefresh((n) => n + 1)} />
         </> : <>
         <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies} />
@@ -458,7 +478,7 @@ export default function App() {
         {error && <p className="error" role="alert">{error}</p>}
         <ResultList features={listFeatures} groups={data.facets?.groups ?? []} activeGroup={filters.group} grouped={grouped}
           onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })) }}
-          selectedId={selectedId} onSelect={setSelectedId} loading={loading} />
+          selectedId={selectedId} onSelect={toggleSelected} loading={loading} />
         {!loading && data.total != null && data.features.length < data.total && (
           <button className="btn load-more" onClick={loadMore} disabled={loadingMore}>
             {loadingMore ? 'Loading…' : 'Show more'}

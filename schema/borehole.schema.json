@@ -1020,6 +1020,53 @@
       "title": "SampleType",
       "type": "string"
     },
+    "ScoreFactor": {
+      "description": "One influence on the release score: which part it concerns and whether it raised or lowered trust.",
+      "properties": {
+        "part": {
+          "enum": [
+            "extraction",
+            "position",
+            "review"
+          ],
+          "title": "Part",
+          "type": "string"
+        },
+        "effect": {
+          "enum": [
+            "positive",
+            "negative",
+            "neutral"
+          ],
+          "title": "Effect",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "todo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What a reviewer can do about a negative influence",
+          "title": "Todo"
+        }
+      },
+      "required": [
+        "part",
+        "effect",
+        "text"
+      ],
+      "title": "ScoreFactor",
+      "type": "object"
+    },
     "SecondaryComponent": {
       "properties": {
         "lithology": {
@@ -1436,13 +1483,13 @@
       "description": "Release score: the weaker of extraction and position",
       "title": "Score"
     },
-    "score_reasons": {
+    "score_factors": {
       "default": [],
-      "description": "Why the score is what it is / why review is needed",
+      "description": "What raised and lowered the score, and why review is needed",
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/ScoreFactor"
       },
-      "title": "Score Reasons",
+      "title": "Score Factors",
       "type": "array"
     },
     "review_status": {

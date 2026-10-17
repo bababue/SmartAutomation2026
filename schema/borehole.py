@@ -349,6 +349,14 @@ class ReviewStatus(str, Enum):
     rejected = "rejected"  # rejected by a human
 
 
+class ScoreFactor(BaseModel):
+    """One influence on the release score: which part it concerns and whether it raised or lowered trust."""
+    part: Literal["extraction", "position", "review"]
+    effect: Literal["positive", "negative", "neutral"]
+    text: str
+    todo: str | None = Field(None, description="What a reviewer can do about a negative influence")
+
+
 class InvestigationType(str, Enum):
     borehole = "borehole"
     test_pit = "test_pit"  # trial pits are logged in the same reports
@@ -393,7 +401,7 @@ class Borehole(BaseModel):
     confidence: Confidence | None = Field(None, description="Extraction confidence (layers, values)")
     issues: list[str] = Field([], description="Findings of validate_log() and of the pipeline steps")
     score: Confidence | None = Field(None, description="Release score: the weaker of extraction and position")
-    score_reasons: list[str] = Field([], description="Why the score is what it is / why review is needed")
+    score_factors: list[ScoreFactor] = Field([], description="What raised and lowered the score, and why review is needed")
     review_status: ReviewStatus = ReviewStatus.pending_review
     reviewed_by: str | None = None
     reviewed_at: datetime | None = None

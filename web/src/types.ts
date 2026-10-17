@@ -89,11 +89,19 @@ export interface Borehole {
   confidence: number | null
   issues: string[]
   score: number | null
-  score_reasons: string[]
+  score_factors: ScoreFactor[]
   review_status: ReviewStatus
   reviewed_by: string | null
   reviewed_at: string | null
   review_comment: string | null
+}
+
+export interface ScoreFactor {
+  part: 'extraction' | 'position' | 'review'
+  effect: 'positive' | 'negative' | 'neutral'
+  text: string
+  /** What a reviewer can do about a negative influence. */
+  todo: string | null
 }
 
 export type ReviewStatus = 'auto_approved' | 'pending_review' | 'approved' | 'rejected'
@@ -236,8 +244,8 @@ export interface Detail {
   source_pages: { file: string; page: number; url: string }[]
   review_log: ReviewEvent[]
   corrections: CorrectionRecord[]
-  /** Findings that keep the record in the queue whatever its score. */
-  blocking: string[]
+  /** Severity per finding; a blocking one keeps the record in the queue whatever its score. */
+  severity: Record<string, Severity>
   /** Version of the content shown; a decision on an outdated version is refused. */
   content_hash: string
   /** Review state the reviewer saw; a decision on an outdated state is refused. */
@@ -249,7 +257,7 @@ export interface Detail {
 
 /** What a review decision or a correction changes in the open record. */
 export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log' | 'content_hash' | 'review_revision'>
-  & Partial<Pick<Detail, 'corrections' | 'blocking'>>
+  & Partial<Pick<Detail, 'corrections' | 'severity'>>
 
 export interface Stats {
   boreholes: number

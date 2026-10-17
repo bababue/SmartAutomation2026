@@ -155,14 +155,14 @@ class ReviewResult(BaseModel):
 
 class CorrectionResult(ReviewResult):
     corrections: list[CorrectionRecord]
-    blocking: list[str]
+    severity: dict[str, str]
     updated: list[str]  # the holes the correction changed (several for a document-wide one)
 
 
 class Detail(ReviewResult):
     source_pages: list[SourcePage]
     corrections: list[CorrectionRecord]
-    blocking: list[str]  # findings that keep the record in the queue whatever its score
+    severity: dict[str, str]  # per finding; a blocking one keeps the record in the queue whatever its score
     threshold: float
     crs_group: CrsGroup | None  # the document-wide CRS confirmation this waiting hole belongs to
 

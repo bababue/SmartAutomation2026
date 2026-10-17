@@ -400,9 +400,8 @@ def similar_boreholes(borehole_id: str, con: DB, limit: int = Query(5, ge=1, le=
     return found
 
 
-def _blocking(bh: Borehole) -> list[str]:
-    """Findings that keep a record in the queue whatever its score."""
-    return [i for i in bh.issues if scoring.finding_severity(i) == "blocking"]
+def _severity(bh: Borehole) -> dict[str, str]:
+    return {i: scoring.finding_severity(i) for i in bh.issues}
 
 
 Reviewer = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
@@ -596,7 +595,7 @@ def correct(borehole_id: str, body: Correction, con: DB) -> models.CorrectionRes
     record = _record(con, borehole_id)
     return models.CorrectionResult.model_validate({
         **record, "corrections": store.corrections_for(con, borehole_id, record["uid"]),
-        "blocking": _blocking(record["borehole"]), "updated": updated})
+        "severity": _severity(record["borehole"]), "updated": updated})
 
 
 # After the sub-routes: the path converter would also match '<id>/similar'.
@@ -623,7 +622,7 @@ def get_borehole(borehole_id: str, con: DB) -> models.Detail:
                                    and g["epsg"] == inferred["epsg"]), None)
     return models.Detail.model_validate({
         **record, "source_pages": source_pages, "corrections": store.corrections_for(con, borehole_id, record["uid"]),
-        "blocking": _blocking(bh), "threshold": config.AUTO_APPROVE_THRESHOLD, "crs_group": crs_group or None})
+        "severity": _severity(bh), "threshold": config.AUTO_APPROVE_THRESHOLD, "crs_group": crs_group or None})
 
 
 @app.post("/api/uploads")

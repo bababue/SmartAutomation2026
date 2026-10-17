@@ -53,6 +53,7 @@ export function ResultList({ features, groups, activeGroup, onShowGroup, selecte
         ref={p.id === selectedId ? selectedRef : undefined}
         className={`result${p.id === selectedId ? ' result-selected' : ''}`}
         onClick={() => onSelect(p.id)}
+        data-list-item
         aria-current={p.id === selectedId}
       >
         <span className="result-name">{p.name}</span>

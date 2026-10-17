@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from schema.borehole import Borehole, GeorefMethod, ReviewStatus
+from schema.borehole import Borehole, GeorefMethod, ReviewStatus, ScoreFactor
 
 from . import config
 
@@ -146,31 +146,45 @@ def prints_depths(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -
     return depth_like >= 0.5 * max(1, len(bh.layers))
 
 
+METHOD_TEXT = {GeorefMethod.stated_coordinates: "Position from coordinates printed on the log",
+               GeorefMethod.linked_table: "Position from the coordinate table in the same report",
+               GeorefMethod.manual: "Position set manually"}
+
+
 def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadable: int) -> None:
-    reasons: list[str] = []
+    factors: list[ScoreFactor] = []
+
+    def add(part: str, effect: str, text: str, todo: str | None = None) -> None:
+        factors.append(ScoreFactor(part=part, effect=effect, text=text, todo=todo))
+
     extraction = 1.0
     if not bh.layers:
         extraction = 0.0
-        reasons.append("No layers could be extracted")
+        add("extraction", "negative", "No layers could be extracted", "Enter the layers from the source page")
     structural = [i for i in bh.issues if i.startswith(STRUCTURAL)]
     if structural:
         extraction -= min(0.4, 0.1 * len(structural))
-        reasons.append(f"{len(structural)} plausibility finding(s) in the layer sequence")
+        add("extraction", "negative", f"{len(structural)} plausibility finding(s) in the layer sequence")
+    elif bh.layers:
+        add("extraction", "positive", "Layer sequence plausible, without gaps or overlaps")
     if unreadable:
         extraction -= min(0.2, 0.05 * unreadable)
-        reasons.append(f"{unreadable} item(s) reported as unreadable")
+        add("extraction", "negative", f"{unreadable} item(s) reported as unreadable",
+            "Read what the model could not read on the source page")
     found, total, checked, checkable = text_check(bh, page_texts)
     agreement = text_agreement(bh, page_texts)
     has_text = checked > 0
     if agreement is not None and agreement < NOT_PRINTED and not prints_depths(bh, page_texts):
         # Almost nothing matches: the log draws boundaries against a depth scale instead of printing them.
         # No penalty, but no confirmation either.
-        reasons.append("Layer depths are not printed as numbers in the PDF text layer (read from the depth scale)")
+        add("extraction", "neutral", "Layer depths are not printed as numbers in the PDF text layer (read from the depth scale)")
         agreement = None
     elif agreement is not None:
         if agreement < 0.8:
             extraction -= (0.8 - agreement) * 0.6
-        reasons.append(f"{round(agreement * 100)} % of layer depths confirmed by the PDF text layer")
+        add("extraction", "positive" if agreement >= 0.8 else "negative",
+            f"{round(agreement * 100)} % of layer depths confirmed by the PDF text layer",
+            None if agreement >= 0.8 else "Compare the layer depths with the source page")
     # Plausible is not the same as correct: release automatically only with positive evidence. With a text
     # layer only the text can confirm, and it has to cover most layers (scanned extra sheets don't ride along);
     # without one, a log from 0 m to a stated final depth counts.
@@ -180,35 +194,50 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
     if bh.layers and not confirmed and (has_text or not covers_full_depth(bh)):
         if extraction > UNCONFIRMED_CAP:
             extraction = UNCONFIRMED_CAP
-            reasons.append("Nothing confirms the layer depths independently (PDF text layer missing, partial or not "
-                           "matching, and no complete log from 0 m to a stated final depth on a scan)")
+            add("extraction", "negative", "Nothing confirms the layer depths independently (PDF text layer missing, "
+                "partial or not matching, and no complete log from 0 m to a stated final depth on a scan)",
+                "Compare the layer depths with the source page")
+    elif bh.layers and not has_text:
+        add("extraction", "positive", "Complete log from 0 m to the stated final depth")
     look = [i for i in bh.issues if finding_severity(i) == "needs_look"]
     if look and extraction > UNCONFIRMED_CAP:
         extraction = UNCONFIRMED_CAP
-        reasons.append(f"{len(look)} finding(s) need a look before release (inferred values or inconsistent core runs)")
+        add("extraction", "negative", f"{len(look)} finding(s) need a look before release (inferred values or "
+            "inconsistent core runs)")
     bh.confidence = round(max(0.0, min(1.0, extraction)), 2)
 
     loc = bh.location
     position = loc.confidence or 0.0
     if loc.method == GeorefMethod.geocoded_place:
-        reasons.append("Position estimated from the place name only")
+        accuracy = f", accuracy about {loc.accuracy_m / 1000:.0f} km" if loc.accuracy_m and loc.accuracy_m >= 1000 else ""
+        add("position", "negative", f"Position estimated from the place name only{accuracy}",
+            "Find coordinates for the hole, e.g. in a site plan or coordinate table of the report")
     elif loc.lat is None:
-        reasons.append("Not georeferenced")
-    elif position < 0.9:
+        add("position", "negative", "Not georeferenced", "Find the location of the hole and enter its coordinates")
+    else:
+        if loc.method in METHOD_TEXT:
+            add("position", "positive", METHOD_TEXT[loc.method])
+        if "coordinates confirmed by a second reading" in bh.issues:
+            add("position", "positive", "Coordinates confirmed by a second reading")
         doubts = [i for i in bh.issues if i.startswith(GEOREF_DOUBTS)]
-        reasons += [i[0].upper() + i[1:] for i in doubts]
-        if position < 0.8 or not doubts:
-            reasons.append("Printed coordinates only partly match the named place")
+        for i in doubts:  # above the threshold a doubt is settled (e.g. by repeated reviewer confirmations)
+            add("position", "negative" if position < 0.9 else "neutral", i[0].upper() + i[1:],
+                "Check the printed coordinates and their coordinate system on the source page" if position < 0.9 else None)
+        if position < 0.9 and (position < 0.8 or not doubts):
+            add("position", "negative", "Printed coordinates only partly match the named place",
+                "Check the printed coordinates against the named place")
+        elif position >= 0.9 and loc.place_name and not doubts and loc.method != GeorefMethod.manual:
+            add("position", "positive", "Printed coordinates match the named place")
     if len(loc.crs_candidates) > 1:
-        reasons.append("Coordinate system ambiguous: " + ", ".join(loc.crs_candidates[:3]))
+        add("position", "negative", "Coordinate system ambiguous: " + ", ".join(loc.crs_candidates[:3]))
 
     bh.score = round(min(bh.confidence, position), 2)
     blocking = [i for i in bh.issues if finding_severity(i) == "blocking"]
     released = bh.score >= config.AUTO_APPROVE_THRESHOLD and not blocking
     bh.review_status = ReviewStatus.auto_approved if released else ReviewStatus.pending_review
-    if not released and not reasons:
-        reasons.append(f"Score below {round(config.AUTO_APPROVE_THRESHOLD * 100)}")
-    bh.score_reasons = reasons
+    if not released and not any(f.effect == "negative" for f in factors):
+        add("review", "negative", f"Score below {round(config.AUTO_APPROVE_THRESHOLD * 100)}")
+    bh.score_factors = factors
 
 
 # Findings as data: a stable code and a severity per finding text, for queries and the review queue.
