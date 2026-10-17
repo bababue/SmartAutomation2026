@@ -223,7 +223,10 @@ Restart the API after pipeline code changes; the UI picks up new data on reload.
 ### 8. Use the app
 
 - **Map**: clusters by location; colour = release state (green released, ochre waiting for review, red rejected),
-  ring = approximate position (estimated from the place name). Hover for name and score; click to open.
+  ring = approximate position (estimated from the place name). At zoom 15+, holes with a position and known
+  depth become 3D columns. Coloured, patterned bands show lithology from shallow at the top to deep at the base; a thin cap
+  shows release state. Layer heights use a 1:1 metre scale across the full depth, with a 0.5 m status cap above. Hover for the name,
+  layer interval, depth and score; click to open.
 - **Search and filters**: full text over names, projects, places and layer descriptions; release state,
   position quality, lithology.
 - **Detail**: two-column profile (stratigraphy, DIN 4023 lithology), layers, tests, record data and the
