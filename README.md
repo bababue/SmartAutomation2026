@@ -105,7 +105,7 @@ call an LLM; they use cached or hand-written page results. The same checks run l
 |---|---|---|
 | Python | 3.12 or newer | pipeline and API |
 | Node.js | 22 or newer | web UI |
-| Claude access | API key, or the Claude Code CLI with a subscription | processing documents only |
+| OpenRouter key | `sk-or-…` from openrouter.ai | processing documents and web uploads only |
 
 No database server or GIS stack: storage is one SQLite file and coordinate transformations use pyproj.
 
@@ -130,16 +130,27 @@ The dataset is confidential and git-ignored. Unpack it to `temp/HKBoreholeChalle
 .venv/bin/python -m pipeline.gazetteer download
 ```
 
-Choose how the pipeline reaches a model, in `.env` (git-ignored; `.env.example` has the team setup):
+The pipeline and the web upload reach the model through OpenRouter, with **Claude Haiku 5.5** for
+classification and extraction. Copy the settings and put in your OpenRouter key:
 
-| Backend | Setting |
-|---|---|
-| Anthropic API | `ANTHROPIC_API_KEY=sk-ant-api03-…` (a subscription token `sk-ant-oat…` is not an API key) |
-| Claude subscription through the Claude Code CLI | `LLM_BACKEND=claude-code`; another account via `CLAUDE_CONFIG_DIR` or `CLAUDE_CLI_TOKEN_FILE` |
-| OpenRouter or a local model (Ollama) | `LLM_BACKEND=openai`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, model names of that server |
+```bash
+cp .env.example .env        # git-ignored; replace sk-or-... with your key
+```
 
-On OpenRouter, requests go only to zero-data-retention providers (`OPENROUTER_ZDR=1`). Ollama needs
-`OLLAMA_CONTEXT_LENGTH=32768` and `MAX_WORKERS=1`.
+```dotenv
+OPENROUTER_API_KEY=sk-or-...
+LLM_BACKEND=openai
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+OPENAI_API_KEY=${OPENROUTER_API_KEY}
+CLASSIFY_MODEL=anthropic/claude-haiku-5.5
+EXTRACT_MODEL=anthropic/claude-haiku-5.5
+```
+
+Haiku reads a log page in about 30 s for about $0.005, roughly 1/30 of Opus; Opus 5.5 is more precise on layer
+boundaries, groundwater and lab values ([model comparison](docs/model-comparison.md)). For the most accurate
+run, set both models to `anthropic/claude-opus-5.5`. Requests go only to providers with zero data retention
+(`OPENROUTER_ZDR=1`); the cost of every call is stored with the cached answer, and `pipeline estimate` sums it.
+Other ways to reach a model are under [Other model backends](#other-model-backends).
 
 ```bash
 .venv/bin/python -m pipeline ingest              # render all pages, list document ids (no model calls)
@@ -233,13 +244,13 @@ Environment variables, from the shell or `.env`:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `LLM_BACKEND` | `api` | `api`, `claude-code` or `openai` |
+| `LLM_BACKEND` | `api` (`openai` in `.env.example`) | `openai` (OpenRouter, Ollama), `api` (Anthropic API) or `claude-code` (CLI) |
+| `OPENAI_BASE_URL` / `OPENAI_API_KEY` | `http://localhost:11434/v1` / – | server and key for `openai`; OpenRouter in `.env.example` |
 | `ANTHROPIC_API_KEY` | – | key for `api` |
-| `OPENAI_BASE_URL` / `OPENAI_API_KEY` | `http://localhost:11434/v1` / – | server and key for `openai` |
 | `OPENROUTER_ZDR` | `1` | OpenRouter: zero-data-retention providers only |
 | `CLAUDE_CLI`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CLI_TOKEN_FILE` | `claude`, CLI default, – | CLI backend and its account |
-| `CLASSIFY_MODEL` / `CLASSIFY_EFFORT` | `claude-opus-5-5` / `low` | page classification |
-| `EXTRACT_MODEL` / `EXTRACT_EFFORT` | `claude-opus-5-5` / `medium` | log extraction |
+| `CLASSIFY_MODEL` / `CLASSIFY_EFFORT` | `claude-opus-5-5` / `low` | page classification (`anthropic/claude-haiku-5.5` in `.env.example`) |
+| `EXTRACT_MODEL` / `EXTRACT_EFFORT` | `claude-opus-5-5` / `medium` | log extraction (`anthropic/claude-haiku-5.5` in `.env.example`) |
 | `MAX_WORKERS` | `6` (API), `3` (CLI) | parallel model calls |
 | `AUTO_APPROVE_THRESHOLD` | `0.9` | release score for automatic release |
 | `MAX_UPLOAD_PAGES` | `100` | pages per upload batch |
@@ -256,12 +267,44 @@ corrections are lost**.
 
 | Symptom | Cause and fix |
 |---|---|
-| `401 invalid x-api-key` | The key is a subscription token, not an API key. Use a Console key or `LLM_BACKEND=claude-code`. |
-| `No Anthropic credentials` | No `.env` in the project root, or the variable is missing. |
+| `No key for https://openrouter.ai/api/v1` | No `.env` in the project root, or `OPENAI_API_KEY` is missing in it. |
+| OpenRouter answers `401` | `OPENROUTER_API_KEY` in `.env` is still the placeholder `sk-or-...`. |
+| OpenRouter: "no endpoints found" | The model has no zero-data-retention provider; pick another model or set `OPENROUTER_ZDR=0` if that is acceptable. |
+| `401 invalid x-api-key` (`LLM_BACKEND=api`) | The key is a subscription token, not an API key; see [Other model backends](#other-model-backends). |
 | Map stays empty, "Worker failed to load" | Old UI build: `npm --prefix web run build`, or restart the dev server. |
 | "No source page stored" on every record | The API serves the demo database; restart it without `DB_PATH`. |
 | "kept previous results for incomplete documents" | Some pages failed (rate limit, timeout); run again, finished pages come from the cache. |
 | Records unchanged after a code change | `pipeline rebuild`, then reload the UI. |
+
+## Other model backends
+
+<details>
+<summary>Anthropic API, Claude subscription through the Claude Code CLI, or a local model</summary>
+
+The model backend is one setting in `.env`; prompts, schemas and the cache work the same with each.
+
+**Claude Code CLI (Claude subscription).** With the `claude` CLI installed and logged in, the pipeline calls it in
+print mode and uses the subscription instead of a key. Slower and bound to the subscription's usage limits; the
+corpus was extracted this way with Opus:
+
+```dotenv
+LLM_BACKEND=claude-code
+CLASSIFY_MODEL=claude-opus-5-5
+EXTRACT_MODEL=claude-opus-5-5
+# another account than the CLI's default login:
+# CLAUDE_CONFIG_DIR=~/.claude-other   or   CLAUDE_CLI_TOKEN_FILE=~/path/to/token
+```
+
+The CLI backend strips API keys from the environment, so `claude -p` always uses its own login.
+
+**Anthropic API.** `LLM_BACKEND=api` with `ANTHROPIC_API_KEY=sk-ant-api03-…` from the Claude Console. A
+subscription token (`sk-ant-oat…`) is not an API key and fails with `401 invalid x-api-key`; use the CLI
+backend for it.
+
+**Local model (Ollama).** `LLM_BACKEND=openai`, `OPENAI_BASE_URL=http://localhost:11434/v1`,
+`EXTRACT_MODEL=qwen3-vl:8b-instruct`, `MAX_WORKERS=1`, and start Ollama with `OLLAMA_CONTEXT_LENGTH=32768`.
+
+</details>
 
 ## Data security
 
