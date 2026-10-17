@@ -41,7 +41,7 @@ from schema.borehole import (
 )
 
 from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLog
-from . import corrections
+from . import corrections, store
 from .georef import candidates, crs_from_hint, georeference, haversine_km, is_precise
 from .knowledge import printed_pair
 from .scoring import SOURCE_CONFLICTS, STRUCTURAL, counts_against, finding_severity, score
@@ -86,8 +86,7 @@ def _unique_ids(records: list[Borehole]) -> None:
     seen = Counter(bh.borehole_id for bh in records)
     for bh in records:
         if seen[bh.borehole_id] > 1:
-            doc_id = bh.borehole_id.split(":", 1)[0]
-            bh.borehole_id = f"{doc_id}:{id_key(bh.borehole_name, separate_numbers=True)}"
+            bh.borehole_id = f"{document_id(bh)}:{id_key(bh.borehole_name, separate_numbers=True)}"
 
 
 # Type words in hole names. Reports number boreholes and test pits separately ('1'..'6' and '1'..'20'),
@@ -916,7 +915,7 @@ def join_image_sheets(by_doc: dict[str, list[PageResult]], group_crs: dict[str, 
     singles: dict[str, list[str]] = defaultdict(list)
     for doc_id, pages in by_doc.items():
         if "__" in doc_id and len(pages) == 1:
-            singles[doc_id.split("__")[0]].append(doc_id)
+            singles[store.document_group(doc_id)].append(doc_id)
     for group, doc_ids in singles.items():
         open_holes: dict[tuple[str | None, str], tuple[str, list[tuple[XLog, SourceRef]], tuple[int, int]]] = {}
         for doc_id in sorted(doc_ids, key=_file_order):
@@ -967,14 +966,14 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
     # Folders of single images (e.g. one JPG per hole) form one document for CRS and position checks.
     by_group: dict[str, list[PageResult]] = defaultdict(list)
     for r in results:
-        by_group[r.doc_id.split("__")[0]].append(r)
+        by_group[store.document_group(r.doc_id)].append(r)
     group_crs = {g: document_crs(rs) for g, rs in by_group.items()}
     join_image_sheets(by_doc, group_crs)
 
     boreholes: list[Borehole] = []
     built: dict[str, list[tuple[Borehole, int, dict]]] = defaultdict(list)
     for doc_id, pages in by_doc.items():
-        group = doc_id.split("__")[0]
+        group = store.document_group(doc_id)
         pages.sort(key=lambda r: r.page)
         coord_rows: dict[str, XCoordinateRow] = {}
         groups: dict[str, list[tuple[XLog, SourceRef]]] = defaultdict(list)
@@ -1063,13 +1062,13 @@ LAYER_FINDINGS = STRUCTURAL + ("no layers extracted", "layer ", "minor discontin
 POSITION_FINDINGS = corrections.GEOREF_ISSUES + ("coordinate system from reviewer knowledge",)
 
 
-def _document(bh: Borehole) -> str:
+def document_id(bh: Borehole) -> str:
     return bh.borehole_id.split(":", 1)[0]
 
 
 def _group(bh: Borehole) -> str:
     """The folder or upload batch: files put together by a person, so one hole number there is one hole."""
-    return _document(bh).split("__")[0]
+    return store.document_group(bh.borehole_id)
 
 
 def _name_tokens(name: str) -> list[str]:
@@ -1085,7 +1084,7 @@ def _short_names(boreholes: list[Borehole]) -> dict[str, str]:
         mine = _name_tokens(bh.borehole_name)
         for other in boreholes:
             theirs = _name_tokens(other.borehole_name)
-            if (_group(other) == _group(bh) and _document(other) != _document(bh) and 2 <= len(theirs) < len(mine)
+            if (_group(other) == _group(bh) and document_id(other) != document_id(bh) and 2 <= len(theirs) < len(mine)
                     and mine[-len(theirs):] == theirs and any(t.isdigit() for t in theirs)):
                 out[bh.borehole_id] = hole_key(other.borehole_name, None)[1]
                 break
@@ -1095,7 +1094,7 @@ def _short_names(boreholes: list[Borehole]) -> dict[str, str]:
 def _where(bh: Borehole) -> str:
     src = bh.sources[0] if bh.sources else None
     if src is None:
-        return _document(bh)
+        return document_id(bh)
     return f"{src.file} p{src.page}" if src.page else src.file
 
 
@@ -1266,7 +1265,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
     clusters: dict[str, list[dict]] = defaultdict(list)
     kept: list[dict] = []
     for bh in sorted(boreholes, key=lambda b: b.borehole_id):
-        entry = {"bh": bh, "ids": {bh.borehole_id}, "docs": {_document(bh)}, "changed": False}
+        entry = {"bh": bh, "ids": {bh.borehole_id}, "docs": {document_id(bh)}, "changed": False}
         kept.append(entry)
         if any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
             continue
@@ -1275,7 +1274,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
         best = None
         for cluster in clusters[number]:
             other = cluster["bh"]
-            if _document(bh) in cluster["docs"] or (kind and _kind(other) and kind != _kind(other)):
+            if document_id(bh) in cluster["docs"] or (kind and _kind(other) and kind != _kind(other)):
                 continue
             reviews = [protected[i] for i in cluster["ids"] if i in protected]
             if review is not None and reviews and not any(review & r for r in reviews):
@@ -1298,7 +1297,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
         kept.pop()
         cluster["bh"] = combine(cluster["bh"], bh, how, agree, protected, judged)
         cluster["ids"].add(bh.borehole_id)
-        cluster["docs"].add(_document(bh))
+        cluster["docs"].add(document_id(bh))
         cluster["changed"] = True
     for entry in kept:
         if entry["changed"]:

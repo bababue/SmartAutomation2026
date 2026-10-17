@@ -303,7 +303,7 @@ def apply_all(con: sqlite3.Connection, boreholes: list[Borehole]) -> None:
 def prompt_context(con: sqlite3.Connection, doc_id: str) -> str:
     """Known facts for the extraction of a document's new pages ('' if none). Region and project come
     from earlier records of the document, if any."""
-    group = doc_id.split("__")[0]
+    group = store.document_group(doc_id)
     rows = con.execute("SELECT country, project FROM boreholes WHERE doc_id = ? OR doc_id LIKE ? ESCAPE '\\'",
                        (group, group.replace("_", "\\_") + "\\_\\_%")).fetchall()
     keys = {"document": group, "global": None,

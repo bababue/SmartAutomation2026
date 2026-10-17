@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from schema.borehole import Borehole, GeorefMethod
 
 from . import config
-from .assemble import norm_name
+from .assemble import document_id, norm_name
 from .extraction_models import CoordinateReading, PageExtraction
 from .georef import candidates, crs_from_hint, haversine_km, is_precise, resolve_with
 from .ingest import PageImage
@@ -66,7 +66,7 @@ def readings(items, read: Callable[[PageImage, tuple | None, str], CoordinateRea
 
 
 def _reading_for(bh: Borehole, found: dict[Key, CoordinateReading | None]) -> CoordinateReading | None:
-    doc_id, name, src = bh.borehole_id.split(":", 1)[0], norm_name(bh.borehole_name), bh.location.source
+    doc_id, name, src = document_id(bh), norm_name(bh.borehole_name), bh.location.source
     if bh.location.method == GeorefMethod.linked_table:
         rows = [r for (d, _, n, source), r in found.items() if d == doc_id and n == name and source == "table"]
         return rows[0] if len(rows) == 1 else None
