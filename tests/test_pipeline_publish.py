@@ -183,7 +183,7 @@ def test_fresh_database_stores_a_document_with_a_lost_hole_as_blocking(con):
     args[3][("report", 1)].logs = args[3][("report", 1)].logs[:1]
     assert cli._store(con, *args) == {"report"}
     bh = store.load_borehole(con, "report:BH1")
-    assert "log not extracted: page 1 shows 2 logs, 1 came back with layers" in bh.issues
+    assert "log not extracted: page 1 shows 2 logs, 1 came back" in bh.issues
     assert bh.review_status == ReviewStatus.pending_review
 
 
@@ -200,3 +200,13 @@ def test_eval_snapshot_keeps_lab_values_merged_from_a_duplicate(con, monkeypatch
     cli._store(con, docs, rendered, classes, extractions)
     (kept, extracted), = con.execute("SELECT id, extracted FROM boreholes").fetchall()
     assert sorted(value for _, value, *_ in json.loads(extracted)["lab"]) == [17.0, 42.0]
+
+
+def test_last_sheet_with_notes_only_is_not_a_lost_log(con):
+    docs, rendered, classes, extractions = inputs()
+    rendered["report"].append(PageImage("report", 2, "", "", "", 1, 1))
+    classes[("report", 2)] = classes[("report", 1)]
+    end_sheet = _log("BH1", "E 412000 N 5320000", 300, [])
+    extractions[("report", 2)] = PageExtraction(logs=[end_sheet], coordinate_rows=[])
+    assert cli._store(con, docs, rendered, classes, extractions) == {"report"}
+    assert not any(i.startswith("log not extracted") for i in store.load_borehole(con, "report:BH1").issues)

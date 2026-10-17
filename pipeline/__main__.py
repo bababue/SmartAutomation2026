@@ -238,17 +238,18 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     source_file = {d.doc_id: d.path for d in docs}
 
     def lost_logs(doc_id: str) -> list[str]:
-        """Log pages that came back with fewer holes than the classification counted. Counted, not matched by
-        name: the classification reads the thumbnail and often writes a hole's name differently. Probe records
-        (dynamic probe, CPT) often carry blow counts only, so they need no layers."""
+        """Log pages that came back with fewer logs than the classification counted. Counted, not matched by
+        name: the classification reads the thumbnail and often writes a hole's name differently. A log without
+        layers counts: a last sheet often holds only notes or the end-of-hole statement. Probe records (dynamic
+        probe, CPT) are left out, they often carry blow counts only."""
         lost = []
         for p in rendered[doc_id]:
             c = classes[(doc_id, p.page)]
             if c.kind.value in LOG_KINDS - {"probe_log"}:
-                found = sum(1 for log in extractions[(doc_id, p.page)].logs if log.layers)
+                found = len(extractions[(doc_id, p.page)].logs)
                 if found < max(len(c.logs), 1):
                     lost.append(f"log not extracted: page {p.page} shows {max(len(c.logs), 1)} logs, "
-                                f"{found} came back with layers")
+                                f"{found} came back")
         return lost
 
     def complete(doc_id: str) -> bool:
