@@ -25,7 +25,6 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
   const [open, setOpen] = useState(false)
   const status = bh.review_status
   const decided = status === 'approved' || status === 'rejected'
-  const changes = detail.changes_since_review
 
   async function decide(decision: ReviewStatus) {
     if (busy || decision === status) return
@@ -107,12 +106,6 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
         </div>
       </div>
       {!open && error && <p className="error" role="alert">{error}</p>}
-      {changes && (
-        <div className="checks review-changes">
-          <h3>Changed since {changes.decision} by {changes.reviewer} on {fmtDateTime(changes.at)}</h3>
-          <ul>{changes.changes.map((c, i) => <li key={i}>{c}</li>)}</ul>
-        </div>
-      )}
 
       {open && <div id="review-summary" className="review-summary">
       <div className="checks checks-score">

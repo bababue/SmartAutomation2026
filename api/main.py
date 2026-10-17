@@ -418,16 +418,13 @@ class Review(BaseModel):
 
 
 def _record(con: sqlite3.Connection, borehole_id: str) -> dict:
-    """The record with its review log, what changed since the last human decision, and the state a client
-    sends back with its next decision on it."""
+    """The record with its review log and the state a client sends back with its next decision on it."""
     row = con.execute("SELECT uid, data, content_hash, review_revision FROM boreholes WHERE id = ?",
                       (borehole_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "borehole not found")
-    bh = Borehole.model_validate_json(row["data"])
-    return {"borehole": bh, "review_log": store.review_log(con, borehole_id), "content_hash": row["content_hash"],
-            "review_revision": row["review_revision"], "uid": row["uid"],
-            "changes_since_review": store.changes_since_review(con, row["uid"], bh)}
+    return {"borehole": Borehole.model_validate_json(row["data"]), "review_log": store.review_log(con, borehole_id),
+            "content_hash": row["content_hash"], "review_revision": row["review_revision"], "uid": row["uid"]}
 
 
 @app.post("/api/boreholes/{borehole_id:path}/review")

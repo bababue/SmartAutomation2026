@@ -105,14 +105,6 @@ export interface ReviewEvent {
   at: string
 }
 
-/** What changed since the latest human decision on the hole. */
-export interface ReviewChanges {
-  decision: 'approved' | 'rejected'
-  reviewer: string
-  at: string
-  changes: string[]
-}
-
 export interface QueueItem {
   id: string
   name: string
@@ -250,14 +242,13 @@ export interface Detail {
   content_hash: string
   /** Review state the reviewer saw; a decision on an outdated state is refused. */
   review_revision: number
-  changes_since_review: ReviewChanges | null
   threshold: number
   /** The document-wide coordinate system confirmation this waiting hole belongs to, if any. */
   crs_group?: CrsGroup | null
 }
 
 /** What a review decision or a correction changes in the open record. */
-export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log' | 'content_hash' | 'review_revision' | 'changes_since_review'>
+export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log' | 'content_hash' | 'review_revision'>
   & Partial<Pick<Detail, 'corrections' | 'blocking'>>
 
 export interface Stats {
