@@ -135,6 +135,27 @@ export interface QueueItem {
   reasons: string[]
 }
 
+export type KnowledgeScope = 'document' | 'project' | 'region' | 'global'
+
+export interface KnowledgeItem {
+  id: number
+  scope_type: KnowledgeScope
+  scope_value: string | null
+  kind: 'crs' | 'term' | 'note'
+  payload: { epsg?: number; term?: string; primary?: string; text?: string }
+  source: 'derived' | 'review' | 'external'
+  note: string | null
+  created_by: string
+  created_at: string
+  confirmations: number
+}
+
+export interface KnowledgeList {
+  items: KnowledgeItem[]
+  scopes: Record<KnowledgeScope, string | null> | null
+  rebuild: { running: boolean; documents: number; error: string | null }
+}
+
 export interface CrsGroup {
   group: string
   epsg: number

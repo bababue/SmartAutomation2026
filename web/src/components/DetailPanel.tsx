@@ -3,6 +3,7 @@ import type { Detail, DetailUpdate, Layer, SourceRef } from '../types'
 import { SHOW_SOURCE_FILE } from '../dev'
 import { lithStyle, patternId } from '../lithology'
 import { CorrectionList, LayerAdder, LayerEditor, PositionCorrection, RecordEditor } from './Corrections'
+import { KnowledgePanel } from './Knowledge'
 import { Profile } from './Profile'
 import { ReviewBox, type QueueNav } from './ReviewBox'
 
@@ -142,6 +143,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
             </div>
           )}
           <CorrectionList items={detail.corrections ?? []} />
+          <KnowledgePanel boreholeId={bh.borehole_id} onChange={onReviewChange} />
 
           <h3 id="detail-record" className="section-head">
             Record

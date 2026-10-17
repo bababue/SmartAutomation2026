@@ -400,3 +400,12 @@ tr:hover .btn-edit, .btn-edit:focus-visible { opacity: 1; }
 .crs-groups li { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; font-size: 14px; }
 .crs-groups-name { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
 .crs-groups-name input { height: 28px; border: 1px solid var(--grid); border-radius: 3px; padding: 0 8px; }
+
+.knowledge { border: 1px solid var(--grid); border-radius: 3px; padding: 10px 12px; margin: 0 0 14px; background: #fbfcfb; }
+.knowledge h3 { margin: 0 0 6px; }
+.knowledge > p { font-size: 13px; margin: 0; }
+.knowledge-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.knowledge-list li { display: flex; gap: 8px; justify-content: space-between; align-items: start; }
+.knowledge textarea { width: 100%; border: 1px solid var(--grid); border-radius: 3px; font: inherit; padding: 4px 6px; }
+.knowledge select, .knowledge input { height: 30px; border: 1px solid var(--grid); border-radius: 3px; font: inherit; padding: 0 6px; }
+.remember { display: grid; gap: 4px; }

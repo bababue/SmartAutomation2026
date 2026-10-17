@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { postCorrection } from '../api'
 import { LITHOLOGY, lithStyle } from '../lithology'
 import { fmtDateTime, loadReviewer } from '../review'
-import type { Borehole, CorrectionKind, CorrectionRecord, DetailUpdate, Layer } from '../types'
+import type { Borehole, CorrectionKind, CorrectionRecord, DetailUpdate, KnowledgeScope, Layer } from '../types'
+import { rememberTerm } from '../knowledge'
 
 /** Sends corrections under the reviewer name from the release box; keeps a readable error. */
 function useCorrection(boreholeId: string, onChange: (update: DetailUpdate) => void) {
@@ -169,6 +170,9 @@ export function LayerEditor({ boreholeId, layer, onChange, onDone }: {
   const [code, setCode] = useState(str(layer.stratigraphic_code))
   const [stratName, setStratName] = useState(str(layer.stratigraphic_name))
   const [age, setAge] = useState(str(layer.geologic_age))
+  // The leading word(s) of the description, e.g. 'CALICHE' from 'CALICHE : Grey, ...'
+  const [term, setTerm] = useState(layer.description_original.split(/[:,;(]/)[0].trim().slice(0, 40))
+  const [remember, setRemember] = useState<KnowledgeScope | ''>('')
   const { send, busy, error } = useCorrection(boreholeId, onChange)
   const orig = { orig_top: layer.top_m, orig_bottom: layer.bottom_m }
 
@@ -181,7 +185,10 @@ export function LayerEditor({ boreholeId, layer, onChange, onDone }: {
     if (stratName.trim() !== str(layer.stratigraphic_name)) payload.stratigraphic_name = stratName.trim()
     if (age.trim() !== str(layer.geologic_age)) payload.geologic_age = age.trim()
     if (Object.keys(payload).length === 2) return onDone()  // nothing changed
-    if (await send([{ kind: 'layer', payload }])) onDone()
+    if (await send([{ kind: 'layer', payload }])) {
+      if (remember && primary !== layer.primary) await rememberTerm(boreholeId, term, primary, remember).catch(() => 0)
+      onDone()
+    }
   }
   async function remove() {
     if (await send([{ kind: 'layer', payload: { ...orig, delete: true } }])) onDone()
@@ -198,6 +205,17 @@ export function LayerEditor({ boreholeId, layer, onChange, onDone }: {
       </td>
       <td><textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} aria-label="Description as printed" /></td>
       <td className="strat-inputs">
+        {primary !== layer.primary && (
+          <span className="remember">
+            <select value={remember} onChange={(e) => setRemember(e.target.value as KnowledgeScope | '')} aria-label="Remember this term">
+              <option value="">Don’t remember</option>
+              <option value="document">Remember for this document</option>
+              <option value="project">… this project</option>
+              <option value="region">… this country</option>
+            </select>
+            {remember && <input value={term} onChange={(e) => setTerm(e.target.value)} aria-label="Term to remember" title="Descriptions containing this term get the same lithology" />}
+          </span>
+        )}
         <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="code" aria-label="Stratigraphic code" />
         <input value={stratName} onChange={(e) => setStratName(e.target.value)} placeholder="formation" aria-label="Stratigraphic name" />
         <input value={age} onChange={(e) => setAge(e.target.value)} placeholder="age" aria-label="Geologic age" />
