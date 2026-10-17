@@ -97,6 +97,21 @@ class QueuePage(BaseModel):
     total: int
 
 
+class QueueFinding(BaseModel):
+    code: str
+    severity: str
+    records: int
+
+
+class CrsGroup(BaseModel):
+    group: str
+    epsg: int
+    name: str
+    count: int
+    borehole_id: str
+    source_file: str | None
+
+
 class SourcePage(BaseModel):
     file: str
     page: int
@@ -139,6 +154,7 @@ class Detail(ReviewResult):
     corrections: list[CorrectionRecord]
     blocking: list[str]  # findings that keep the record in the queue whatever its score
     threshold: float
+    crs_group: CrsGroup | None  # the document-wide CRS confirmation this waiting hole belongs to
 
 
 class Stats(BaseModel):

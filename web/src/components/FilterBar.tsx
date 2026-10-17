@@ -1,13 +1,20 @@
 import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { parseDecimal, words } from '../format'
 import { lithStyle, patternId } from '../lithology'
+import { SEVERITY_LABEL } from '../review'
 import { DEFAULT_FILTERS, hasFilters } from '../url'
-import type { Filters, RangeFilter, StatusFilter } from '../types'
+import type { FindingFacet, Filters, QueuePosition, RangeFilter, ReviewFilters, StatusFilter } from '../types'
 
 const STATUS: [StatusFilter, string][] = [
   ['all', 'All'], ['released', 'Released'], ['pending', 'Waiting for review'], ['rejected', 'Rejected'],
 ]
-const POSITION: [number | null, string][] = [[null, 'Any'], [0.4, 'Medium or better'], [0.7, 'High only']]
+const POSITION: [QueuePosition | null, string][] = [
+  [null, 'Any'], ['printed', 'From printed coordinates'], ['estimated', 'Estimated from the place name'],
+  ['crs_inferred', 'Coordinate system inferred'], ['none', 'No position'],
+]
+const SEVERITIES = ['blocking', 'needs_look', 'warning'] as const
+// Findings the position filter already covers.
+const POSITION_FINDINGS = new Set(['crs_inferred', 'position_from_place', 'not_georeferenced'])
 const LAB: [string, string, string][] = [
   ['ucs', 'UCS', 'MPa'], ['cai', 'CAI', ''], ['tensile_strength', 'Tensile strength', 'MPa'],
   ['point_load_index', 'Point load Is50', 'MPa'], ['water_content', 'Water content', '%'],
@@ -15,7 +22,7 @@ const LAB: [string, string, string][] = [
 const labName = (key: string) => LAB.find(([k]) => k === key)?.[1] ?? words(key)
 const labUnit = (key: string) => LAB.find(([k]) => k === key)?.[2] ?? ''
 
-type Menu = 'status' | 'position' | 'lithology' | 'lab' | 'ground'
+type Menu = 'status' | 'position' | 'findings' | 'lithology' | 'lab' | 'ground'
 
 /** Material groups of the ground search (api/similar.py). */
 const MATERIALS = ['made ground', 'gravel', 'sand', 'silt', 'clay', 'organic', 'rock']
@@ -95,10 +102,12 @@ interface Props {
   /** Name of the document group the filter narrows to: its project, else the group itself. */
   groupLabel: string | null
   onShowTunnels: () => void
+  /** Review mode: only the filters of the waiting records, by position source and finding. */
+  review?: { filters: ReviewFilters; onChange: (filters: ReviewFilters) => void; findings: FindingFacet[] }
 }
 
 /** Filter pills; each opens a dropdown below the row. */
-export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShowTunnels }: Props) {
+export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShowTunnels, review }: Props) {
   const [open, setOpen] = useState<Menu | null>(null)
   const [top, setTop] = useState(0)
   const root = useRef<HTMLDivElement>(null)
@@ -117,6 +126,13 @@ export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShow
   const lithName = (key: string) => lithStyle(key).label
   const ground = filters.rockMax != null || filters.waterMax != null || filters.material.length > 0
   const active = hasFilters({ ...filters, q: '' })
+  const scored = filters.scoreMin != null || filters.scoreMax != null
+  const statusLabel = filters.status === 'all' ? (scored ? 'Score' : 'Release state') : STATUS.find(([s]) => s === filters.status)![1]
+  const scoreLabel = scored ? range({ key: '', min: filters.scoreMin, max: filters.scoreMax }) : ''
+  const rf = review?.filters
+  const setReview = (patch: Partial<ReviewFilters>) => review?.onChange({ ...review.filters, ...patch })
+  const findings = review?.findings.filter((f) => !POSITION_FINDINGS.has(f.code)) ?? []
+  const findingLabel = (f: string) => (f === 'blocking' || f === 'needs_look' ? `Any ${SEVERITY_LABEL[f].toLowerCase()}` : words(f))
   const [draft, setDraft] = useState({ group: 'sand', from: 0, to: 20, metres: 5 })
 
   function pill(menu: Menu, label: string, on: boolean) {
@@ -154,9 +170,17 @@ export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShow
 
   return (
     <div className="filters" ref={root}>
+      {rf ? (
+      <div className="filter-bar" role="group" aria-label="Review filters">
+        {pill('position', rf.position == null ? 'Position' : POSITION.find(([p]) => p === rf.position)![1], rf.position != null)}
+        {pill('findings', rf.finding ? findingLabel(rf.finding) : 'Findings', rf.finding != null)}
+        {(rf.position != null || rf.finding != null) && (
+          <button className="pill-reset" onClick={() => { setReview({ position: null, finding: null }); setOpen(null) }}>Reset</button>
+        )}
+      </div>
+      ) : (
       <div className="filter-bar" role="group" aria-label="Filters">
-        {pill('status', filters.status === 'all' ? 'Release state' : STATUS.find(([s]) => s === filters.status)![1], filters.status !== 'all')}
-        {pill('position', filters.minPosition == null ? 'Position' : `Position: ${POSITION.find(([p]) => p === filters.minPosition)?.[1] ?? filters.minPosition}`, filters.minPosition != null)}
+        {pill('status', `${statusLabel}${scoreLabel}`, filters.status !== 'all' || scored)}
         {lithologies.length > 0 && pill('lithology', liths.length ? summary(liths, lithName, false) : 'Lithology', liths.length > 0)}
         {pill('lab', lab.length ? summary(lab, labName, true) : 'Lab value', lab.length > 0)}
         {pill('ground', 'Ground', ground)}
@@ -190,11 +214,41 @@ export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShow
           }}>Reset</button>
         )}
       </div>
+      )}
 
       {open && (
         <div className="filter-menu" id="filter-menu" style={{ top }}>
-          {open === 'status' && options(STATUS, filters.status, (status) => set({ status }))}
-          {open === 'position' && options(POSITION, filters.minPosition, (minPosition) => set({ minPosition }))}
+          {open === 'status' && (
+            <>
+              {options(STATUS, filters.status, (status) => set({ status }))}
+              <label className="ground-field">Release score
+                <NumberField placeholder="0" value={filters.scoreMin} label="Lowest release score" onChange={(v) => set({ scoreMin: v })} />–
+                <NumberField placeholder="100" value={filters.scoreMax} label="Highest release score" onChange={(v) => set({ scoreMax: v })} />
+              </label>
+              <p className="menu-note">Score 0–100; records without a score fail any bound.</p>
+            </>
+          )}
+          {open === 'position' && rf && options(POSITION, rf.position, (position) => setReview({ position }))}
+          {open === 'findings' && rf && (
+            <ul className="menu-options menu-scroll" role="listbox" aria-label="Findings">
+              {([[null, 'Any'], ['blocking', 'Any blocking finding'], ['needs_look', 'Any finding that needs a look']] as const).map(([v, label]) => (
+                <li key={label}>
+                  <button role="option" aria-selected={rf.finding === v} className={`menu-option${rf.finding === v ? ' menu-option-on' : ''}`}
+                    onClick={() => { setReview({ finding: v }); setOpen(null) }}>{label}</button>
+                </li>
+              ))}
+              {SEVERITIES.map((sev) => findings.filter((f) => f.severity === sev).map((f, i) => (
+                <li key={f.code}>
+                  {i === 0 && <p className="menu-note menu-heading">{SEVERITY_LABEL[sev]}</p>}
+                  <button role="option" aria-selected={rf.finding === f.code}
+                    className={`menu-option${rf.finding === f.code ? ' menu-option-on' : ''}`}
+                    onClick={() => { setReview({ finding: f.code }); setOpen(null) }}>
+                    {words(f.code)} <span className="chip-n">{f.records.toLocaleString('en')}</span>
+                  </button>
+                </li>
+              )))}
+            </ul>
+          )}
           {open === 'lithology' && (
             <>
               <div className="chips" role="group" aria-label="Lithologies">

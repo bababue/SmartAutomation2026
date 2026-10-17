@@ -4,7 +4,8 @@ import { lithStyle, patternId } from '../lithology'
 import { CardHead, CorrectionList, LayersEditor, NotesEditor, RecordEditor, TestsEditor, type TestRow } from './Corrections'
 import { Profile } from './Profile'
 import { SimilarHoles } from './SimilarHoles'
-import { ReviewBox, type QueueNav } from './ReviewBox'
+import { ReviewBox } from './ReviewBox'
+import { ConfirmCrs } from './ConfirmCrs'
 import { withSuffix } from '../review'
 import { fmtNum, words } from '../format'
 
@@ -12,7 +13,10 @@ interface Props {
   detail: Detail
   onClose: () => void
   onReviewChange: (update: DetailUpdate) => void
-  nav: QueueNav | null
+  /** Review mode: opens the next record after a decision. */
+  onDecided?: () => void
+  /** Review mode: reloads after a document-wide coordinate system confirmation. */
+  onCrsConfirmed?: () => void
   onSourceToggle: (open: boolean) => void
   onSelect: (id: string) => void
   onFindLike: (like: NonNullable<SimilarGround['like']>) => void
@@ -35,7 +39,7 @@ function Level({ value, label }: { value: number | null; label: string }) {
   )
 }
 
-export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceToggle, onSelect, onFindLike }: Props) {
+export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsConfirmed, onSourceToggle, onSelect, onFindLike }: Props) {
   const bh = detail.borehole
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
@@ -86,17 +90,10 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
           <p className="detail-sub">{[bh.project_name, bh.location_name].filter(Boolean).join(', ') || 'No project name on the log'}</p>
         </div>
         <div className="detail-actions">
-          {nav && (
-            <div className="queue-nav" aria-label="Review queue position">
-              <button className="btn btn-icon" onClick={nav.prev ?? undefined} disabled={!nav.prev} aria-label="Previous in queue" title="Previous (←)">‹</button>
-              <span className="muted" title={`${nav.position} of ${nav.total} waiting`}>{nav.position} / {nav.total}</span>
-              <button className="btn btn-icon" onClick={nav.next ?? undefined} disabled={!nav.next} aria-label="Next in queue" title="Next (→)">›</button>
-            </div>
-          )}
           <button className="btn btn-icon" onClick={onClose} aria-label="Close details" title="Close (Esc)">✕</button>
         </div>
       </header>
-      <ReviewBox detail={detail} onChange={onReviewChange} nav={nav} findings={<>
+      <ReviewBox detail={detail} onChange={onReviewChange} onDecided={onDecided} findings={<>
         {blocking.size > 0 && (<><h4>Needs a person</h4><ul>{[...blocking].map((i) => <li key={i}>{i}</li>)}</ul></>)}
         {others.length > 0 && (<><h4>Other findings</h4><ul>{others.map((i) => <li key={i}>{i}</li>)}</ul></>)}
         {notes.length > 0 && (
@@ -109,6 +106,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
         <Level value={bh.confidence} label="Extraction" />
         <span title={`Position ${METHOD_TEXT[loc.method ?? ''] ?? 'unknown'}`}><Level value={loc.confidence} label="Position" /></span>
       </ReviewBox>
+      {onCrsConfirmed && detail.crs_group && <ConfirmCrs crs={detail.crs_group} onChanged={onCrsConfirmed} />}
 
       <div className={`detail-body${sourceOpen ? '' : ' source-closed'}`}>
         <section className="card detail-profile">

@@ -165,9 +165,18 @@ def list_filters(
     rock_head_max: float | None = Query(None, description="rock head at most this deep (m)"),
     groundwater_max: float | None = Query(None, description="groundwater at most this deep (m)"),
     material: list[str] = Query(default_factory=list, description="group:from_m:to_m:metres, e.g. sand:0:20:5"),
+    score_min: float | None = Query(None, ge=0, le=1, description="lowest release score"),
+    score_max: float | None = Query(None, ge=0, le=1, description="highest release score"),
 ) -> Where:
     """WHERE clauses of the filters the list, the map and the statistics share."""
     where, params = [], []
+    # A record without a score fails every score bound.
+    if score_min is not None:
+        where.append("score >= ?")
+        params.append(score_min)
+    if score_max is not None:
+        where.append("score <= ?")
+        params.append(score_max)
     if group:
         where.append(f"{GROUP} = ?")
         params.append(group)
@@ -275,18 +284,44 @@ def list_boreholes(
         "features": [_feature(r) for r in rows]})
 
 
+# Where a waiting record's position comes from; 'crs_inferred': its coordinate system is only inferred.
+QUEUE_POSITION = {
+    "printed": "lat IS NOT NULL AND loc_method IN ('stated_coordinates', 'linked_table', 'manual')",
+    "estimated": "lat IS NOT NULL AND loc_method = 'geocoded_place'",
+    "crs_inferred": "rid IN (SELECT rid FROM findings WHERE code = 'crs_inferred')",
+    "none": "lat IS NULL",
+}
+QueuePosition = Literal["printed", "estimated", "crs_inferred", "none"]
+
+
+def _queue_filters(blocking: bool, finding: str | None, position: QueuePosition | None) -> tuple[str, list]:
+    where, params = ["review_status = 'pending_review'"], []
+    if blocking:
+        where.append("rid IN (SELECT rid FROM findings WHERE severity = 'blocking')")
+    if finding in ("blocking", "needs_look"):
+        where.append("rid IN (SELECT rid FROM findings WHERE severity = ?)")
+        params.append(finding)
+    elif finding:
+        where.append("rid IN (SELECT rid FROM findings WHERE code = ?)")
+        params.append(finding)
+    if position:
+        where.append(QUEUE_POSITION[position])
+    return " AND ".join(where), params
+
+
 @app.get("/api/review-queue")
 def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
                  blocking: bool = Query(False, description="only records with a blocking finding"),
+                 finding: str | None = Query(None, description="a finding code, or a severity: 'blocking', 'needs_look'"),
+                 position: QueuePosition | None = Query(None, description="where the position comes from"),
                  audit: bool = Query(False, description="the release audit sample instead (any status)")
                  ) -> models.QueuePage:
     """Everything waiting for a human, weakest first (also records without a position), a page at a time."""
-    where, params = "review_status = 'pending_review'" + (
-        " AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = boreholes.rid AND f.severity = 'blocking')"
-        if blocking else ""), []
     if audit:  # automatic releases drawn for a person to check (`pipeline eval audit`)
         uids = [r["uid"] for r in (evaluate.load_audit() or {"records": []})["records"]]
         where, params = f"uid IN ({','.join('?' * len(uids)) or 'NULL'})", uids
+    else:
+        where, params = _queue_filters(blocking, finding, position)
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}", params).fetchone()[0]
     rows = con.execute(
         f"SELECT id, name, project, location_name, country, score, n_layers, {SOURCE_FILE}, reasons "
@@ -298,8 +333,19 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
     return models.QueuePage.model_validate({"items": items, "total": total})
 
 
+@app.get("/api/review-queue/findings")
+def queue_findings(con: DB, position: QueuePosition | None = None) -> list[models.QueueFinding]:
+    """Findings among the waiting records (of one position source, if given), for the queue filter. Notes that
+    hold nothing back are left out."""
+    where, params = _queue_filters(False, None, position)
+    rows = con.execute(
+        "SELECT code, severity, COUNT(DISTINCT rid) records FROM findings WHERE severity != 'info' AND rid IN "
+        f"(SELECT rid FROM boreholes WHERE {where}) GROUP BY code, severity ORDER BY records DESC", params)
+    return [models.QueueFinding(code=r["code"], severity=r["severity"], records=r["records"]) for r in rows]
+
+
 @app.get("/api/review-queue/crs-groups")
-def crs_groups(con: DB):
+def crs_groups(con: DB) -> list[models.CrsGroup]:
     """Documents whose waiting holes share one inferred coordinate system: a reviewer can confirm it
     for all of them at once (a document-wide CRS correction)."""
     groups: dict[tuple[str, int], dict] = {}
@@ -547,9 +593,15 @@ def get_borehole(borehole_id: str, con: DB) -> models.Detail:
         for f, p in sorted(pages, key=lambda x: (x[0], x[1] or 0))
         if f in docs and (docs[f], p) in stored
     ]
+    inferred = con.execute(
+        "SELECT f.epsg FROM findings f JOIN boreholes b ON b.rid = f.rid WHERE b.id = ? AND f.code = 'crs_inferred' "
+        "AND b.review_status = 'pending_review'", (borehole_id,)).fetchone()
+    # The document-wide confirmation this waiting hole belongs to, if its document has one.
+    crs_group = inferred and next((g for g in crs_groups(con) if g["group"] == store.document_group(borehole_id)
+                                   and g["epsg"] == inferred["epsg"]), None)
     return models.Detail.model_validate({
         **record, "source_pages": source_pages, "corrections": store.corrections_for(con, borehole_id, record["uid"]),
-        "blocking": _blocking(bh), "threshold": config.AUTO_APPROVE_THRESHOLD})
+        "blocking": _blocking(bh), "threshold": config.AUTO_APPROVE_THRESHOLD, "crs_group": crs_group or None})
 
 
 @app.post("/api/uploads")

@@ -123,6 +123,15 @@ export interface QueuePage {
   total: number
 }
 
+/** Where a waiting record's position comes from; 'crs_inferred': its coordinate system is only inferred. */
+export type QueuePosition = 'printed' | 'estimated' | 'crs_inferred' | 'none'
+
+export interface ReviewFilters {
+  /** A finding code, or a severity: 'blocking', 'needs_look'. */
+  finding: string | null
+  position: QueuePosition | null
+}
+
 export interface CrsGroup {
   group: string
   epsg: number
@@ -180,6 +189,15 @@ export interface FeatureCollection<P = BoreholeSummary> {
   facets?: { lithologies: [string, number][]; groups: GroupFacet[] }
 }
 
+export type Severity = 'blocking' | 'needs_look' | 'warning' | 'info'
+
+/** How many waiting records carry a finding (notes that hold nothing back are left out). */
+export interface FindingFacet {
+  code: string
+  severity: Exclude<Severity, 'info'>
+  records: number
+}
+
 /** A document group among all matches: its project, how many holes, how many released, where. */
 export interface GroupFacet {
   group: string
@@ -217,6 +235,8 @@ export interface Detail {
   /** Review state the reviewer saw; a decision on an outdated state is refused. */
   review_revision: number
   threshold: number
+  /** The document-wide coordinate system confirmation this waiting hole belongs to, if any. */
+  crs_group?: CrsGroup | null
 }
 
 /** What a review decision or a correction changes in the open record. */
@@ -243,7 +263,7 @@ export interface StatsDetail {
   funnel: { records: number; without_blocking: number; released_automatically: number; released: number }
   threshold: number
   /** Blocking first, then needs a look, warnings and notes; most records first within each. */
-  findings: { code: string; severity: 'blocking' | 'needs_look' | 'warning' | 'info'; records: number; count: number }[]
+  findings: { code: string; severity: Severity; records: number; count: number }[]
   /** Logged metres per lithology, most first. */
   lithology_m: [string, number][]
   depth_bin_m: number
@@ -298,8 +318,10 @@ export interface Filters {
   lithology: RangeFilter[]
   /** Lab parameters that must all be measured, each within its value range. */
   lab: RangeFilter[]
-  minPosition: number | null
   status: StatusFilter
+  /** Release score bounds on the 0–100 scale shown in the UI. */
+  scoreMin: number | null
+  scoreMax: number | null
   /** Only the holes of this document group. */
   group: string | null
   /** Ground search: rock head and groundwater at most this deep (m). */

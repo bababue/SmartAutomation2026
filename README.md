@@ -178,12 +178,15 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
 
 - **Map:** clusters by location, colour by release state, a ring for a position estimated from a place name.
   From zoom 15, holes become 3D columns with lithology bands at a 1:1 metre scale.
-- **Search and filters:** full text over names, projects, places and layer descriptions; release state,
-  position quality, lithology, depth to rock, groundwater.
+- **Search and filters:** full text over names, projects, places and layer descriptions; release state and
+  score range, lithology, depth to rock, groundwater.
 - **Detail:** two-column profile (stratigraphy, DIN 4023 lithology), layers, tests and lab values next to the
   original page; hovering a value outlines where it was read. Similar holes by ground profile.
-- **Review queue:** approve with `A`, reject with `R`, `←`/`→` to move, `Esc` to close; the next record opens
-  automatically.
+- **Review** (menu): the list shows the waiting records, lowest score first, also those without a position.
+  Filter them by where the position comes from (printed coordinates, estimated from the place name, inferred
+  coordinate system, none) and by finding. Approve with `A`, reject with `R`, `Esc` to close; the next record
+  opens automatically. A document whose waiting holes share an inferred coordinate system shows "Confirm for all
+  n" in the detail of each of them. The statistics open the release audit sample in the same list.
 - **Tunnel routes:** choose **Tunnels** beside the borehole filters. The sidebar groups saved tunnels by the
   project shared by the most selected boreholes; tunnels without a project appear first. Choose **New tunnel**
   from the menu to create one. Its settings open on the right. Draw an alignment or import a WGS84 GeoJSON
