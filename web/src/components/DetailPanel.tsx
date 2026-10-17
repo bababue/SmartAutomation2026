@@ -7,7 +7,7 @@ import { SimilarHoles } from './SimilarHoles'
 import { ReviewBox } from './ReviewBox'
 import { ConfirmCrs } from './ConfirmCrs'
 import { withSuffix } from '../review'
-import { fmtNum, words } from '../format'
+import { fmtError, fmtNum, words } from '../format'
 
 interface Props {
   detail: Detail
@@ -122,7 +122,10 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
             <dt>Position (WGS84)</dt>
             <dd>
               {loc.lat != null ? `${fmtNum(loc.lat, 6)}, ${fmtNum(loc.lon, 6)}` : '–'}
-              {loc.crs_epsg && loc.method !== 'manual' ? <span className="muted"> via EPSG:{loc.crs_epsg}</span> : null}
+              {loc.method === 'geocoded_place' ? <span className="muted"> · approximate, from the place name
+                {loc.accuracy_m != null && ` (± ${fmtError(loc.accuracy_m)})`}</span>
+                : loc.method === 'manual' ? <span className="muted"> · set by a reviewer</span>
+                : loc.crs_epsg ? <span className="muted"> via EPSG:{loc.crs_epsg}</span> : null}
               {loc.crs_candidates.length > 1 && <span className="muted"> (also possible: {loc.crs_candidates.slice(1).join(', ')})</span>}
             </dd>
             <dt>Ground level</dt><dd>{withSuffix(bh.surface_elevation_raw ?? fmtNum(bh.surface_elevation_m), bh.elevation_datum)}</dd>

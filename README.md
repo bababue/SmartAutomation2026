@@ -47,7 +47,7 @@ public places; the statistics page then shows the committed evaluation snapshot
 | **Extraction** | Every page is classified on a thumbnail; only log, coordinate-table and lab pages are read at full resolution by a vision LLM (the corpus with Claude Opus 5.5) into a slim schema. Multi-sheet logs are joined in code. | 50 challenge documents, 1,037 pages, 364 holes. Against 144 records a person checked: **97.9 %** of layer boundaries found within 0.1 m (96.6 % of the model's boundaries are in the reference), **94.5 %** of the logged metres with the same lithology, **98.6 %** final depth, all groundwater levels and **97.7 %** of lab values ([Evaluation](#evaluation)). |
 | **Standardisation** | One Pydantic model ([`schema/borehole.py`](schema/borehole.py)): depths in metres, lithology as DIN 4023 classes, stratigraphy code and colour, description in the original language plus English, lab values with qualifiers and ranges. | Export in Herrenknecht's *BoreholeDataFormat* (all seven sheets) and as CSV. |
 | **Georeferencing** | The model copies coordinates and CRS text verbatim; code parses every notation, resolves the CRS to an EPSG code, transforms to WGS84 and checks the result against the named place. Printed coordinates are read a second time. | Notations tested with public landmarks in [`tests/test_georef.py`](tests/test_georef.py): UTM, national grids, DMS, decimal minutes, hemisphere letters, packed and unsigned values. Ambiguous or merely inferred systems never release automatically. |
-| **Reliability** | Release score = min(extraction, position confidence), computed from evidence, never self-reported by the model. Blocking findings always go to review; human decisions stay bound to the record's content. | Audit of 73 randomly drawn automatic releases, each checked by a person: 0 needed a correction (95 % CI 0–5 %). |
+| **Reliability** | Release score = min(extraction, position confidence), computed from evidence, never self-reported by the model. Blocking findings always go to review; human decisions stay bound to the record's content. | Audit of 73 randomly drawn automatic releases, each checked by a person: 0 needed a correction (95 % CI 0–5 %); checked records count as approved by a person afterwards. |
 | **Storage and search** | SQLite with R-tree (map box) and FTS5 (full text), queryable layer and lab tables, every review decision logged. | Measured once with 50,000 generated holes: map points 0.8 s, list page 0.3 s, "clay between 10 and 20 m" 0.2 s ([Data model](#data-model)). |
 | **World map** | React + MapLibre: clusters, filters, 3D columns, profile next to the source page, tunnel route section, similar ground. | Modelled on the LGRB borehole portal (bohrungen.lgrb-bw.de). |
 | **Data security** | Pages are processed one by one, locally rendered; the model provider is a setting (Claude, zero-data-retention OpenRouter, or a local model); offline gazetteer. | [Data security](#data-security). |
@@ -228,15 +228,17 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
   LineString, select boreholes in the corridor, and view the longitudinal section below the map. Spans over
   150 m are drawn lighter as less certain. The other saved tunnels stay visible on the map. Tunnels and selected
   boreholes are saved in this browser, and the selected tunnel reopens from its URL after a reload.
-- **Statistics:** a headline strip over the whole database, one figure per challenge claim, each leading to its
-  evidence: share of holes positioned from printed coordinates, layer boundaries found, automatic releases found
-  wrong in the release audit, records waiting for review. Two tabs. **Data**, for the current filter: a
-  coordinates card (how each position was obtained, how the coordinate system was settled, EPSG codes, position
-  error against the reference over the whole database, positions deliberately left for a reviewer), key figures,
-  release funnel, final depths, lithology, findings and documents with their most frequent finding.
-  **Quality & models**: extraction quality against the reviewed reference, the release audit, Opus against
-  Haiku with cost per page, the wider benchmark, the prompt experiments side by side and the recorded model
-  calls.
+- **Statistics:** four tabs. **Overview** opens with three headline figures over the whole database, each
+  leading to its evidence: share of holes positioned from printed coordinates, layer boundaries found in the
+  human-checked records, and audited automatic releases found wrong. Below, for the current filter: a coordinates
+  section (how each position was obtained, how the coordinate system was settled, EPSG codes, position error on
+  the checked records, positions deliberately left for a reviewer), the release funnel, and under **More
+  figures** key figures, release state, final depths, lithology, findings and documents with their most frequent
+  finding. Figures from the committed evaluation snapshot say so. **How it works**: the steps from page to
+  record, the release score rules and the principles behind them. **Models**: every tested model, measured on
+  the checked records or screened against the reference model, with cost and time per page. **Details**:
+  extraction quality, the release audit, the full model comparison, the wider benchmark, the prompt versions and
+  the recorded model calls.
 - **Export:** released records as BoreholeDataFormat workbook or CSV, one row per layer.
 
 ## Evaluation
@@ -297,7 +299,8 @@ Measured once on a laptop with 50,000 generated holes (1 GB): map points 0.8 s /
 | `ingest` | discover files, render pages, text layers |
 | `llm`, `extraction_models` | classification and extraction calls, page cache, the slim extraction schema |
 | `runner`, `uploads` | command-line runs and the web upload queue |
-| `assemble` | join sheets into holes, link coordinate tables and lab sheets, combine copies |
+| `assemble` | join sheets into holes, link coordinate tables and lab sheets |
+| `identity`, `labs`, `dedupe` | hole names and ids, lab values and units, copies of a hole across documents combined |
 | `georef`, `coordcheck`, `gazetteer` | parse coordinates, resolve the CRS, second coordinate reading, offline place lookup |
 | `knowledge`, `corrections` | reviewer knowledge and corrections applied on every run |
 | `scoring`, `injection` | release score, findings, prompt-injection check |

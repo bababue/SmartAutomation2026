@@ -56,6 +56,9 @@ export default function App() {
   const [queueFindings, setQueueFindings] = useState<FindingFacet[]>([])
   const [crsGroups, setCrsGroups] = useState<CrsGroup[]>([])
   const [error, setError] = useState<string | null>(null)
+  // Kept apart from `error`, which every list load clears, so a record that failed to open stays reported.
+  const [detailError, setDetailError] = useState<string | null>(null)
+  const notice = detailError ?? error
   const [stats, setStats] = useState<Stats | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId)
   const [hoveredHoleId, setHoveredHoleId] = useState<string | null>(null)
@@ -223,13 +226,20 @@ export default function App() {
     if (!selectedId) return
     const ctrl = new AbortController()
     fetchDetail(selectedId, ctrl.signal)
-      .then(setDetail)
+      .then((d) => { setDetail(d); setDetailError(null) })
       .catch((e) => {
         if (e.name === 'AbortError') return
         // The sheet must not keep showing the previous record; the error shows in the list.
         setDetail(null)
         setListOpen(true)
-        setError(`Could not load the borehole (${e.message}).`)
+        if (e.message.startsWith('404')) {
+          // An outdated link: the id leaves the address in place, so Back does not lead to it again.
+          const url = new URL(window.location.href)
+          url.searchParams.delete('borehole')
+          window.history.replaceState(null, '', url)
+          setSelectedId(null)
+          setDetailError(`No borehole with the id “${selectedId}”: the link may be out of date.`)
+        } else setDetailError(`Could not load the borehole (${e.message}).`)
       })
     return () => ctrl.abort()
   }, [selectedId, refresh])
@@ -265,7 +275,8 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e.target)) return
-      if (e.key === 'Escape') setSelectedId(null)
+      // An open card editor keeps the record, so Esc never drops its drafts.
+      if (e.key === 'Escape' && !document.querySelector('.detail .card-editing, .detail .head-edit')) setSelectedId(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -428,7 +439,7 @@ export default function App() {
             {stats.boreholes > stats.located ? <button className="link-button muted" onClick={() => {
               const f: ReviewFilters = { ...DEFAULT_REVIEW_FILTERS, position: 'none' }
               setRouteActive(false); setSelectedId(null); setListOpen(true); setAuditOnly(false)
-              setReviewFilters(f); setView('review'); setGrouped(false)
+              setReviewFilters(f); setView('review')
               fetchQueue(f, undefined, 1).then(({ items }) => { if (items[0]) setSelectedId(items[0].id) }).catch(() => undefined)
             }}>{(stats.boreholes - stats.located).toLocaleString('en')} without position</button>
               : <span>0 without position</span>}
@@ -469,7 +480,7 @@ export default function App() {
           <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies}
             review={{ filters: reviewFilters, onChange: setReviewFilters, findings: queueFindings }} />
         )}
-        {error && <p className="error" role="alert">{error}</p>}
+        {notice && <p className="error" role="alert">{notice}</p>}
         <ReviewList items={queue} groups={queueGroups} total={queueTotal} loading={queueLoadedKey !== queueKey} audit={auditOnly}
           noun={auditOnly ? 'sampled' : QUEUE_NOUN[reviewFilters.status]}
           grouped={grouped} onGroupedChange={setGrouped}
@@ -481,7 +492,7 @@ export default function App() {
           <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
           <GroupingToggle grouped={grouped} onChange={setGrouped} />
         </div>
-        {error && <p className="error" role="alert">{error}</p>}
+        {notice && <p className="error" role="alert">{notice}</p>}
         <ResultList features={listFeatures} groups={data.facets?.groups ?? []} activeGroup={filters.group} grouped={grouped}
           onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })) }}
           selectedId={selectedId} onSelect={toggleSelected} loading={loading} />

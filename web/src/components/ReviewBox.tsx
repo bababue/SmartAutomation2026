@@ -28,7 +28,8 @@ export function ReviewBox({ detail, onChange, onDecided }: Props) {
   // Two key presses can land before a re-render shows `busy`.
   const submitting = useRef(false)
   const [error, setError] = useState<string | null>(null)
-  const [open, setOpen] = useState(false)
+  // In review mode the decision controls are what the record is opened for.
+  const [open, setOpen] = useState(!!onDecided)
   const status = bh.review_status
   const decided = status === 'approved' || status === 'rejected'
   const severity = detail.severity ?? {}

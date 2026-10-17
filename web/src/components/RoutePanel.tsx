@@ -128,7 +128,9 @@ export function RoutePanel({ name, project, route, draft, candidates, selectedId
             </label>
           </section>
         </>}
-        <button className="route-delete" onClick={onDelete}>Delete tunnel</button>
+        <button className="route-delete" onClick={() => {
+          if (window.confirm(`Delete “${name || 'Tunnel'}”? Tunnels are saved only in this browser, so it cannot be restored.`)) onDelete()
+        }}>Delete tunnel</button>
       </div>
     </section>
   )

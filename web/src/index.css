@@ -97,7 +97,8 @@ button, input, select { font: inherit; color: inherit; }
 .topbar {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 1fr minmax(0, 620px) 1fr;
+  /* The search gives way first: the demo flag and the record counts must stay readable. */
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, 620px) minmax(max-content, 1fr);
   position: relative;
   align-items: center;
   gap: 24px;
@@ -686,6 +687,12 @@ button, input, select { font: inherit; color: inherit; }
   }
   .source-closed { grid-template-columns: minmax(0, 1fr); grid-template-areas: "profile" "data"; }
   .detail-profile { max-height: 34vh; overflow: auto; }
+}
+/* Too narrow for all three in one row: the search moves below the logo and the counts. */
+@media (min-width: 761px) and (max-width: 1000px) {
+  :root { --top: 96px; }
+  .topbar { grid-template-columns: max-content 1fr; row-gap: 8px; align-content: center; }
+  .search { grid-column: 1 / -1; grid-row: 2; }
 }
 @media (max-width: 760px) {
   .review-form { grid-template-columns: 1fr; }

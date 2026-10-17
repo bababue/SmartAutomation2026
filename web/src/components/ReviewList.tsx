@@ -29,16 +29,19 @@ export function ReviewList({ items, groups, total, loading, audit, noun, selecte
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const byGroup = new Map<string, QueueItem[]>()
   for (const item of items) byGroup.set(item.grp, [...(byGroup.get(item.grp) ?? []), item])
-  // A record opened from elsewhere shows inside its group.
-  const selectedGroup = items.find((it) => it.id === selectedId)?.grp
+  // A record opened from elsewhere shows inside its group; with none open, the group of the weakest record opens.
+  const leadGroup = items.find((it) => it.id === selectedId)?.grp ?? items[0]?.grp
   const [shownFor, setShownFor] = useState<string | undefined>()
-  if (selectedGroup !== shownFor) {
-    setShownFor(selectedGroup)
-    if (selectedGroup && !expanded.has(selectedGroup)) setExpanded(new Set(expanded).add(selectedGroup))
+  // Not while loading: the items may still be those of the previous filters.
+  if (!loading && leadGroup !== shownFor) {
+    setShownFor(leadGroup)
+    if (leadGroup && !expanded.has(leadGroup)) setExpanded(new Set(expanded).add(leadGroup))
   }
-  // The selected record's group leads, then the groups with matching records.
-  const rank = (g: string) => (g === selectedGroup ? 0 : byGroup.has(g) ? 1 : 2)
-  const orderedGroups = [...groups].sort((a, b) => rank(a.group) - rank(b.group))
+  // That group leads, then the groups with matching records, each by name.
+  const rank = (g: string) => (g === leadGroup ? 0 : byGroup.has(g) ? 1 : 2)
+  const name = (g: Props['groups'][number]) => g.project ?? g.group
+  const orderedGroups = [...groups].sort((a, b) =>
+    rank(a.group) - rank(b.group) || name(a).localeCompare(name(b), undefined, { numeric: true }))
   function toggle(group: string) {
     setExpanded((current) => {
       const next = new Set(current)
@@ -93,7 +96,7 @@ export function ReviewList({ items, groups, total, loading, audit, noun, selecte
               <div className="group-head">
                 <button className="group-toggle" onClick={() => toggle(group.group)} aria-expanded={open}>
                   <svg width={10} height={10} viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 3.5L5 7l3.5-3.5" /></svg>
-                  <span className="group-name">{group.project ?? group.group}</span>
+                  <span className="group-name">{name(group)}</span>
                   <span className="group-meta">{group.project ? `${group.group} · ` : ''}{group.count.toLocaleString('en')} {group.count === 1 ? 'hole' : 'holes'} · {share} % released</span>
                   <span className="group-share" aria-hidden="true"><span style={{ width: `${share}%` }} /></span>
                 </button>

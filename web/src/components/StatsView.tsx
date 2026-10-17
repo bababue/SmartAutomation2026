@@ -38,6 +38,12 @@ const DETERMINATION: [CrsDetermination, string, string][] = [
   ['ambiguous', 'Ambiguous', 'several systems fit: held for a person to decide'],
 ]
 
+/** Where the evaluation figures come from, when not this installation's own data. */
+function Snapshot({ quality }: { quality: Quality | null }) {
+  if (quality?.source !== 'snapshot' || !quality.evaluation) return null
+  return <> (evaluation snapshot of <span className="num">{quality.evaluation.generated}</span>)</>
+}
+
 function reveal(target: Target): boolean {
   const el = document.getElementById(target)
   if (!el) return false
@@ -144,7 +150,8 @@ function Claims({ whole, quality, onOpen }: {
         onClick={() => onOpen('overview', 'coordinates')} />
       <Claim figure={!quality ? loading : found?.of ? `${((100 * found.hit) / found.of).toFixed(1)} %` : 'n/a'}
         label="of layer boundaries found"
-        note={quality && (ev && found?.of ? `in ${n(ev.reference.records)} human-checked records` : 'no checked records yet')}
+        note={quality && (ev && found?.of ? <>in {n(ev.reference.records)} human-checked records<Snapshot quality={quality} /></>
+          : 'no checked records yet')}
         onClick={() => onOpen('details', 'extraction-quality')} />
       <Claim figure={!quality ? loading : audit?.reviewed ? <>{n(audit.wrong)}<small> / {n(audit.reviewed)}</small></> : 'n/a'}
         label="audited automatic releases wrong"
@@ -155,7 +162,7 @@ function Claims({ whole, quality, onOpen }: {
   )
 }
 
-function Claim({ figure, label, note, onClick }: { figure: ReactNode; label: string; note: string | null; onClick: () => void }) {
+function Claim({ figure, label, note, onClick }: { figure: ReactNode; label: string; note: ReactNode; onClick: () => void }) {
   return (
     <li>
       <button className="claim" onClick={onClick}>
@@ -371,7 +378,7 @@ function Coordinates({ s, quality, onReview }: { s: StatsDetail; quality: Qualit
         </div>
       </div>
       <p className="stats-note">
-        {ev && <>Position error on checked records: median <b>{fmtError(ev.current.position_median_m)}</b>, largest{' '}
+        {ev && <>Position error on checked records<Snapshot quality={quality} />: median <b>{fmtError(ev.current.position_median_m)}</b>, largest{' '}
           <b>{fmtError(ev.current.position_max_m)}</b>. </>}
         <b>{n(s.positions_withheld)}</b> {s.positions_withheld === 1 ? 'hole' : 'holes'} held back: they would share one place-name point.{' '}
         {s.positions_withheld > 0 && (

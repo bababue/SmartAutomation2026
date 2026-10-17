@@ -108,22 +108,36 @@ export function validateRouteCoordinates(value: unknown): RoutePoint[] {
   return points
 }
 
+/** The vertices of a LineString, or of a MultiLineString with a single line (as GIS exports often write one). */
+function lineOf(geometry: unknown): unknown {
+  const g = (geometry && typeof geometry === 'object' ? geometry : {}) as { type?: unknown; coordinates?: unknown }
+  if (g.type === 'LineString') return g.coordinates
+  if (g.type === 'MultiLineString' && Array.isArray(g.coordinates) && g.coordinates.length === 1) return g.coordinates[0]
+  return undefined
+}
+
 export function routeFromGeoJson(text: string, fallbackName: string): TunnelRoute {
-  const input: unknown = JSON.parse(text)
+  let input: unknown
+  try {
+    input = JSON.parse(text)
+  } catch {
+    throw new Error('Not valid GeoJSON: the file is not readable as JSON.')
+  }
   if (!input || typeof input !== 'object') throw new Error('Expected a GeoJSON LineString.')
   const object = input as Record<string, unknown>
   const feature = object.type === 'FeatureCollection' && Array.isArray(object.features)
-    ? object.features.find((item) => item && typeof item === 'object' && (item as { geometry?: { type?: string } }).geometry?.type === 'LineString')
+    ? object.features.find((item) => item && typeof item === 'object' && lineOf((item as { geometry?: unknown }).geometry) !== undefined)
     : object
   const record = feature && typeof feature === 'object' ? feature as Record<string, unknown> : {}
   const geometry = record.type === 'Feature' ? record.geometry : record
-  if (!geometry || typeof geometry !== 'object' || (geometry as { type?: string }).type !== 'LineString') {
-    throw new Error('Choose a GeoJSON LineString or a FeatureCollection containing one.')
+  const coordinates = lineOf(geometry)
+  if (coordinates === undefined) {
+    throw new Error('A route is one line: choose a GeoJSON LineString (or a MultiLineString with a single line), or a FeatureCollection containing one.')
   }
   const properties = record.properties && typeof record.properties === 'object' ? record.properties as Record<string, unknown> : {}
   return {
     name: typeof properties.name === 'string' && properties.name.trim() ? properties.name.trim() : fallbackName,
-    coordinates: validateRouteCoordinates((geometry as { coordinates?: unknown }).coordinates),
+    coordinates: validateRouteCoordinates(coordinates),
     corridorM: 50,
     tunnelMode: 'depth',
     depthM: null,
