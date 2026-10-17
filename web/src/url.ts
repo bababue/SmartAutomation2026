@@ -1,5 +1,5 @@
 import { parseDecimal } from './format'
-import type { Filters, RangeFilter, StatusFilter } from './types'
+import type { Filters, QueuePosition, RangeFilter, ReviewFilters, StatusFilter } from './types'
 
 export type View = 'map' | 'review' | 'stats'
 
@@ -10,25 +10,27 @@ export interface UrlState {
   selectedId: string | null
   listOpen: boolean
   filters: Filters
-  /** Review queue: only records with a blocking finding. */
-  blockingOnly: boolean
-  /** Review queue: the release audit sample instead (automatic releases drawn for a person to check). */
+  reviewFilters: ReviewFilters
+  /** Review mode: the release audit sample instead (automatic releases drawn for a person to check). */
   auditOnly: boolean
 }
 
 const STATUSES: StatusFilter[] = ['all', 'released', 'pending', 'rejected']
 const VIEWS: View[] = ['map', 'review', 'stats']
+const POSITIONS: QueuePosition[] = ['printed', 'estimated', 'crs_inferred', 'none']
 
 const num = (v: string | null) => (v == null ? null : parseDecimal(v))
 
 export const DEFAULT_FILTERS: Filters = {
-  q: '', lithology: [], lab: [], minPosition: null, status: 'all', group: null, rockMax: null, waterMax: null, material: [],
+  q: '', lithology: [], lab: [], status: 'all', scoreMin: null, scoreMax: null, group: null, rockMax: null, waterMax: null,
+  material: [],
 }
+export const DEFAULT_REVIEW_FILTERS: ReviewFilters = { finding: null, position: null }
 
 /** Whether the filters narrow the records at all. */
 export function hasFilters(f: Filters): boolean {
-  return Boolean(f.q.trim() || f.lithology.length || f.lab.length || f.minPosition != null || f.status !== 'all' || f.group ||
-    f.rockMax != null || f.waterMax != null || f.material.length)
+  return Boolean(f.q.trim() || f.lithology.length || f.lab.length || f.status !== 'all' || f.group ||
+    f.rockMax != null || f.waterMax != null || f.material.length || f.scoreMin != null || f.scoreMax != null)
 }
 
 /** 'key', or 'key:min:max' with either bound left empty; the format the API reads too. */
@@ -49,15 +51,19 @@ export function readUrl(search: string): UrlState {
     routeActive: p.get('route') === '1',
     tunnelId: p.get('tunnel'),
     selectedId: p.get('borehole'),
-    blockingOnly: p.get('blocking') === '1',
     auditOnly: p.get('audit') === '1',
     listOpen: p.get('list') !== 'closed',
+    reviewFilters: {
+      finding: p.get('finding'),
+      position: POSITIONS.find((x) => x === p.get('position')) ?? null,
+    },
     filters: {
       q: p.get('q') ?? '',
       lithology: p.getAll('lith').filter(Boolean).map(decodeRange),
       lab: p.getAll('lab').filter(Boolean).map(decodeRange),
-      minPosition: num(p.get('position')),
       status: status && STATUSES.includes(status) ? status : 'all',
+      scoreMin: num(p.get('smin')),
+      scoreMax: num(p.get('smax')),
       group: p.get('group'),
       rockMax: num(p.get('rock')),
       waterMax: num(p.get('water')),
@@ -73,14 +79,16 @@ export function writeUrl(s: UrlState): string {
   if (s.routeActive) p.set('route', '1')
   if (s.routeActive && s.tunnelId) p.set('tunnel', s.tunnelId)
   if (s.selectedId) p.set('borehole', s.selectedId)
-  if (s.blockingOnly) p.set('blocking', '1')
   if (s.auditOnly) p.set('audit', '1')
   if (!s.listOpen) p.set('list', 'closed')
   if (f.q.trim()) p.set('q', f.q.trim())
   f.lithology.forEach((l) => p.append('lith', encodeRange(l)))
   f.lab.forEach((l) => p.append('lab', encodeRange(l)))
-  if (f.minPosition != null) p.set('position', String(f.minPosition))
   if (f.status !== 'all') p.set('status', f.status)
+  if (s.reviewFilters.finding) p.set('finding', s.reviewFilters.finding)
+  if (s.reviewFilters.position) p.set('position', s.reviewFilters.position)
+  if (f.scoreMin != null) p.set('smin', String(f.scoreMin))
+  if (f.scoreMax != null) p.set('smax', String(f.scoreMax))
   if (f.group) p.set('group', f.group)
   if (f.rockMax != null) p.set('rock', String(f.rockMax))
   if (f.waterMax != null) p.set('water', String(f.waterMax))

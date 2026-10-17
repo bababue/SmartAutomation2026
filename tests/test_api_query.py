@@ -102,6 +102,42 @@ def test_review_queue_blocking_only(client):
     assert "q:G" in every
 
 
+def test_review_queue_filters_by_finding_and_position_source(client):
+    con = store.connect()
+    store.save_borehole(con, hole("q:G", 47.0, 8.0, [(0, 5, "sand"), (7, 10, "clay")]))  # gap: blocking
+    unplaced = hole("q:U", 47.0, 8.0, [(0, 5, "sand")])
+    unplaced.location = Location()
+    store.save_borehole(con, unplaced)
+    con.execute("UPDATE boreholes SET review_status = 'pending_review' WHERE id IN ('q:G', 'q:U')")
+    con.commit()
+    con.close()
+
+    def queue(**params):
+        return [item["id"] for item in client.get("/api/review-queue", params=params).json()]
+
+    assert queue(finding="gap") == ["q:G"]
+    assert "q:G" in queue(finding="blocking")
+    assert queue(position="none") == ["q:U"]
+    assert "q:U" not in queue(position="printed") and "q:G" in queue(position="printed")
+    assert queue(position="estimated") == []
+    assert {f["code"] for f in client.get("/api/review-queue/findings").json()} >= {"gap"}
+    assert client.get("/api/review-queue?position=somewhere").status_code == 422
+
+
+def test_list_filters_by_score(client):
+    con = store.connect()
+    con.execute("UPDATE boreholes SET score = CASE id WHEN 'q:A' THEN 0.9 WHEN 'q:B' THEN 0.2 ELSE 0.5 END")
+    con.commit()
+    con.close()
+
+    def order(**params):
+        return [f["properties"]["id"] for f in client.get("/api/boreholes", params=params).json()["features"]]
+
+    assert order(score_min=0.4, score_max=0.6) == ["q:C"]
+    assert client.get("/api/stats/detail?score_max=0.3").json()["boreholes"] == 1
+    assert client.get("/api/boreholes?score_min=2").status_code == 422
+
+
 @pytest.mark.parametrize("qualifier,value,upper,bounds,expected", [
     ("<", 5, None, "4.5:", False), ("<", 5, None, ":5", True),
     (">", 5, None, ":6", False), (">", 5, None, "5:", True),

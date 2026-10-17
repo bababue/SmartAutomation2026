@@ -1,10 +1,14 @@
-import type { ReviewStatus } from './types'
+import type { ReviewStatus, Severity } from './types'
 
 export const STATUS_LABEL: Record<ReviewStatus, string> = {
   auto_approved: 'Released automatically',
   pending_review: 'Waiting for review',
   approved: 'Approved',
   rejected: 'Rejected',
+}
+
+export const SEVERITY_LABEL: Record<Severity, string> = {
+  blocking: 'Blocking', needs_look: 'Needs a look', warning: 'Warning', info: 'Note',
 }
 
 export const scoreText = (score: number | null) => (score == null ? '–' : String(Math.round(score * 100)))

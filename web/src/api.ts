@@ -1,6 +1,7 @@
 import { encodeRange } from './url'
-import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, LayerStrips, QueueItem,
-  QueuePage, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob, UploadStatus, LlmUsage } from './types'
+import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, FindingFacet, Filters, LayerStrips,
+  LlmUsage, QueueItem, QueuePage, QueuePosition, ReviewFilters, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob,
+  UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -21,7 +22,8 @@ function filterParams(f: Filters): URLSearchParams {
   if (f.q.trim()) params.set('q', f.q.trim())
   f.lithology.forEach((l) => params.append('lithology', encodeRange(l)))
   f.lab.forEach((l) => params.append('lab', encodeRange(l)))
-  if (f.minPosition != null) params.set('min_position', String(f.minPosition))
+  if (f.scoreMin != null) params.set('score_min', String(f.scoreMin / 100))
+  if (f.scoreMax != null) params.set('score_max', String(f.scoreMax / 100))
   if (f.status !== 'all') params.set('status', f.status)
   if (f.group) params.set('group', f.group)
   if (f.rockMax != null) params.set('rock_head_max', String(f.rockMax))
@@ -66,12 +68,21 @@ export const fetchSimilar = (id: string, signal?: AbortSignal) =>
 export const fetchStats = () => request<Stats>('/api/stats')
 export const fetchStatsDetail = (f: Filters, signal?: AbortSignal) =>
   request<StatsDetail>(`/api/stats/detail?${filterParams(f)}`, { signal })
-export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200, audit = false): Promise<QueuePage> {
-  const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}${audit ? '&audit=true' : ''}`, { signal })
+/** Waiting records, weakest first, with the total of all that match; or the release audit sample. */
+export async function fetchQueue(f: ReviewFilters, signal?: AbortSignal, limit = 200, audit = false): Promise<QueuePage> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (audit) params.set('audit', 'true')
+  else {
+    if (f.finding) params.set('finding', f.finding)
+    if (f.position) params.set('position', f.position)
+  }
+  const res = await fetch(`/api/review-queue?${params}`, { signal })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   const items = (await res.json()) as QueueItem[]
   return { items, total: Number(res.headers.get('X-Total-Count') ?? items.length) }
 }
+export const fetchQueueFindings = (position: QueuePosition | null, signal?: AbortSignal) =>
+  request<FindingFacet[]>(`/api/review-queue/findings${position ? `?position=${position}` : ''}`, { signal })
 export const fetchCrsGroups = (signal?: AbortSignal) => request<CrsGroup[]>('/api/review-queue/crs-groups', { signal })
 
 export function postCorrection(id: string, kind: CorrectionKind, payload: Record<string, unknown>, reviewer: string,

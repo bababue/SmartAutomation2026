@@ -142,9 +142,16 @@ def _conditions(values: list[str], name: str) -> list[tuple[str, float | None, f
 
 
 def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, ids,
-             group=None, located=True) -> tuple[list[str], list]:
+             group=None, located=True, score_min=None, score_max=None) -> tuple[list[str], list]:
     """WHERE clauses of the list filters; `located`: only holes with a position (the map and the list)."""
     where, params = ["lat IS NOT NULL"] if located else ["1"], []
+    # A record without a score fails every score bound.
+    if score_min is not None:
+        where.append("score >= ?")
+        params.append(score_min)
+    if score_max is not None:
+        where.append("score <= ?")
+        params.append(score_max)
     if group:
         where.append(f"{GROUP} = ?")
         params.append(group)
@@ -218,6 +225,8 @@ def list_boreholes(
     rock_head_max: float | None = Query(None, description="rock head at most this deep (m)"),
     groundwater_max: float | None = Query(None, description="groundwater at most this deep (m)"),
     material: list[str] = Query(default_factory=list, description="group:from_m:to_m:metres, e.g. sand:0:20:5"),
+    score_min: float | None = Query(None, ge=0, le=1, description="lowest release score"),
+    score_max: float | None = Query(None, ge=0, le=1, description="highest release score"),
     fields: Literal["list", "map", "layers"] = Query("list", description="'map': slim points; 'layers': depth strips for visible columns"),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
@@ -228,7 +237,7 @@ def list_boreholes(
     if fields == "layers" and not bbox:
         raise HTTPException(422, "bbox is required for layer strips")
     where, params = _filters(q, bbox, _conditions(lithology, "lithology"), _conditions(lab, "lab"), country,
-                             min_depth, min_position, status, id, group)
+                             min_depth, min_position, status, id, group, score_min=score_min, score_max=score_max)
     ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max,
                                                          similar.material_conditions(material))
     where, params = where + ground_where, params + ground_params
@@ -263,18 +272,44 @@ def list_boreholes(
             "features": [_feature(r) for r in rows]}
 
 
+# Where a waiting record's position comes from; 'crs_inferred': its coordinate system is only inferred.
+QUEUE_POSITION = {
+    "printed": "lat IS NOT NULL AND loc_method IN ('stated_coordinates', 'linked_table', 'manual')",
+    "estimated": "lat IS NOT NULL AND loc_method = 'geocoded_place'",
+    "crs_inferred": "rid IN (SELECT rid FROM findings WHERE code = 'crs_inferred')",
+    "none": "lat IS NULL",
+}
+QueuePosition = Literal["printed", "estimated", "crs_inferred", "none"]
+
+
+def _queue_filters(blocking: bool, finding: str | None, position: QueuePosition | None) -> tuple[str, list]:
+    where, params = ["review_status = 'pending_review'"], []
+    if blocking:
+        where.append("rid IN (SELECT rid FROM findings WHERE severity = 'blocking')")
+    if finding in ("blocking", "needs_look"):
+        where.append("rid IN (SELECT rid FROM findings WHERE severity = ?)")
+        params.append(finding)
+    elif finding:
+        where.append("rid IN (SELECT rid FROM findings WHERE code = ?)")
+        params.append(finding)
+    if position:
+        where.append(QUEUE_POSITION[position])
+    return " AND ".join(where), params
+
+
 @app.get("/api/review-queue")
 def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
                  blocking: bool = Query(False, description="only records with a blocking finding"),
+                 finding: str | None = Query(None, description="a finding code, or a severity: 'blocking', 'needs_look'"),
+                 position: QueuePosition | None = Query(None, description="where the position comes from"),
                  audit: bool = Query(False, description="the release audit sample instead (any status)")):
     """Everything waiting for a human, weakest first (also records without a position), a page at a time.
     The total is in the X-Total-Count header so the response stays a plain list."""
-    where, params = "review_status = 'pending_review'" + (
-        " AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = boreholes.rid AND f.severity = 'blocking')"
-        if blocking else ""), []
     if audit:  # automatic releases drawn for a person to check (`pipeline eval audit`)
         uids = [r["uid"] for r in (evaluate.load_audit() or {"records": []})["records"]]
         where, params = f"uid IN ({','.join('?' * len(uids)) or 'NULL'})", uids
+    else:
+        where, params = _queue_filters(blocking, finding, position)
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}", params).fetchone()[0]
     rows = con.execute(
         "SELECT id, name, project, location_name, country, score, confidence, loc_confidence, loc_method, "
@@ -285,6 +320,17 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
     items = [{**{k: r[k] for k in r.keys() if k != "reasons"}, "reasons": json.loads(r["reasons"] or "[]")}
              for r in rows]
     return JSONResponse(items, headers={"X-Total-Count": str(total)})
+
+
+@app.get("/api/review-queue/findings")
+def queue_findings(con: DB, position: QueuePosition | None = None):
+    """Findings among the waiting records (of one position source, if given), for the queue filter. Notes that
+    hold nothing back are left out."""
+    where, params = _queue_filters(False, None, position)
+    rows = con.execute(
+        "SELECT code, severity, COUNT(DISTINCT rid) records FROM findings WHERE severity != 'info' AND rid IN "
+        f"(SELECT rid FROM boreholes WHERE {where}) GROUP BY code, severity ORDER BY records DESC", params)
+    return [{"code": r["code"], "severity": r["severity"], "records": r["records"]} for r in rows]
 
 
 @app.get("/api/review-queue/crs-groups")
@@ -333,6 +379,12 @@ def get_borehole(borehole_id: str, con: DB):
         if f in docs and (docs[f], p) in stored
     ]
     meta = con.execute("SELECT uid, version_id, review_revision FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
+    inferred = con.execute(
+        "SELECT f.epsg FROM findings f JOIN boreholes b ON b.rid = f.rid WHERE b.id = ? AND f.code = 'crs_inferred' "
+        "AND b.review_status = 'pending_review'", (borehole_id,)).fetchone()
+    # The document-wide confirmation this waiting hole belongs to, if its document has one.
+    crs_group = inferred and next((g for g in crs_groups(con) if g["group"] == store.document_group(borehole_id)
+                                   and g["epsg"] == inferred["epsg"]), None)
     return {
         "borehole": bh.model_dump(mode="json"),
         "source_pages": source_pages,
@@ -342,6 +394,7 @@ def get_borehole(borehole_id: str, con: DB):
         "content_hash": _content_hash(con, borehole_id),
         "uid": meta["uid"], "version_id": meta["version_id"], "review_revision": meta["review_revision"],
         "threshold": config.AUTO_APPROVE_THRESHOLD,
+        "crs_group": crs_group,
     }
 
 
@@ -842,11 +895,14 @@ def stats_detail(
     rock_head_max: float | None = None,
     groundwater_max: float | None = None,
     material: list[str] = Query(default_factory=list),
+    score_min: float | None = Query(None, ge=0, le=1),
+    score_max: float | None = Query(None, ge=0, le=1),
 ):
     """Aggregates for the statistics view over the records the list filters select, holes without a position
     included: key figures, release funnel, findings, logged metres per lithology, final depths and groups."""
     where, params = _filters(q, None, _conditions(lithology, "lithology"), _conditions(lab, "lab"), None, None,
-                             min_position, status, [], group, located=False)
+                             min_position, status, [], group, located=False, score_min=score_min,
+                             score_max=score_max)
     ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max,
                                                          similar.material_conditions(material))
     where, params = where + ground_where, params + ground_params

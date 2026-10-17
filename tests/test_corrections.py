@@ -153,6 +153,8 @@ def test_crs_groups_offer_one_confirmation_per_document(client):
     groups = client.get("/api/review-queue/crs-groups").json()
     # demo__a and demo__b form the 'demo' document (2 holes); 'other' has a single hole.
     assert [(g["group"], g["epsg"], g["count"]) for g in groups] == [("demo", 32756, 2)]
+    assert client.get("/api/boreholes/demo__b:BH2/detail").json()["crs_group"]["group"] == "demo"
+    assert client.get("/api/boreholes/other:BH3/detail").json()["crs_group"] is None
     r = post(client, groups[0]["borehole_id"], kind="crs", scope="document", payload={"epsg": 28356})
     assert r.json()["updated"] == ["demo__a:BH1", "demo__b:BH2"]
     assert client.get("/api/review-queue/crs-groups").json() == []

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchStatsDetail } from '../api'
 import { words } from '../format'
 import { lithStyle, patternId } from '../lithology'
+import { SEVERITY_LABEL } from '../review'
 import { hasFilters } from '../url'
 import type { Filters, StatsDetail } from '../types'
 
@@ -14,9 +15,6 @@ interface Props {
   onClose: () => void
 }
 
-const SEVERITY: Record<StatsDetail['findings'][number]['severity'], string> = {
-  blocking: 'Blocking', needs_look: 'Needs a look', warning: 'Warning', info: 'Note',
-}
 const LITH_ROWS = 10
 const n = (v: number) => v.toLocaleString('en')
 const pct = (part: number, whole: number) => (whole ? Math.round((100 * part) / whole) : 0)
@@ -78,7 +76,7 @@ export function StatsView({ filters, onShowGroup, onReviewAudit, onClose }: Prop
   return (
     <div className="stats-view">
       <header className="stats-head">
-        <div className="queue-title">
+        <div className="stats-title">
           <h2>Statistics</h2>
           <button className="btn" onClick={onClose}>Back to map</button>
         </div>
@@ -165,7 +163,7 @@ export function StatsView({ filters, onShowGroup, onReviewAudit, onClose }: Prop
                 {findings.map((f) => (
                   <tr key={`${f.code}-${f.severity}`}>
                     <td>{words(f.code)}</td>
-                    <td><span className={`sev sev-${f.severity}`}>{SEVERITY[f.severity]}</span></td>
+                    <td><span className={`sev sev-${f.severity}`}>{SEVERITY_LABEL[f.severity]}</span></td>
                     <td className="stats-bar-cell">
                       <Bar value={f.records} max={findingMax} title={`${words(f.code)}: ${n(f.records)} records, ${n(f.count)} findings`} />
                     </td>

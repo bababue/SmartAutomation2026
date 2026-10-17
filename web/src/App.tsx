@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { fetchBoreholes, fetchBoreholesById, fetchDetail, fetchMapPoints, fetchQueue, fetchStats } from './api'
+import { fetchBoreholes, fetchBoreholesById, fetchCrsGroups, fetchDetail, fetchMapPoints, fetchQueue, fetchQueueFindings, fetchStats } from './api'
 import { useStoredFlag } from './hooks'
 import { LithologyPatterns } from './lithology'
 import { BrandLogo } from './components/BrandLogo'
@@ -8,12 +8,11 @@ import { MapView } from './components/MapView'
 import { ResultList } from './components/ResultList'
 import { RoutePanel } from './components/RoutePanel'
 import { TunnelList } from './components/TunnelList'
-import { ReviewQueue } from './components/ReviewQueue'
+import { ReviewList } from './components/ReviewList'
 import { StatsView } from './components/StatsView'
 import { SectionView } from './components/SectionView'
-import type { QueueNav } from './components/ReviewBox'
-import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats } from './types'
-import { DEFAULT_FILTERS, readUrl, writeUrl, type View } from './url'
+import type { CrsGroup, Detail, DetailUpdate, Feature, FeatureCollection, FindingFacet, Filters, QueueItem, ReviewFilters, Stats } from './types'
+import { DEFAULT_FILTERS, DEFAULT_REVIEW_FILTERS, readUrl, writeUrl, type View } from './url'
 import { detailSheetRect, isTyping } from './dom'
 import { SheetResizer } from './components/SheetResizer'
 import { FilterBar } from './components/FilterBar'
@@ -50,6 +49,8 @@ export default function App() {
   const requestedHoleIds = useRef(new Set<string>())
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [queueTotal, setQueueTotal] = useState(0)
+  const [queueFindings, setQueueFindings] = useState<FindingFacet[]>([])
+  const [crsGroups, setCrsGroups] = useState<CrsGroup[]>([])
   const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId)
@@ -57,7 +58,7 @@ export default function App() {
   // Closing drops the record, so a later selection never shows it while its own loads; switching keeps it until then.
   if (!selectedId && detail) setDetail(null)
   const [refresh, setRefresh] = useState(0)  // bump to reload map, list, queue and stats
-  const [blockingOnly, setBlockingOnly] = useState(initial.blockingOnly)
+  const [reviewFilters, setReviewFilters] = useState<ReviewFilters>(initial.reviewFilters)
   const [auditOnly, setAuditOnly] = useState(initial.auditOnly)
   const [listOpen, setListOpen] = useState(initial.routeActive ? true : initial.listOpen)
   const [sheetWidth, setSheetWidth] = useState<number | null>(null)  // null: default split; a reload resets it
@@ -140,13 +141,13 @@ export default function App() {
 
   // Page and selection changes get a history entry, so Back closes a borehole or leaves the queue.
   useEffect(() => {
-    const url = writeUrl({ view, routeActive, tunnelId: activeTunnelId, selectedId, listOpen, filters, blockingOnly, auditOnly })
+    const url = writeUrl({ view, routeActive, tunnelId: activeTunnelId, selectedId, listOpen, filters, reviewFilters, auditOnly })
     const shown = readUrl(window.location.search)
     if (url === (window.location.search || window.location.pathname)) return
     if (shown.view !== view || shown.routeActive !== routeActive ||
       (routeActive && shown.tunnelId !== activeTunnelId) || shown.selectedId !== selectedId) window.history.pushState(null, '', url)
     else window.history.replaceState(null, '', url)
-  }, [view, routeActive, activeTunnelId, selectedId, listOpen, filters, blockingOnly, auditOnly])
+  }, [view, routeActive, activeTunnelId, selectedId, listOpen, filters, reviewFilters, auditOnly])
 
   useEffect(() => {
     const onPop = () => {
@@ -155,7 +156,7 @@ export default function App() {
       setRouteActive(s.routeActive)
       setActiveTunnelId(s.tunnelId)
       setSelectedId(s.selectedId)
-      setBlockingOnly(s.blockingOnly)
+      setReviewFilters(s.reviewFilters)
       setAuditOnly(s.auditOnly)
       setListOpen(s.routeActive ? true : s.listOpen)
       setFilters(s.filters)
@@ -194,16 +195,18 @@ export default function App() {
   }, [filters, data.features.length, remember])
 
   // The queue is loading until a response for the current request has landed.
-  const queueKey = `${refresh}|${blockingOnly}|${auditOnly}`
+  const queueKey = `${refresh}|${reviewFilters.finding}|${reviewFilters.position}|${auditOnly}`
   const [queueLoadedKey, setQueueLoadedKey] = useState<string | null>(null)
   useEffect(() => {
     const ctrl = new AbortController()
-    fetchQueue(blockingOnly, ctrl.signal, 200, auditOnly)
+    fetchQueue(reviewFilters, ctrl.signal, 200, auditOnly)
       .then(({ items, total }) => { setQueue(items); setQueueTotal(total); setQueueLoadedKey(queueKey) })
       .catch((e) => { if (e.name !== 'AbortError') setQueueLoadedKey(queueKey) })
+    fetchQueueFindings(reviewFilters.position, ctrl.signal).then(setQueueFindings).catch(() => undefined)
+    fetchCrsGroups(ctrl.signal).then(setCrsGroups).catch(() => undefined)
     fetchStats().then(setStats).catch(() => undefined)
     return () => ctrl.abort()
-  }, [queueKey, blockingOnly, auditOnly])
+  }, [queueKey, reviewFilters, auditOnly])
 
   // Only the response for the currently selected borehole may land in state.
   useEffect(() => {
@@ -213,7 +216,7 @@ export default function App() {
       .then(setDetail)
       .catch((e) => e.name !== 'AbortError' && setError(`Could not load the borehole (${e.message}).`))
     return () => ctrl.abort()
-  }, [selectedId])
+  }, [selectedId, refresh])
 
   // Counts over all matches, from the server (the list may be one page).
   const lithologies = useMemo(() => {
@@ -222,45 +225,35 @@ export default function App() {
     return [...counts.entries()].sort((a, b) => b[1] - a[1])
   }, [data, filters.lithology])
 
+  // Only the open borehole's own position: while the next one loads, the previous detail must not move the map.
   const focus = useMemo(() => {
-    const borehole = detail?.borehole
+    const borehole = detail?.borehole.borehole_id === selectedId ? detail?.borehole : undefined
     const loc = borehole?.location
     if (!loc || loc.lat == null || loc.lon == null) return null
     const depth = Math.max(borehole.depth_m ?? 0, ...borehole.layers.map((layer) => layer.bottom_m))
     return { lat: loc.lat, lon: loc.lon, accuracy_m: loc.accuracy_m,
       approximate: loc.method === 'geocoded_place', hasDepth: depth > 0 }
-  }, [detail])
+  }, [detail, selectedId])
 
   const onReviewChange = useCallback((update: DetailUpdate) => {
     setDetail((d) => (d && d.borehole.borehole_id === update.borehole.borehole_id ? { ...d, ...update } : d))
     setRefresh((n) => n + 1)
   }, [])
 
-  // Position in the review queue, for "approve and next" and arrow-key navigation.
-  const nav: QueueNav | null = useMemo(() => {
+  // After a decision in review mode, the next record of the list opens; a decided waiting record leaves it.
+  const openNext = useCallback(() => {
     const i = queue.findIndex((q) => q.id === selectedId)
-    if (i < 0) return null
-    const prevId = queue[i - 1]?.id, nextId = queue[i + 1]?.id
-    return {
-      position: i + 1,
-      total: queue.length,
-      prev: prevId ? () => setSelectedId(prevId) : null,
-      next: nextId ? () => setSelectedId(nextId) : null,
-      // The decided record leaves the queue; continue with its neighbour.
-      advance: () => setSelectedId(nextId ?? prevId ?? null),
-    }
+    setSelectedId(i < 0 ? null : (queue[i + 1] ?? queue[i - 1])?.id ?? null)
   }, [queue, selectedId])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e.target)) return
       if (e.key === 'Escape') setSelectedId(null)
-      if (e.key === 'ArrowRight' && nav?.next) { e.preventDefault(); nav.next() }
-      if (e.key === 'ArrowLeft' && nav?.prev) { e.preventDefault(); nav.prev() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [nav])
+  }, [])
 
   // The start page: map view, default filters, nothing open; the reload fits the map to all matches.
   const goHome = useCallback(() => {
@@ -268,7 +261,7 @@ export default function App() {
     setRouteActive(false)
     setRouteDraft(null)
     setSelectedId(null)
-    setBlockingOnly(false)
+    setReviewFilters(DEFAULT_REVIEW_FILTERS)
     setAuditOnly(false)
     setListOpen(true)
     setFilters(DEFAULT_FILTERS)
@@ -378,14 +371,22 @@ export default function App() {
               <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> of{' '}
               <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes released
               {stats.boreholes > stats.located && (
-                <span className="muted" title="Not on the map or in the list until a reviewer sets the position">
-                  {' '}({(stats.boreholes - stats.located).toLocaleString('en')} without position)
-                </span>
+                <>{' '}<button className="link-button muted" title="Not on the map; review them to set their position"
+                  onClick={() => {
+                    setSelectedId(null); setListOpen(true); setAuditOnly(false)
+                    setReviewFilters({ finding: null, position: 'none' }); setView('review')
+                  }}>
+                  ({(stats.boreholes - stats.located).toLocaleString('en')} without position)
+                </button></>
               )}
             </p>
           )}
           <AppMenu inReview={view === 'review'} inStats={view === 'stats'} uploading={uploading} dark={dark} columns3d={columns3d}
-            onToggleReview={() => { setAuditOnly(false); setView(view === 'review' ? 'map' : 'review') }}
+            onToggleReview={() => {
+              setAuditOnly(false)
+              if (view !== 'review') { setSelectedId(null); setListOpen(true) }
+              setView(view === 'review' ? 'map' : 'review')
+            }}
             onToggleStats={() => setView(view === 'stats' ? 'map' : 'stats')}
             onCreateTunnel={createTunnel}
             onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} onToggleColumns={() => setColumns3d(!columns3d)} />
@@ -399,7 +400,21 @@ export default function App() {
       <aside className="sidebar" id="sidebar" inert={!listOpen}>
         {inTunnel ? <TunnelList tunnels={tunnels} boreholes={known} selectedId={activeTunnelId}
           onSelect={(id) => { setActiveTunnelId(id); setRouteDraft(null); setSelectedId(null) }}
-          onShowBoreholes={closeTunnel} /> : <>
+          onShowBoreholes={closeTunnel} /> : view === 'review' ? <>
+        {auditOnly ? (
+          <div className="result-head">
+            <span>Release audit: automatic releases drawn for a person to check</span>
+            <button className="link-button" onClick={() => setAuditOnly(false)}>Waiting records</button>
+          </div>
+        ) : (
+          <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies} groupLabel={null} onShowTunnels={openTunnel}
+            review={{ filters: reviewFilters, onChange: setReviewFilters, findings: queueFindings }} />
+        )}
+        {error && <p className="error" role="alert">{error}</p>}
+        <ReviewList items={queue} total={queueTotal} loading={queueLoadedKey !== queueKey} audit={auditOnly}
+          selectedId={selectedId} onSelect={setSelectedId}
+          crsGroups={!auditOnly && reviewFilters.position === 'crs_inferred' ? crsGroups : []} onChanged={() => setRefresh((n) => n + 1)} />
+        </> : <>
         <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies}
           groupLabel={filters.group && (data.facets?.groups.find((g) => g.group === filters.group)?.project ?? filters.group)}
           onShowTunnels={openTunnel} />
@@ -450,14 +465,9 @@ export default function App() {
             </div>
           </section>
         )}
-        {view === 'review' && (
-          <ReviewQueue items={queue} total={queueTotal} loading={queueLoadedKey !== queueKey} selectedId={selectedId}
-            threshold={stats?.threshold ?? 0.9} auditOnly={auditOnly} blockingOnly={blockingOnly} onBlockingOnly={setBlockingOnly} onSelect={setSelectedId}
-            onChanged={() => setRefresh((n) => n + 1)} onClose={() => setView('map')} />
-        )}
         {view === 'stats' && (
           <StatsView filters={filters} onClose={() => setView('map')}
-            onReviewAudit={() => { setAuditOnly(true); setView('review') }}
+            onReviewAudit={() => { setSelectedId(null); setListOpen(true); setAuditOnly(true); setView('review') }}
             onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })); setView('map') }} />
         )}
       </main>
@@ -482,7 +492,8 @@ export default function App() {
           detail={detail}
           onClose={() => setSelectedId(null)}
           onReviewChange={onReviewChange}
-          nav={nav}
+          onDecided={view === 'review' ? openNext : undefined}
+          onCrsConfirmed={view === 'review' ? () => setRefresh((n) => n + 1) : undefined}
           onSourceToggle={onSourceToggle}
           onSelect={setSelectedId}
           onFindLike={(like) => {

@@ -104,7 +104,7 @@ export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggl
       {open && (
         <div className="app-menu-list" role="menu" aria-label="Menu">
           <button role="menuitem" className="app-menu-item" onClick={pick(onToggleReview)} onMouseEnter={() => setSub(null)}>
-            <Icon d={inReview ? ICON.map : ICON.review} /><span className="menu-text">{inReview ? 'Back to map' : 'Review queue'}</span>
+            <Icon d={inReview ? ICON.map : ICON.review} /><span className="menu-text">{inReview ? 'Back to map' : 'Review'}</span>
           </button>
           <button role="menuitem" className="app-menu-item" onClick={pick(onToggleStats)} onMouseEnter={() => setSub(null)}>
             <Icon d={inStats ? ICON.map : ICON.stats} /><span className="menu-text">{inStats ? 'Back to map' : 'Statistics'}</span>

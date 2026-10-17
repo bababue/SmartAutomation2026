@@ -4,19 +4,11 @@ import { isTyping } from '../dom'
 import { STATUS_LABEL, fmtDateTime, loadReviewer, saveReviewer, scoreText } from '../review'
 import type { Detail, DetailUpdate, ReviewStatus } from '../types'
 
-export interface QueueNav {
-  position: number // 1-based position in the review queue
-  total: number
-  prev: (() => void) | null
-  next: (() => void) | null
-  /** Called after a decision; moves on to the next waiting record. */
-  advance: () => void
-}
-
 interface Props {
   detail: Detail
   onChange: (update: DetailUpdate) => void
-  nav: QueueNav | null
+  /** Review mode: called after an approval or rejection, to open the next record. */
+  onDecided?: () => void
   /** Shown next to the summary heading. */
   children?: ReactNode
   /** Findings shown in the summary below the score reasons. */
@@ -24,7 +16,7 @@ interface Props {
 }
 
 /** Release status, why it needs a human, and the decision controls. */
-export function ReviewBox({ detail, onChange, nav, children, findings }: Props) {
+export function ReviewBox({ detail, onChange, onDecided, children, findings }: Props) {
   const bh = detail.borehole
   const [reviewer, setReviewer] = useState(loadReviewer)
   const [comment, setComment] = useState('')
@@ -47,7 +39,7 @@ export function ReviewBox({ detail, onChange, nav, children, findings }: Props) 
       saveReviewer(reviewer.trim())
       onChange(await postReview(bh.borehole_id, decision, reviewer.trim(), comment.trim() || null, detail.content_hash ?? null, detail.review_revision ?? null))
       setComment('')
-      if (nav && decision !== 'pending_review') nav.advance()
+      if (decision !== 'pending_review') onDecided?.()
     } catch (e) {
       const msg = (e as Error).message
       setError(msg.startsWith('409')
@@ -94,13 +86,13 @@ export function ReviewBox({ detail, onChange, nav, children, findings }: Props) 
           )}
           {status !== 'rejected' && (
             <button className="btn btn-decide btn-reject" disabled={busy} onClick={() => decide('rejected')}
-              aria-label={nav ? 'Reject and next' : 'Reject'} title={`${nav ? 'Reject and next' : 'Reject'} (R)`}>
+              aria-label={onDecided ? 'Reject and next' : 'Reject'} title={`${onDecided ? 'Reject and next' : 'Reject'} (R)`}>
               <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
             </button>
           )}
           {status !== 'approved' && (
             <button className="btn btn-decide btn-approve" disabled={busy} onClick={() => decide('approved')}
-              aria-label={nav ? 'Approve and next' : 'Approve'} title={`${nav ? 'Approve and next' : 'Approve'} (A)`}>
+              aria-label={onDecided ? 'Approve and next' : 'Approve'} title={`${onDecided ? 'Approve and next' : 'Approve'} (A)`}>
               <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.8" /></svg>
             </button>
           )}
