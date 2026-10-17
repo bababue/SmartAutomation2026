@@ -1,8 +1,10 @@
+import type { ReactNode } from 'react'
 import type { ModelEvaluation, Quality, QualityMetrics, Share, UsageRow } from '../types'
 import { fmtCount as n, fmtError } from '../format'
 import { Bar, Shares } from './StatsParts'
 
 type MetricKey = 'boundaries' | 'precision' | 'lithology_depth' | 'final_depth' | 'groundwater' | 'lab'
+type ModelRun = NonNullable<ModelEvaluation['models']>['runs'][number]
 
 /** Key, label, explanation, short column label. */
 const METRICS: [MetricKey, string, string, string][] = [
@@ -32,7 +34,130 @@ function modelName(id: string | null): string {
   return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}` : id
 }
 
-export function QualityView({ quality, error, onReviewAudit }: {
+interface Figure { label: string; hint: string; value: (r: ModelRun) => number | null; show: (r: ModelRun) => ReactNode; lower?: boolean }
+
+const shareFigure = (key: MetricKey, label: string, hint: string): Figure =>
+  ({ label, hint, value: (r) => ratio(r.metrics[key]), show: (r) => percent(r.metrics[key]) })
+
+/** The figures of the short comparison; `lower`: the smaller value is the better one. */
+const FIGURES: Figure[] = [
+  shareFigure('boundaries', 'Layer boundaries found', 'reference boundaries matched within 0.1 m'),
+  shareFigure('precision', 'Precision', 'the model’s boundaries that the reference has too'),
+  shareFigure('lab', 'Lab values', 'same parameter, value, qualifier and sample depth'),
+  {
+    label: 'Cost per page', hint: 'billed, or ≈ estimated at API list prices', lower: true,
+    value: (r) => r.usd_per_page,
+    show: (r) => (r.usd_per_page == null ? '–' : `${r.usd_measured ? '' : '≈ '}${usd(r.usd_per_page)}`),
+  },
+  {
+    label: 'Seconds per page', hint: 'median, one page after the other', lower: true,
+    value: (r) => r.seconds_per_page,
+    show: (r) => r.seconds_per_page ?? '–',
+  },
+]
+
+// Within this share of the best value is a tie: run-to-run noise, not a better model.
+const TIE = 0.05
+
+const points = (a: Share, b: Share) => Math.round(100 * ((ratio(a) ?? 0) - (ratio(b) ?? 0)))
+
+/** Which model reads the corpus (most boundaries found) and which the quick uploads (cheapest per page). */
+function roles(runs: ModelRun[]): { corpus: ModelRun; uploads: ModelRun | null } {
+  const corpus = runs.reduce((a, b) => ((ratio(b.metrics.boundaries) ?? -1) > (ratio(a.metrics.boundaries) ?? -1) ? b : a))
+  const priced = runs.filter((r) => r.usd_per_page != null)
+  const cheapest = priced.length ? priced.reduce((a, b) => (b.usd_per_page! < a.usd_per_page! ? b : a)) : null
+  return { corpus, uploads: cheapest && cheapest !== corpus ? cheapest : null }
+}
+
+/** The models tab: a few figures per model, the best one marked, and the conclusion in one sentence. */
+export function ModelSummary({ quality, error, onDetails }: {
+  quality: Quality | null
+  error: string | null
+  onDetails: () => void
+}) {
+  if (error) return <p className="error" role="alert">{error}</p>
+  if (!quality) return <p className="muted">Loading…</p>
+  const ev = quality.evaluation
+  const models = ev?.models
+  if (!ev || !models?.runs.length) {
+    return <p className="stats-intro muted">No model comparison yet: run the same prompt as experiment arms with different
+      models, then <code>python -m pipeline eval snapshot-models</code>.</p>
+  }
+  const runs = models.runs
+  const { corpus, uploads } = roles(runs)
+  const factor = uploads && corpus.usd_per_page ? Math.round(corpus.usd_per_page / uploads.usd_per_page!) : null
+  return (
+    <div className="stats-grid stats-grid-models">
+      <section className="stats-card stats-wide" aria-labelledby="models-head">
+        <h3 id="models-head">Same prompt, different models</h3>
+        <p className="stats-lede">
+          <b>{modelName(corpus.model)}</b> reads the corpus: it finds the most layer boundaries.
+          {uploads && <> <b>{modelName(uploads.model)}</b> reads quick uploads: {factor && factor > 1 ? `about ${factor}× cheaper` : 'cheaper'} per
+            page, {points(corpus.metrics.boundaries, uploads.metrics.boundaries)} points lower on layer boundaries
+            and {points(corpus.metrics.lab, uploads.metrics.lab)} on lab values.</>}
+        </p>
+        <div className="stats-scroll">
+          <table className="models-table">
+            <thead>
+              <tr>
+                <td />
+                {runs.map((r) => (
+                  <th key={r.arm} scope="col">
+                    {modelName(r.model)}
+                    {(r === corpus || r === uploads) && <span className="models-role">{r === corpus ? 'Corpus' : 'Uploads'}</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {FIGURES.map((f) => {
+                const values = runs.map(f.value).filter((v): v is number => v != null)
+                const best = f.lower ? Math.min(...values) : Math.max(...values)
+                const tops = runs.map((r) => {
+                  const v = f.value(r)
+                  return v != null && Math.abs(v - best) <= TIE * Math.abs(best)
+                })
+                // When every model ties there is no best value to mark.
+                const marked = tops.some((top) => !top)
+                return (
+                  <tr key={f.label}>
+                    <th scope="row">{f.label}<span className="models-hint">{f.hint}</span></th>
+                    {runs.map((r, i) => {
+                      const top = marked && tops[i]
+                      return (
+                        <td key={r.arm} className={top ? 'models-best' : undefined}>
+                          {f.show(r)}{top && <span className="models-best-tag">best</span>}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="stats-note muted">
+          On the {n(models.records)} human-checked records every model extracted itself. A run on the Claude subscription
+          is not billed per page; its cost is an estimate at API list prices.
+        </p>
+      </section>
+      {ev.benchmark.rows.length > 0 && (
+        <section className="stats-card stats-wide" aria-labelledby="models-tested">
+          <h3 id="models-tested">Also tested</h3>
+          <p className="muted">Before there were reviewed records, these models read the same {n(ev.benchmark.pages)} log
+            pages; agreement with {modelName(ev.benchmark.against)} only, not accuracy.</p>
+          <ul className="models-chips">
+            {ev.benchmark.rows.map((r) => <li key={r.model}>{r.model}<span className="muted">{r.route}</span></li>)}
+          </ul>
+          <button className="link-button stats-more-link" onClick={onDetails}>All figures, the benchmark and the prompt versions in Details</button>
+        </section>
+      )}
+    </div>
+  )
+}
+
+/** The details tab: extraction quality, the model comparison in full, the release audit, benchmark, prompt versions and calls. */
+export function QualityDetails({ quality, error, onReviewAudit }: {
   quality: Quality | null
   error: string | null
   onReviewAudit: () => void

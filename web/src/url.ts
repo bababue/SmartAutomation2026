@@ -2,7 +2,7 @@ import { parseDecimal } from './format'
 import type { Filters, QueuePosition, RangeFilter, ReviewFilters, StatusFilter } from './types'
 
 export type View = 'map' | 'review' | 'stats'
-export type StatsTab = 'data' | 'quality'
+export type StatsTab = 'overview' | 'method' | 'models' | 'details'
 
 export interface UrlState {
   view: View
@@ -20,6 +20,7 @@ export interface UrlState {
 const STATUSES: StatusFilter[] = ['all', 'released', 'pending', 'rejected']
 const VIEWS: View[] = ['map', 'review', 'stats']
 const POSITIONS: QueuePosition[] = ['printed', 'estimated', 'crs_inferred', 'none']
+const STATS_TABS: StatsTab[] = ['overview', 'method', 'models', 'details']
 
 const num = (v: string | null) => (v == null ? null : parseDecimal(v))
 
@@ -55,7 +56,8 @@ export function readUrl(search: string): UrlState {
     tunnelId: p.get('tunnel'),
     selectedId: p.get('borehole'),
     auditOnly: p.get('audit') === '1',
-    statsTab: p.get('tab') === 'quality' ? 'quality' : 'data',
+    // 'quality' is an alias of the details tab.
+    statsTab: p.get('tab') === 'quality' ? 'details' : STATS_TABS.find((t) => t === p.get('tab')) ?? 'overview',
     listOpen: p.get('list') !== 'closed',
     reviewFilters: {
       finding: p.get('finding'),
@@ -87,7 +89,7 @@ export function writeUrl(s: UrlState): string {
   if (s.routeActive && s.tunnelId) p.set('tunnel', s.tunnelId)
   if (s.selectedId) p.set('borehole', s.selectedId)
   if (s.auditOnly) p.set('audit', '1')
-  if (s.view === 'stats' && s.statsTab !== 'data') p.set('tab', s.statsTab)
+  if (s.view === 'stats' && s.statsTab !== 'overview') p.set('tab', s.statsTab)
   if (!s.listOpen) p.set('list', 'closed')
   if (f.q.trim()) p.set('q', f.q.trim())
   f.lithology.forEach((l) => p.append('lith', encodeRange(l)))

@@ -5,7 +5,8 @@ import { lithStyle, patternId } from '../lithology'
 import { SEVERITY_LABEL } from '../review'
 import { DEFAULT_FILTERS, DEFAULT_REVIEW_FILTERS, hasFilters, type StatsTab } from '../url'
 import type { CrsDetermination, Filters, Quality, ReviewFilters, StatsDetail } from '../types'
-import { QualityView } from './QualityView'
+import { MethodView } from './MethodView'
+import { ModelSummary, QualityDetails } from './QualityView'
 import { Bar, Shares } from './StatsParts'
 
 interface Props {
@@ -23,8 +24,9 @@ interface Props {
 /** The cards a headline figure leads to. */
 type Target = 'coordinates' | 'extraction-quality' | 'release-audit'
 
-const TABS: [StatsTab, string][] = [['data', 'Data'], ['quality', 'Quality & models']]
+const TABS: [StatsTab, string][] = [['overview', 'Overview'], ['method', 'How it works'], ['models', 'Models'], ['details', 'Details']]
 const LITH_ROWS = 10
+const CRS_ROWS = 6
 
 /** How the coordinate system was settled: label and explanation. */
 const DETERMINATION: [CrsDetermination, string, string][] = [
@@ -85,10 +87,11 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
   }
 
   const onKey = (e: KeyboardEvent) => {
-    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
-    if (!step) return
+    const at = TABS.findIndex(([key]) => key === tab)
+    const next = e.key === 'ArrowRight' ? (at + 1) % TABS.length : e.key === 'ArrowLeft' ? (at - 1 + TABS.length) % TABS.length
+      : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : null
+    if (next == null) return
     e.preventDefault()
-    const next = (TABS.findIndex(([key]) => key === tab) + step + TABS.length) % TABS.length
     onTab(TABS[next][0])
     tabRefs.current[next]?.focus()
   }
@@ -97,7 +100,6 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
     <div className="stats-view">
       <header className="stats-head">
         <h2>Statistics</h2>
-        <Claims whole={whole} quality={quality} onOpen={open} onReview={onReview} />
         <div className="stats-tabs" role="tablist" aria-label="Statistics" onKeyDown={onKey}>
           {TABS.map(([key, label], i) => (
             <button key={key} ref={(el) => { tabRefs.current[i] = el }} role="tab" id={`stats-tab-${key}`}
@@ -108,11 +110,17 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
           ))}
         </div>
       </header>
-      <div role="tabpanel" id={`stats-panel-${tab}`} aria-labelledby={`stats-tab-${tab}`}>
-        {tab === 'data'
-          ? <DataTab stats={filtered ? narrowed : whole} error={dataError} quality={quality}
+      <div className="stats-panel" role="tabpanel" id={`stats-panel-${tab}`} aria-labelledby={`stats-tab-${tab}`}>
+        {tab === 'overview' && (
+          <>
+            <Claims whole={whole} quality={quality} onOpen={open} onReview={onReview} />
+            <Overview stats={filtered ? narrowed : whole} filtered={filtered} error={dataError} quality={quality}
               onShowGroup={onShowGroup} onReview={onReview} />
-          : <QualityView quality={quality} error={qualityError} onReviewAudit={onReviewAudit} />}
+          </>
+        )}
+        {tab === 'method' && <MethodView stats={whole} quality={quality} />}
+        {tab === 'models' && <ModelSummary quality={quality} error={qualityError} onDetails={() => onTab('details')} />}
+        {tab === 'details' && <QualityDetails quality={quality} error={qualityError} onReviewAudit={onReviewAudit} />}
       </div>
     </div>
   )
@@ -136,25 +144,25 @@ function Claims({ whole, quality, onOpen, onReview }: {
       <ul>
         <Claim goal="Coordinates" hint="How positions and coordinate systems were obtained"
           figure={whole ? `${pct(located, whole.boreholes)} %` : loading} label="positioned from printed coordinates"
-          note={whole && `${n(located)} of ${n(whole.boreholes)} holes, read in ${n(whole.crs.length)} coordinate systems (EPSG)`}
-          onClick={() => onOpen('data', 'coordinates')} />
+          note={whole && `${n(located)} of ${n(whole.boreholes)} holes, ${n(whole.crs.length)} coordinate systems (EPSG)`}
+          onClick={() => onOpen('overview', 'coordinates')} />
         <Claim goal="Hit rate" hint="Extraction quality against the human-checked records"
           figure={!quality ? loading : found?.of ? `${((100 * found.hit) / found.of).toFixed(1)} %` : 'n/a'}
           label="of layer boundaries found"
           note={quality && (ev && found?.of
             ? `${n(Math.round(found.hit))} of ${n(found.of)} in ${n(ev.reference.records)} human-checked records${quality.source === 'snapshot' ? `, snapshot of ${ev.generated}` : ''}`
             : 'No human-checked reference yet')}
-          onClick={() => onOpen('quality', 'extraction-quality')} />
+          onClick={() => onOpen('details', 'extraction-quality')} />
         <Claim goal="Release safety" hint="The release audit"
           figure={!quality ? loading : audit?.reviewed ? <>{n(audit.wrong)}<small> of {n(audit.reviewed)}</small></> : 'n/a'}
           label="automatic releases wrong"
           note={quality && (!audit ? 'No audit sample drawn yet'
             : !audit.reviewed ? `${n(audit.sample)} drawn, none checked yet`
-            : `95 % interval ${Math.round(100 * audit.low)}–${Math.round(100 * audit.high)} %; a random sample checked by a person${audit.reviewed < audit.sample ? `, ${n(audit.sample - audit.reviewed)} still to check` : ''}`)}
-          onClick={() => onOpen('quality', 'release-audit')} />
+            : `random sample checked by a person, 95\u00a0% interval ${Math.round(100 * audit.low)}–\u2060${Math.round(100 * audit.high)}\u00a0%${audit.reviewed < audit.sample ? `; ${n(audit.sample - audit.reviewed)} still to check` : ''}`)}
+          onClick={() => onOpen('details', 'release-audit')} />
         <Claim goal="Work for people" hint="Open the review queue"
           figure={whole ? n(whole.status.pending_review) : loading} label="records waiting for review"
-          note={whole && `${n(whole.waiting_blocking)} of them with a blocking finding, which no score can release`}
+          note={whole && `${n(whole.waiting_blocking)} with a blocking finding, which no score releases`}
           onClick={() => onReview(DEFAULT_REVIEW_FILTERS)} />
       </ul>
     </section>
@@ -181,8 +189,9 @@ function Claim({ goal, figure, label, note, hint, onClick }: {
   )
 }
 
-function DataTab({ stats: s, error, quality, onShowGroup, onReview }: {
+function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }: {
   stats: StatsDetail | null
+  filtered: boolean
   error: string | null
   quality: Quality | null
   onShowGroup: Props['onShowGroup']
@@ -202,123 +211,143 @@ function DataTab({ stats: s, error, quality, onShowGroup, onReview }: {
     <>
       {error && <p className="error" role="alert">{error}</p>}
       {!s ? (!error && <p className="muted">Loading…</p>) : (
-        <div className="stats-grid stats-grid-data">
-          <Coordinates s={s} quality={quality} onReview={onReview} />
+        <>
+          {filtered && <p className="stats-scope">From here on: the records the list filters select.</p>}
+          <div className="stats-grid stats-grid-overview">
+            <Coordinates s={s} quality={quality} onReview={onReview} />
+            <Funnel s={s} />
+          </div>
 
-          <section className="stats-card stats-wide" aria-labelledby="stats-figures">
-            <h3 id="stats-figures">Key figures</h3>
-            <dl className="stats-tiles">
-              {([['Documents', s.documents], ['Pages', s.pages], ['Boreholes', s.boreholes], ['Layers', s.layers],
-                ['Countries', s.countries]] as [string, number][]).map(([label, value]) => (
-                <div key={label}><dt>{label}</dt><dd>{n(value)}</dd></div>
-              ))}
-            </dl>
-            <h4>Release state</h4>
-            <Shares label="Release state" parts={[
-              { key: 'released', label: 'Released', value: s.status.auto_approved + s.status.approved, color: 'var(--high)' },
-              { key: 'pending', label: 'Waiting for review', value: s.status.pending_review, color: 'var(--medium)' },
-              { key: 'rejected', label: 'Rejected', value: s.status.rejected, color: 'var(--low)' },
-            ]} />
-          </section>
+          <details className="stats-more">
+            <summary>More figures <span className="muted">key figures, final depth, lithology, findings, documents</span></summary>
+            <div className="stats-grid stats-grid-more">
+              <section className="stats-card stats-wide" aria-labelledby="stats-figures">
+                <h3 id="stats-figures">Key figures</h3>
+                <dl className="stats-tiles">
+                  {([['Documents', s.documents], ['Pages', s.pages], ['Boreholes', s.boreholes], ['Layers', s.layers],
+                    ['Countries', s.countries]] as [string, number][]).map(([label, value]) => (
+                    <div key={label}><dt>{label}</dt><dd>{n(value)}</dd></div>
+                  ))}
+                </dl>
+                <h4>Release state</h4>
+                <Shares label="Release state" parts={[
+                  { key: 'released', label: 'Released', value: s.status.auto_approved + s.status.approved, color: 'var(--high)' },
+                  { key: 'pending', label: 'Waiting for review', value: s.status.pending_review, color: 'var(--medium)' },
+                  { key: 'rejected', label: 'Rejected', value: s.status.rejected, color: 'var(--low)' },
+                ]} />
+              </section>
 
-          <section className="stats-card" aria-labelledby="stats-funnel">
-            <h3 id="stats-funnel">Release funnel</h3>
-            <p className="muted">A record is released automatically only with a score of at least {Math.round(s.threshold * 100)} and
-              no blocking finding; everything else goes to a person.</p>
-            <ol className="stats-rows">
-              {([['Records extracted', s.funnel.records], ['Without a blocking finding', s.funnel.without_blocking],
-                ['Released automatically', s.funnel.released_automatically]] as [string, number][]).map(([label, value]) => (
-                <li key={label}>
-                  <span className="stats-label">{label}</span>
-                  <Bar value={value} max={s.funnel.records} title={`${label}: ${n(value)}`} />
-                  <span className="stats-value">{n(value)} <span className="muted">{pct(value, s.funnel.records)} %</span></span>
-                </li>
-              ))}
-            </ol>
-            <p className="stats-note">Released after a person checked them: <b>{n(s.funnel.released - s.funnel.released_automatically)}</b>,
-              released in all: <b>{n(s.funnel.released)}</b></p>
-          </section>
+              <section className="stats-card" aria-labelledby="stats-depth">
+                <h3 id="stats-depth">Final depth</h3>
+                <p className="muted">Holes per {s.depth_bin_m} m of final depth.</p>
+                <div className="stats-columns" role="img"
+                  aria-label={s.depths.map((v, i) => `${i * s.depth_bin_m} m: ${v}`).join(', ')}>
+                  {s.depths.map((v, i) => {
+                    const range = i === s.depths.length - 1 ? `${i * s.depth_bin_m}+` : `${i * s.depth_bin_m}–${(i + 1) * s.depth_bin_m}`
+                    return (
+                      <div key={i} className="stats-column" title={`${range} m: ${n(v)} holes`}>
+                        <span className="stats-column-value">{v || ''}</span>
+                        <span className="stats-column-bar" style={{ height: `${(100 * v) / depthMax}%` }} />
+                        <span className="stats-column-label">{range}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+                <p className="stats-axis muted">metres</p>
+              </section>
 
-          <section className="stats-card" aria-labelledby="stats-depth">
-            <h3 id="stats-depth">Final depth</h3>
-            <p className="muted">Holes per {s.depth_bin_m} m of final depth.</p>
-            <div className="stats-columns" role="img"
-              aria-label={s.depths.map((v, i) => `${i * s.depth_bin_m} m: ${v}`).join(', ')}>
-              {s.depths.map((v, i) => {
-                const range = i === s.depths.length - 1 ? `${i * s.depth_bin_m}+` : `${i * s.depth_bin_m}–${(i + 1) * s.depth_bin_m}`
-                return (
-                  <div key={i} className="stats-column" title={`${range} m: ${n(v)} holes`}>
-                    <span className="stats-column-value">{v || ''}</span>
-                    <span className="stats-column-bar" style={{ height: `${(100 * v) / depthMax}%` }} />
-                    <span className="stats-column-label">{range}</span>
-                  </div>
-                )
-              })}
+              <section className="stats-card" aria-labelledby="stats-lith">
+                <h3 id="stats-lith">Lithology</h3>
+                <p className="muted">Share of the logged metres ({n(Math.round(lithTotal))} m) per DIN 4023 class.</p>
+                <ol className="stats-rows">
+                  {lithRows.map(([key, m]) => {
+                    const label = key === 'other' ? 'Other classes' : lithStyle(key).label
+                    return (
+                      <li key={key}>
+                        <span className="stats-label">{label}</span>
+                        <Bar value={m} max={lithRows[0][1]} title={`${label}: ${n(Math.round(m))} m`}
+                          {...(key === 'other' ? { fill: 'var(--graphite)' } : { pattern: patternId(key) })} />
+                        <span className="stats-value">{pct(m, lithTotal)} %</span>
+                      </li>
+                    )
+                  })}
+                </ol>
+              </section>
+
+              <section className="stats-card stats-wide" aria-labelledby="stats-findings">
+                <h3 id="stats-findings">Findings</h3>
+                <p className="muted">Records per finding, blocking ones first; notes are left out.</p>
+                <table className="stats-table">
+                  <thead><tr><th>Finding</th><th>Severity</th><th className="num" colSpan={2}>Records</th></tr></thead>
+                  <tbody>
+                    {findings.map((f) => (
+                      <tr key={`${f.code}-${f.severity}`}>
+                        <td>{words(f.code)}</td>
+                        <td><span className={`sev sev-${f.severity}`}>{SEVERITY_LABEL[f.severity]}</span></td>
+                        <td className="stats-bar-cell">
+                          <Bar value={f.records} max={findingMax} title={`${words(f.code)}: ${n(f.records)} records, ${n(f.count)} findings`} />
+                        </td>
+                        <td className="num">{n(f.records)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </section>
+
+              <section className="stats-card stats-wide" aria-labelledby="stats-groups">
+                <h3 id="stats-groups">Documents</h3>
+                <p className="muted">Per document group. Choose one to see its holes on the map.</p>
+                <table className="stats-table">
+                  <thead><tr><th>Document</th><th className="num">Holes</th><th colSpan={2}>Released</th><th>Most frequent finding</th></tr></thead>
+                  <tbody>
+                    {s.groups.map((g) => (
+                      <tr key={g.group}>
+                        <td><button className="link-button" onClick={() => onShowGroup(g.group)}>{g.group}</button></td>
+                        <td className="num">{n(g.count)}</td>
+                        <td className="stats-bar-cell">
+                          <Bar value={g.released} max={g.count} fill="var(--high)" title={`${n(g.released)} of ${n(g.count)} released`} />
+                        </td>
+                        <td className="num">{pct(g.released, g.count)} %</td>
+                        <td>{g.top_finding ? `${words(g.top_finding.code)} (${n(g.top_finding.records)})` : <span className="muted">none</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </section>
             </div>
-            <p className="stats-axis muted">metres</p>
-          </section>
-
-          <section className="stats-card" aria-labelledby="stats-lith">
-            <h3 id="stats-lith">Lithology</h3>
-            <p className="muted">Share of the logged metres ({n(Math.round(lithTotal))} m) per DIN 4023 class.</p>
-            <ol className="stats-rows">
-              {lithRows.map(([key, m]) => {
-                const label = key === 'other' ? 'Other classes' : lithStyle(key).label
-                return (
-                  <li key={key}>
-                    <span className="stats-label">{label}</span>
-                    <Bar value={m} max={lithRows[0][1]} title={`${label}: ${n(Math.round(m))} m`}
-                      {...(key === 'other' ? { fill: 'var(--graphite)' } : { pattern: patternId(key) })} />
-                    <span className="stats-value">{pct(m, lithTotal)} %</span>
-                  </li>
-                )
-              })}
-            </ol>
-          </section>
-
-          <section className="stats-card stats-wide" aria-labelledby="stats-findings">
-            <h3 id="stats-findings">Findings</h3>
-            <p className="muted">Records per finding, blocking ones first; notes are left out.</p>
-            <table className="stats-table">
-              <thead><tr><th>Finding</th><th>Severity</th><th className="num" colSpan={2}>Records</th></tr></thead>
-              <tbody>
-                {findings.map((f) => (
-                  <tr key={`${f.code}-${f.severity}`}>
-                    <td>{words(f.code)}</td>
-                    <td><span className={`sev sev-${f.severity}`}>{SEVERITY_LABEL[f.severity]}</span></td>
-                    <td className="stats-bar-cell">
-                      <Bar value={f.records} max={findingMax} title={`${words(f.code)}: ${n(f.records)} records, ${n(f.count)} findings`} />
-                    </td>
-                    <td className="num">{n(f.records)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-
-          <section className="stats-card stats-wide" aria-labelledby="stats-groups">
-            <h3 id="stats-groups">Documents</h3>
-            <p className="muted">Per document group. Choose one to see its holes on the map.</p>
-            <table className="stats-table">
-              <thead><tr><th>Document</th><th className="num">Holes</th><th colSpan={2}>Released</th><th>Most frequent finding</th></tr></thead>
-              <tbody>
-                {s.groups.map((g) => (
-                  <tr key={g.group}>
-                    <td><button className="link-button" onClick={() => onShowGroup(g.group)}>{g.group}</button></td>
-                    <td className="num">{n(g.count)}</td>
-                    <td className="stats-bar-cell">
-                      <Bar value={g.released} max={g.count} fill="var(--high)" title={`${n(g.released)} of ${n(g.count)} released`} />
-                    </td>
-                    <td className="num">{pct(g.released, g.count)} %</td>
-                    <td>{g.top_finding ? `${words(g.top_finding.code)} (${n(g.top_finding.records)})` : <span className="muted">none</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-        </div>
+          </details>
+        </>
       )}
     </>
+  )
+}
+
+/** From extracted records to released ones: automatically, and after a person checked them. */
+function Funnel({ s }: { s: StatsDetail }) {
+  const f = s.funnel
+  const steps: [string, number, string][] = [
+    ['Records extracted', f.records, 'var(--water)'],
+    ['Without a blocking finding', f.without_blocking, 'var(--water)'],
+    ['Released automatically', f.released_automatically, 'var(--water)'],
+    ['Released after a person checked', f.released - f.released_automatically, 'var(--high)'],
+  ]
+  return (
+    <section className="stats-card stats-wide" aria-labelledby="stats-funnel">
+      <h3 id="stats-funnel">Release funnel</h3>
+      <p className="muted">Released automatically only with a score of at least {Math.round(s.threshold * 100)} and no
+        blocking finding; everything else goes to a person.</p>
+      <ol className="funnel">
+        {steps.map(([label, value, fill]) => (
+          <li key={label}>
+            <span className="funnel-figure">{n(value)}</span>
+            <span className="funnel-label">{label}</span>
+            <Bar value={value} max={f.records} fill={fill} title={`${label}: ${n(value)} of ${n(f.records)}`} />
+            <span className="funnel-share muted">{pct(value, f.records)} % of the records</span>
+          </li>
+        ))}
+      </ol>
+      <p className="stats-note">Released in all: <b>{n(f.released)}</b> <span className="muted">{pct(f.released, f.records)} %</span></p>
+    </section>
   )
 }
 
@@ -330,8 +359,8 @@ function Coordinates({ s, quality, onReview }: { s: StatsDetail; quality: Qualit
   return (
     <section className="stats-card stats-wide" id="coordinates" tabIndex={-1} aria-labelledby="stats-coordinates">
       <h3 id="stats-coordinates">Coordinates</h3>
-      <p className="muted">Where each hole’s position comes from, and how the coordinate system of its printed coordinates
-        was settled. A hole is placed only where the evidence holds; the rest goes to a person.</p>
+      <p className="muted">Where each position comes from and how its coordinate system was settled. Only evidence places
+        a hole; the rest goes to a person.</p>
       <h4>How the position was obtained</h4>
       <Shares label="Position" parts={[
         { key: 'printed', label: 'Printed coordinates', value: p.printed, color: 'var(--water)' },
@@ -364,16 +393,12 @@ function Coordinates({ s, quality, onReview }: { s: StatsDetail; quality: Qualit
             {n(s.crs.length)} distinct EPSG codes
             {s.crs_without_epsg > 0 && `; ${n(s.crs_without_epsg)} holes in a local grid without one`}.
           </p>
-          {s.crs.length > 0 && (
-            <ol className="stats-rows">
-              {s.crs.map(([epsg, count]) => (
-                <li key={epsg}>
-                  <span className="stats-label">EPSG:{epsg}</span>
-                  <Bar value={count} max={s.crs[0][1]} title={`EPSG:${epsg}: ${n(count)} holes`} />
-                  <span className="stats-value">{n(count)}</span>
-                </li>
-              ))}
-            </ol>
+          {s.crs.length > 0 && <CrsRows rows={s.crs.slice(0, CRS_ROWS)} max={s.crs[0][1]} />}
+          {s.crs.length > CRS_ROWS && (
+            <details className="coord-more">
+              <summary>All {n(s.crs.length)} coordinate systems</summary>
+              <CrsRows rows={s.crs.slice(CRS_ROWS)} max={s.crs[0][1]} />
+            </details>
           )}
         </div>
       </div>
@@ -394,5 +419,19 @@ function Coordinates({ s, quality, onReview }: { s: StatsDetail; quality: Qualit
         )}
       </p>
     </section>
+  )
+}
+
+function CrsRows({ rows, max }: { rows: [number, number][]; max: number }) {
+  return (
+    <ol className="stats-rows">
+      {rows.map(([epsg, count]) => (
+        <li key={epsg}>
+          <span className="stats-label">EPSG:{epsg}</span>
+          <Bar value={count} max={max} title={`EPSG:${epsg}: ${n(count)} holes`} />
+          <span className="stats-value">{n(count)}</span>
+        </li>
+      ))}
+    </ol>
   )
 }
