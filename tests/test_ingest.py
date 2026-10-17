@@ -1,7 +1,10 @@
 """Ingestion of DOCX and plain-text logs (synthetic files)."""
 
+import shutil
+
 import docx
 import pymupdf
+import pytest
 
 from pipeline import config, ingest
 
@@ -104,3 +107,18 @@ def test_spreadsheet_rows_become_text_lines_per_sheet(tmp_path, monkeypatch):
     text = ingest.render(doc, tmp_path)[0].text
     assert "[Layers]\nB 1 | 0.5 | 1.2 | Lehm, br\u00e4unlich\n" in text  # trailing empty cells dropped
     assert "[Position]\nE | 412000 | N | 5320000" in text
+
+
+@pytest.mark.skipif(not shutil.which("soffice") and not shutil.which("libreoffice"), reason="LibreOffice not installed")
+def test_docx_table_is_rendered_through_libreoffice(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
+    monkeypatch.setattr(config, "CONVERTED_DIR", tmp_path / "converted")
+    dataset = tmp_path / "data"
+    dataset.mkdir()
+    document = docx.Document()
+    table = document.add_table(rows=2, cols=2)
+    for (row, col), text in {(0, 0): "0.00-1.20", (0, 1): "Fill", (1, 0): "1.20-4.50", (1, 1): "Clay"}.items():
+        table.cell(row, col).text = text
+    document.save(dataset / "log.docx")
+    pages = ingest.render(ingest.SourceDoc("log", "log.docx", "docx"), dataset)
+    assert len(pages) == 1 and "1.20-4.50" in pages[0].text and "Clay" in pages[0].text
