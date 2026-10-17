@@ -68,6 +68,7 @@ def fresh_db(name: str) -> sqlite3.Connection:
         f.unlink(missing_ok=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     config.DB_PATH = path
+    store.migrate(path)
     return store.connect(path)
 
 

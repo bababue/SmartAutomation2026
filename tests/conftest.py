@@ -18,8 +18,10 @@ def no_second_coordinate_reading(monkeypatch):
 
 @pytest.fixture()
 def db_path(tmp_path, monkeypatch):
+    from pipeline import store
     path = tmp_path / "test.sqlite"
     monkeypatch.setattr(config, "DB_PATH", path)
+    store.migrate()
     return path
 
 

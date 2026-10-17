@@ -26,9 +26,10 @@ def record(bid: str, file: str, pages: list[int], name: str = "BH1") -> Borehole
 def client(tmp_path, monkeypatch):
     path = tmp_path / "test.sqlite"
     monkeypatch.setattr(config, "DB_PATH", path)
+    store.migrate(path)
     con = store.connect(path)
-    store.save_document(con, "XYZ01", "reports/XYZ01_site_report.pdf", "pdf", [])
-    store.save_document(con, "QRS02", "reports/QRS02_logs.pdf", "pdf", [])
+    store.save_document(con, "XYZ01", "reports/XYZ01_site_report.pdf", [])
+    store.save_document(con, "QRS02", "reports/QRS02_logs.pdf", [])
     store.save_borehole(con, record("XYZ01:BH1", "reports/XYZ01_site_report.pdf", [2, 1]))
     store.save_borehole(con, record("QRS02:BH7", "reports/QRS02_logs.pdf", [5], name="BH7"))
     con.close()

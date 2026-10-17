@@ -136,6 +136,7 @@ def main() -> None:
     if not config.DB_PATH.name.startswith("demo"):  # reset() would replace the real records
         raise SystemExit(f"refusing to write demo data into {config.DB_PATH}; "
                          "run with DB_PATH=data/demo.sqlite")
+    store.migrate()
     con = store.connect()
     store.reset(con)
     for bh in build():

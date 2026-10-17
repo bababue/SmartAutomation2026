@@ -19,65 +19,38 @@ from schema.borehole import Borehole, ReviewStatus
 from . import config, ground, scoring
 from .georef import haversine_km
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS documents (
-    doc_id TEXT PRIMARY KEY, path TEXT, kind TEXT, pages INTEGER
-);
-CREATE TABLE IF NOT EXISTS pages (
-    doc_id TEXT, page INTEGER, kind TEXT, language TEXT, logs TEXT, image TEXT, thumb TEXT,
-    width INTEGER, height INTEGER, PRIMARY KEY (doc_id, page)
-);
+REVIEW_STATUSES = ", ".join(f"'{s.value}'" for s in ReviewStatus)
+
+# A hole's document group (store.document_group): the document, or the folder of single images.
+GROUP_SQL = "CASE WHEN instr(doc_id, '__') > 0 THEN substr(doc_id, 1, instr(doc_id, '__') - 1) ELSE doc_id END"
+
+BOREHOLES = f"""
 CREATE TABLE IF NOT EXISTS boreholes (
     rid INTEGER PRIMARY KEY,
-    id TEXT UNIQUE, name TEXT, doc_id TEXT, project TEXT, location_name TEXT, country TEXT,
+    id TEXT UNIQUE, uid TEXT, name TEXT, doc_id TEXT, project TEXT, location_name TEXT, country TEXT,
     lat REAL, lon REAL, depth REAL, elevation REAL, investigation_type TEXT,
-    confidence REAL, loc_confidence REAL, loc_method TEXT, score REAL, review_status TEXT,
-    n_layers INTEGER, n_issues INTEGER, lithologies TEXT, strip TEXT, content_hash TEXT, data TEXT,
+    confidence REAL, loc_confidence REAL, loc_method TEXT, score REAL, reasons TEXT,
+    review_status TEXT NOT NULL CHECK (review_status IN ({REVIEW_STATUSES})),
+    review_revision INTEGER NOT NULL DEFAULT 0,
+    n_layers INTEGER, strip TEXT, content_hash TEXT, version_id INTEGER, data TEXT,
     extracted TEXT,  -- model output before reviewer corrections (layers, position), for evaluation
-    ground TEXT  -- derived ground model values (pipeline/ground.py)
-);
-CREATE VIRTUAL TABLE IF NOT EXISTS boreholes_rtree USING rtree(rid, min_lat, max_lat, min_lon, max_lon);
+    ground TEXT,  -- derived ground model values (pipeline/ground.py)
+    grp TEXT GENERATED ALWAYS AS ({GROUP_SQL}) VIRTUAL
+)"""
+
+SCHEMA = BOREHOLES + """;
+CREATE UNIQUE INDEX IF NOT EXISTS boreholes_uid ON boreholes (uid);
 CREATE INDEX IF NOT EXISTS boreholes_doc ON boreholes (doc_id);
+CREATE INDEX IF NOT EXISTS boreholes_grp ON boreholes (grp);
+CREATE INDEX IF NOT EXISTS boreholes_queue ON boreholes (review_status, score, name, id);
+CREATE VIRTUAL TABLE IF NOT EXISTS boreholes_rtree USING rtree(rid, min_lat, max_lat, min_lon, max_lon);
 -- Full-text rows share the borehole's rid as rowid, so updates and deletes are point operations.
 CREATE VIRTUAL TABLE IF NOT EXISTS boreholes_fts USING fts5(
     name, project, location, descriptions, stratigraphy, tokenize = 'unicode61 remove_diacritics 2'
 );
-CREATE TABLE IF NOT EXISTS review_events (
-    id INTEGER PRIMARY KEY, borehole_id TEXT, decision TEXT, reviewer TEXT, comment TEXT, at TEXT,
-    content_hash TEXT
-);
-CREATE INDEX IF NOT EXISTS review_events_borehole ON review_events (borehole_id, id);
--- Reviewer corrections, re-applied after every run. scope 'borehole': target is a borehole id;
--- scope 'document': target is a document group (doc id before '__'), e.g. one CRS for all holes.
-CREATE TABLE IF NOT EXISTS corrections (
-    id INTEGER PRIMARY KEY, scope TEXT, target TEXT, kind TEXT, payload TEXT, reviewer TEXT, comment TEXT, at TEXT
-);
-CREATE INDEX IF NOT EXISTS corrections_target ON corrections (scope, target, id);
--- What reviewers taught the system, beyond single records. scope_type: document | project | region | global;
--- source: derived (from corrections) | review (entered from the documents) | external (phone, e-mail, site).
-CREATE TABLE IF NOT EXISTS knowledge (
-    id INTEGER PRIMARY KEY, scope_type TEXT, scope_value TEXT, kind TEXT, payload TEXT, source TEXT, note TEXT,
-    created_by TEXT, created_at TEXT, confirmations INTEGER DEFAULT 1, active INTEGER DEFAULT 1, evidence TEXT
-);
-CREATE INDEX IF NOT EXISTS knowledge_scope ON knowledge (scope_type, scope_value, kind);
-CREATE TABLE IF NOT EXISTS upload_jobs (
-    id TEXT PRIMARY KEY, task TEXT NOT NULL, status TEXT NOT NULL, result TEXT, error TEXT, created_at TEXT NOT NULL
-);
--- Every model call a run made (cache hits make none): what went where, as sizes, never the content.
-CREATE TABLE IF NOT EXISTS llm_calls (
-    id INTEGER PRIMARY KEY, at TEXT NOT NULL, job_id TEXT, doc_id TEXT, page INTEGER, stage TEXT, model TEXT,
-    endpoint TEXT, image_bytes INTEGER, text_chars INTEGER, input_tokens INTEGER, output_tokens INTEGER,
-    cost_usd REAL, seconds REAL, outcome TEXT
-);
-CREATE INDEX IF NOT EXISTS llm_calls_at ON llm_calls (at);
-CREATE INDEX IF NOT EXISTS llm_calls_job ON llm_calls (job_id);
-"""
-
-# Version 3: queryable projections (layers, lab values, findings, sources), stable borehole uids with
-# aliases, immutable record versions, review revision. Older databases are migrated in connect().
-SCHEMA_VERSION = 4
-
-SCHEMA_V3 = """
+CREATE TABLE IF NOT EXISTS documents (doc_id TEXT PRIMARY KEY, path TEXT, pages INTEGER);
+-- kind: the page's classification by the last run that classified it.
+CREATE TABLE IF NOT EXISTS pages (doc_id TEXT, page INTEGER, kind TEXT, image TEXT, PRIMARY KEY (doc_id, page));
 -- Projections of the current records for queries, rebuilt from 'data' at any time.
 CREATE TABLE IF NOT EXISTS layers (
     rid INTEGER NOT NULL, seq INTEGER NOT NULL, top_m REAL, bottom_m REAL, primary_code TEXT, strat_code TEXT,
@@ -102,126 +75,146 @@ CREATE INDEX IF NOT EXISTS sources_page ON record_sources (file, page);
 -- Identity: a durable uid per physical hole, ids and natural keys ('nk:group|type|number') are aliases.
 CREATE TABLE IF NOT EXISTS borehole_aliases (alias TEXT PRIMARY KEY, uid TEXT NOT NULL) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS aliases_uid ON borehole_aliases (uid);
--- Every distinct content a record had: what a reviewer saw stays reconstructable.
+-- The content a review decision was about (review_events.version_id) and each hole's current content.
 CREATE TABLE IF NOT EXISTS record_versions (
     id INTEGER PRIMARY KEY, uid TEXT NOT NULL, content_hash TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS versions_uid ON record_versions (uid, id);
-CREATE INDEX IF NOT EXISTS boreholes_queue ON boreholes (review_status, score, name, id);
+CREATE TABLE IF NOT EXISTS review_events (
+    id INTEGER PRIMARY KEY, borehole_id TEXT, decision TEXT, reviewer TEXT, comment TEXT, at TEXT,
+    content_hash TEXT, uid TEXT, version_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS review_events_borehole ON review_events (borehole_id, id);
+CREATE INDEX IF NOT EXISTS review_events_uid ON review_events (uid, id);
+-- Reviewer corrections, re-applied after every run. scope 'borehole': target is a borehole id and uid the hole.
+-- scope 'document': target is a document group (doc id before '__'), e.g. one CRS for all holes.
+CREATE TABLE IF NOT EXISTS corrections (
+    id INTEGER PRIMARY KEY, scope TEXT, target TEXT, kind TEXT, payload TEXT, reviewer TEXT, comment TEXT, at TEXT,
+    uid TEXT
+);
+CREATE INDEX IF NOT EXISTS corrections_target ON corrections (scope, target, id);
+CREATE INDEX IF NOT EXISTS corrections_uid ON corrections (uid, id);
+-- What reviewers taught the system, beyond single records. scope_type: document | project | region | global.
+-- source: derived (from corrections) | review (entered from the documents) | external (phone, e-mail, site).
+CREATE TABLE IF NOT EXISTS knowledge (
+    id INTEGER PRIMARY KEY, scope_type TEXT, scope_value TEXT, kind TEXT, payload TEXT, source TEXT, note TEXT,
+    created_by TEXT, created_at TEXT, confirmations INTEGER DEFAULT 1, active INTEGER DEFAULT 1, evidence TEXT
+);
+CREATE INDEX IF NOT EXISTS knowledge_scope ON knowledge (scope_type, scope_value, kind);
+CREATE TABLE IF NOT EXISTS upload_jobs (
+    id TEXT PRIMARY KEY, task TEXT NOT NULL, status TEXT NOT NULL, result TEXT, error TEXT, created_at TEXT NOT NULL
+);
+-- Every model call a run made (cache hits make none): what went where, as sizes, never the content.
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY, at TEXT NOT NULL, job_id TEXT, doc_id TEXT, page INTEGER, stage TEXT, model TEXT,
+    endpoint TEXT, image_bytes INTEGER, text_chars INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+    cost_usd REAL, seconds REAL, outcome TEXT
+);
+CREATE INDEX IF NOT EXISTS llm_calls_at ON llm_calls (at);
+CREATE INDEX IF NOT EXISTS llm_calls_job ON llm_calls (job_id);
 """
 
+SCHEMA_VERSION = 5
+# Oldest file migrate() can bring up to date; older ones predate stable uids and the review log's versions.
+OLDEST_VERSION = 3
 
 HUMAN = (ReviewStatus.approved, ReviewStatus.rejected)
 
 
-def _add_columns(con: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
-    present = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
-    for name, decl in columns.items():
-        if name not in present:
-            con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
-
-
-def _migrate_v3(con: sqlite3.Connection) -> None:
-    """Projections, uids, aliases and a first version for every stored record (no rebuild needed)."""
-    with con:
-        _add_columns(con, "boreholes", {"reasons": "TEXT", "uid": "TEXT", "version_id": "INTEGER",
-                                        "review_revision": "INTEGER NOT NULL DEFAULT 0"})
-        _add_columns(con, "corrections", {"uid": "TEXT"})
-        _add_columns(con, "review_events", {"uid": "TEXT", "version_id": "INTEGER"})
-        for table in ("layers", "lab_values", "findings", "record_sources"):  # derived: always rebuilt
-            con.execute(f"DROP TABLE IF EXISTS {table}")
-        for statement in SCHEMA_V3.split(";"):  # executescript would commit the open transaction
-            if statement.strip():
-                con.execute(statement)
-        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS boreholes_uid ON boreholes (uid)")
-        con.execute("CREATE INDEX IF NOT EXISTS corrections_uid ON corrections (uid, id)")
-        con.execute("CREATE INDEX IF NOT EXISTS review_events_uid ON review_events (uid, id)")
-        for row in con.execute("SELECT rid, id, data, content_hash, uid FROM boreholes").fetchall():
-            try:
-                bh = Borehole.model_validate_json(row["data"])
-            except ValidationError:
-                continue
-            uid = row["uid"] or _resolve_uid(con, bh) or uuid.uuid4().hex
-            version_id = _version(con, uid, row["content_hash"], row["data"])
-            con.execute("UPDATE boreholes SET uid = ?, version_id = ?, reasons = ? WHERE rid = ?",
-                        (uid, version_id, as_json(bh.score_reasons), row["rid"]))
-            _remember_aliases(con, bh, uid)
-            _write_projections(con, row["rid"], bh)
-        con.execute("""UPDATE corrections SET uid = (SELECT uid FROM boreholes b WHERE b.id = corrections.target)
-                       WHERE scope = 'borehole' AND uid IS NULL""")
-        con.execute("""UPDATE review_events SET uid = (SELECT uid FROM boreholes b WHERE b.id = review_events.borehole_id)
-                       WHERE uid IS NULL""")
-        con.execute("PRAGMA user_version = 3")
+def _statements(script: str) -> list[str]:
+    """executescript would commit the open migration transaction."""
+    return [s for s in script.split(";") if s.strip()]
 
 
 def _migrate_v4(con: sqlite3.Connection) -> None:
-    with con:
-        _add_columns(con, "lab_values", {"value_upper": "REAL"})
-        for row in con.execute("SELECT rid, data FROM boreholes").fetchall():
-            try:
-                bh = Borehole.model_validate_json(row["data"])
-            except ValidationError:
-                continue
-            con.execute("DELETE FROM lab_values WHERE rid = ?", (row["rid"],))
-            _write_lab_values(con, row["rid"], bh)
-        con.execute("PRAGMA user_version = 4")
+    """Upper bounds of lab value ranges."""
+    con.execute("ALTER TABLE lab_values ADD COLUMN value_upper REAL")
+    for row in con.execute("SELECT rid, data FROM boreholes").fetchall():
+        try:
+            bh = Borehole.model_validate_json(row["data"])
+        except ValidationError:
+            continue
+        con.execute("DELETE FROM lab_values WHERE rid = ?", (row["rid"],))
+        _write_lab_values(con, row["rid"], bh)
+
+
+def _migrate_v5(con: sqlite3.Connection) -> None:
+    """Review status check and document group column (a table rebuild, rids kept for the R-tree and full
+    text), unread columns dropped, record versions that no decision or current record points to pruned."""
+    con.execute("ALTER TABLE boreholes RENAME TO boreholes_v4")
+    con.execute(BOREHOLES)
+    columns = ", ".join(r["name"] for r in con.execute("PRAGMA table_info(boreholes)"))
+    con.execute(f"INSERT INTO boreholes ({columns}) SELECT {columns} FROM boreholes_v4")
+    con.execute("DROP TABLE boreholes_v4")
+    con.execute("ALTER TABLE documents DROP COLUMN kind")
+    for column in ("language", "logs", "thumb", "width", "height"):
+        con.execute(f"ALTER TABLE pages DROP COLUMN {column}")
+    con.execute("""DELETE FROM record_versions
+                   WHERE id NOT IN (SELECT version_id FROM review_events WHERE version_id IS NOT NULL)
+                   AND id NOT IN (SELECT version_id FROM boreholes WHERE version_id IS NOT NULL)""")
+
+
+MIGRATIONS = {4: _migrate_v4, 5: _migrate_v5}
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
-    path = path or config.DB_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path, check_same_thread=False, timeout=30)
+    """A connection to a database that `migrate` has brought up to date."""
+    con = sqlite3.connect(path or config.DB_PATH, check_same_thread=False, timeout=30)
     con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")  # readers (API) never block the pipeline writer
-    columns = {r["name"] for r in con.execute("PRAGMA table_info(boreholes)")}
-    if columns and "review_status" not in columns:
-        # Database from before the review workflow: derived tables, rebuildable via `pipeline rebuild`.
-        con.executescript("DROP TABLE boreholes; DROP TABLE IF EXISTS boreholes_rtree; DROP TABLE IF EXISTS boreholes_fts;")
-    fts_columns = {r["name"] for r in con.execute("PRAGMA table_info(boreholes_fts)")}
-    rebuild_fts = "id" in fts_columns  # old full-text table keyed by a text id: derived, rebuilt below
-    if rebuild_fts:
-        con.execute("DROP TABLE boreholes_fts")
-    con.executescript(SCHEMA)
-    if rebuild_fts:
-        with con:
-            for row in con.execute("SELECT rid, data FROM boreholes").fetchall():
-                _insert_fts(con, row["rid"], Borehole.model_validate_json(row["data"]))
-    if "extracted" not in {r["name"] for r in con.execute("PRAGMA table_info(boreholes)")}:
-        con.execute("ALTER TABLE boreholes ADD COLUMN extracted TEXT")  # database from before evaluation
-    if "evidence" not in {r["name"] for r in con.execute("PRAGMA table_info(knowledge)")}:
-        con.execute("ALTER TABLE knowledge ADD COLUMN evidence TEXT")  # from before independent confirmations
-    if "ground" not in {r["name"] for r in con.execute("PRAGMA table_info(boreholes)")}:
-        with con:  # derived from the stored records, no rebuild needed
-            con.execute("ALTER TABLE boreholes ADD COLUMN ground TEXT")
-            for row in con.execute("SELECT rid, data FROM boreholes").fetchall():
-                try:
-                    summary = ground.summarize(Borehole.model_validate_json(row["data"])).model_dump_json()
-                except ValidationError:
-                    continue  # stays empty until the next rebuild
-                con.execute("UPDATE boreholes SET ground = ? WHERE rid = ?", (summary, row["rid"]))
-    if con.execute("PRAGMA user_version").fetchone()[0] < 3:
-        _migrate_v3(con)
-    if con.execute("PRAGMA user_version").fetchone()[0] < 4:
-        _migrate_v4(con)
-    con.execute("DROP INDEX IF EXISTS boreholes_status")  # a prefix of boreholes_queue
     return con
 
 
+def migrate(path: Path | None = None) -> None:
+    """Create or upgrade the database; once per process, before the first `connect`."""
+    path = path or config.DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = connect(path)
+    try:
+        if con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION:
+            return
+        con.execute("PRAGMA journal_mode=WAL")  # persistent: readers (API) never block the pipeline writer
+        with con:
+            con.execute("BEGIN IMMEDIATE")  # another process may be migrating the same file
+            version = con.execute("PRAGMA user_version").fetchone()[0]
+            if version == SCHEMA_VERSION:
+                return
+            fresh = not con.execute("SELECT 1 FROM sqlite_master WHERE name = 'boreholes'").fetchone()
+            if not fresh and not OLDEST_VERSION <= version < SCHEMA_VERSION:
+                raise RuntimeError(f"{path} has schema version {version}; this code reads versions "
+                                   f"{OLDEST_VERSION} to {SCHEMA_VERSION}")
+            if not fresh:
+                for target in range(version + 1, SCHEMA_VERSION + 1):
+                    MIGRATIONS[target](con)
+            for statement in _statements(SCHEMA):
+                con.execute(statement)
+            con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        if not fresh:
+            try:
+                con.execute("VACUUM")  # returns the pruned versions' space to the file system
+            except sqlite3.OperationalError:
+                pass  # busy: the free pages are reused by later writes anyway
+    finally:
+        con.close()
+
+
 def reset(con: sqlite3.Connection) -> None:
-    """Remove all records; the review log stays, it holds human decisions."""
+    """Remove all records; the review log stays with the versions it points to, it holds human decisions."""
     for table in ("boreholes", "boreholes_rtree", "boreholes_fts", "layers", "lab_values",
-                  "findings", "record_sources", "borehole_aliases", "record_versions"):
+                  "findings", "record_sources", "borehole_aliases"):
         con.execute(f"DELETE FROM {table}")
+    con.execute("DELETE FROM record_versions WHERE id NOT IN "
+                "(SELECT version_id FROM review_events WHERE version_id IS NOT NULL)")
     con.commit()
 
 
-def save_document(con: sqlite3.Connection, doc_id: str, path: str, kind: str, pages: list[dict]) -> None:
-    con.execute("INSERT OR REPLACE INTO documents VALUES (?, ?, ?, ?)", (doc_id, path, kind, len(pages)))
-    con.execute("DELETE FROM pages WHERE doc_id = ?", (doc_id,))  # a re-render can have fewer pages
-    con.executemany(
-        "INSERT OR REPLACE INTO pages VALUES (:doc_id, :page, :kind, :language, :logs, :image, :thumb, :width, :height)",
-        pages,
-    )
+def save_document(con: sqlite3.Connection, doc_id: str, path: str, images: list[tuple[int, str]]) -> None:
+    """A document and its rendered pages as (page, image path); a page keeps its classification."""
+    con.execute("INSERT OR REPLACE INTO documents (doc_id, path, pages) VALUES (?, ?, ?)", (doc_id, path, len(images)))
+    con.execute(f"DELETE FROM pages WHERE doc_id = ? AND page NOT IN ({', '.join('?' * len(images))})",
+                (doc_id, *(page for page, _ in images)))  # a re-render can have fewer pages
+    con.executemany("INSERT INTO pages (doc_id, page, image) VALUES (?, ?, ?) "
+                    "ON CONFLICT (doc_id, page) DO UPDATE SET image = excluded.image",
+                    [(doc_id, page, image) for page, image in images])
     con.commit()
 
 
@@ -260,8 +253,8 @@ def content_hash(bh: Borehole) -> str:
 
 
 def _delete(con: sqlite3.Connection, borehole_id: str) -> dict | None:
-    row = con.execute("SELECT rid, content_hash, data, extracted, uid, review_revision FROM boreholes WHERE id = ?",
-                      (borehole_id,)).fetchone()
+    row = con.execute("SELECT rid, content_hash, data, extracted, uid, version_id, review_revision FROM boreholes "
+                      "WHERE id = ?", (borehole_id,)).fetchone()
     if not row:
         return None
     con.execute("DELETE FROM boreholes WHERE rid = ?", (row["rid"],))
@@ -307,6 +300,8 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
     version_id = _version(con, uid, digest, bh.model_dump_json())
     _insert(con, bh, digest, extracted_json, uid, version_id, revision)
     _remember_aliases(con, bh, uid)
+    if previous and previous.get("version_id") not in (None, version_id):
+        _drop_unreviewed_version(con, previous["version_id"])
     if commit:
         con.commit()
 
@@ -410,6 +405,13 @@ def _version(con: sqlite3.Connection, uid: str, digest: str, data: str) -> int:
     return cur.lastrowid
 
 
+def _drop_unreviewed_version(con: sqlite3.Connection, version_id: int) -> None:
+    """Forget a replaced version unless a decision was about it or a current record still is it."""
+    con.execute("DELETE FROM record_versions WHERE id = :v AND NOT EXISTS (SELECT 1 FROM review_events WHERE "
+                "version_id = :v) AND NOT EXISTS (SELECT 1 FROM boreholes b WHERE b.uid = record_versions.uid "
+                "AND b.version_id = :v)", {"v": version_id})
+
+
 def _write_projections(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
     from .scoring import EPSG_IN_FINDING, finding_code, finding_severity
     con.executemany("INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -436,18 +438,16 @@ def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str |
             review_revision: int) -> None:
     loc = bh.location
     doc_id = doc_of(bh.borehole_id)
-    lithologies = sorted({layer.primary.value for layer in bh.layers})
     cur = con.execute(
         """INSERT INTO boreholes (id, name, doc_id, project, location_name, country, lat, lon, depth, elevation,
-           investigation_type, confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues,
-           lithologies, strip, content_hash, data, extracted, ground, reasons, uid, version_id, review_revision)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           investigation_type, confidence, loc_confidence, loc_method, score, review_status, n_layers,
+           strip, content_hash, data, extracted, ground, reasons, uid, version_id, review_revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             bh.borehole_id, bh.borehole_name, doc_id, bh.project_name, bh.location_name, loc.country,
             loc.lat, loc.lon, bh.depth_m or (bh.layers[-1].bottom_m if bh.layers else None), bh.surface_elevation_m,
             bh.investigation_type.value if bh.investigation_type else None, bh.confidence, loc.confidence,
             loc.method.value if loc.method else None, bh.score, bh.review_status.value, len(bh.layers),
-            len(bh.issues), ",".join(lithologies),
             as_json([[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers]),
             digest, bh.model_dump_json(), extracted, ground.summarize(bh).model_dump_json(),
             as_json(bh.score_reasons), uid, version_id, review_revision,
@@ -549,8 +549,10 @@ def corrections_for(con: sqlite3.Connection, borehole_id: str, uid: str | None =
     """Corrections that apply to a record, oldest first (document-wide ones included). With the record's
     uid, corrections made under an earlier id of the same hole are found too."""
     rows = con.execute(
-        "SELECT * FROM corrections WHERE (scope = 'borehole' AND (target = ? OR uid = ?)) "
-        "OR (scope = 'document' AND target = ?) ORDER BY id", (borehole_id, uid or "", document_group(borehole_id)),
+        "SELECT * FROM corrections WHERE scope = 'borehole' AND target = ? "
+        "UNION SELECT * FROM corrections WHERE scope = 'borehole' AND uid = ? "
+        "UNION SELECT * FROM corrections WHERE scope = 'document' AND target = ? ORDER BY id",
+        (borehole_id, uid or "", document_group(borehole_id)),
     ).fetchall()
     return [{**dict(r), "payload": json.loads(r["payload"])} for r in rows]
 
@@ -565,10 +567,7 @@ def orphan_corrections(con: sqlite3.Connection) -> list[dict]:
 
 
 def group_borehole_ids(con: sqlite3.Connection, group: str) -> list[str]:
-    return [r["id"] for r in con.execute(
-        "SELECT id FROM boreholes WHERE doc_id = ? OR doc_id LIKE ? ESCAPE '\\' ORDER BY id",
-        (group, group.replace("_", "\\_").replace("%", "\\%") + "\\_\\_%"),
-    )]
+    return [r["id"] for r in con.execute("SELECT id FROM boreholes WHERE grp = ? ORDER BY id", (group,))]
 
 
 def knowledge_item(con: sqlite3.Connection, item_id: int) -> dict:
@@ -775,10 +774,6 @@ def _text(value) -> str:
 def load_borehole(con: sqlite3.Connection, borehole_id: str) -> Borehole | None:
     row = con.execute("SELECT data FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
     return Borehole.model_validate_json(row["data"]) if row else None
-
-
-def page_rows(con: sqlite3.Connection, doc_id: str) -> list[dict]:
-    return [dict(r) for r in con.execute("SELECT * FROM pages WHERE doc_id = ? ORDER BY page", (doc_id,))]
 
 
 def as_json(value) -> str:

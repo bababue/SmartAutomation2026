@@ -336,7 +336,7 @@ def test_a_document_cancelled_during_a_run_leaves_nothing_behind(con, monkeypatc
     classes.update(other[2])
     extractions.update(other[3])
     for d in docs:
-        store.save_document(con, d.doc_id, d.path, d.kind, [])  # registered when the run ingested it
+        store.save_document(con, d.doc_id, d.path, [])  # registered when the run ingested it
     monkeypatch.setattr(runner, "missing_credentials", lambda: None)
     monkeypatch.setattr(runner, "_ingest", lambda *args: rendered)
     monkeypatch.setattr(runner, "_parallel", lambda fn, pages, label, progress=None: classes if label == "classify" else {})

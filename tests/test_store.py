@@ -97,9 +97,11 @@ def test_id_change_keeps_a_reopened_record_open(con):
 def test_versions_only_for_changed_content_and_review_revision(con):
     store.save_borehole(con, record())
     store.save_borehole(con, record())  # same content: same version
-    store.save_borehole(con, record(ucs=55.0))  # changed: new version
-    assert con.execute("SELECT COUNT(*) FROM record_versions").fetchone()[0] == 2
+    first = con.execute("SELECT version_id FROM boreholes").fetchone()[0]
+    store.save_borehole(con, record(ucs=55.0))  # changed: new version, the unreviewed one is dropped
     version = con.execute("SELECT version_id FROM boreholes").fetchone()[0]
+    assert version != first
+    assert [r[0] for r in con.execute("SELECT id FROM record_versions")] == [version]
     store.record_review(con, "rep:BH01", ReviewStatus.approved, "Ana", None, expected_revision=0)
     assert store.review_log(con, "rep:BH01")[0]["version_id"] == version
     with pytest.raises(store.StaleReview):  # a second reviewer working from the old state
@@ -140,20 +142,140 @@ def test_new_blocking_finding_reopens_an_approval(con):
                             expected_hash=store.content_hash(bh), expected_revision=1)
 
 
-def test_old_database_is_migrated(tmp_path):
-    path = tmp_path / "old.sqlite"
-    con = store.connect(path)
+def test_reviewed_versions_survive_later_saves_and_a_rename(con):
     store.save_borehole(con, record())
-    con.execute("UPDATE boreholes SET uid = NULL, version_id = NULL, reasons = NULL")
-    for table in ("layers", "lab_values", "findings", "record_sources", "borehole_aliases", "record_versions"):
-        con.execute(f"DELETE FROM {table}")
-    con.execute("PRAGMA user_version = 2")
+    reviewed = con.execute("SELECT version_id FROM boreholes").fetchone()[0]
+    store.record_review(con, "rep:BH01", ReviewStatus.approved, "Ana", "checked")
+    store.save_borehole(con, record(ucs=55.0))
+    store.save_borehole(con, record(ucs=60.0))  # replaces an unreviewed version: that one is dropped
+    current = con.execute("SELECT version_id FROM boreholes").fetchone()[0]
+    assert [r[0] for r in con.execute("SELECT id FROM record_versions ORDER BY id")] == [reviewed, current]
+    # Renamed and back to the reviewed content: the decision is restored from the kept version.
+    store.delete_document_boreholes(con, "rep")
+    store.save_borehole(con, record(bid="rep:BH1"))
+    bh = store.load_borehole(con, "rep:BH1")
+    assert (bh.review_status, bh.reviewed_by) == (ReviewStatus.approved, "Ana")
+
+
+# Tables and columns of the schema versions migrate() still upgrades, as far as they differ from the current one.
+OLD_BOREHOLES = """CREATE TABLE boreholes (
+    rid INTEGER PRIMARY KEY,
+    id TEXT UNIQUE, name TEXT, doc_id TEXT, project TEXT, location_name TEXT, country TEXT,
+    lat REAL, lon REAL, depth REAL, elevation REAL, investigation_type TEXT,
+    confidence REAL, loc_confidence REAL, loc_method TEXT, score REAL, review_status TEXT,
+    n_layers INTEGER, n_issues INTEGER, lithologies TEXT, strip TEXT, content_hash TEXT, data TEXT,
+    extracted TEXT, ground TEXT, reasons TEXT, uid TEXT, version_id INTEGER, review_revision INTEGER NOT NULL DEFAULT 0
+)"""
+
+
+def downgrade(path: Path, version: int) -> None:
+    """Turn a current database into one as the code of `version` (3 or 4) left it, rows kept."""
+    old = sqlite3.connect(path)
+    current = [r[1] for r in old.execute("PRAGMA table_info(boreholes)")]
+    old.executescript(f"""
+        ALTER TABLE boreholes RENAME TO boreholes_new;
+        {OLD_BOREHOLES};
+        INSERT INTO boreholes ({", ".join(current)}) SELECT {", ".join(current)} FROM boreholes_new;
+        DROP TABLE boreholes_new;
+        CREATE INDEX boreholes_doc ON boreholes (doc_id);
+        CREATE UNIQUE INDEX boreholes_uid ON boreholes (uid);
+        CREATE INDEX boreholes_queue ON boreholes (review_status, score, name, id);
+        ALTER TABLE documents ADD COLUMN kind TEXT;
+        ALTER TABLE pages ADD COLUMN language TEXT; ALTER TABLE pages ADD COLUMN logs TEXT;
+        ALTER TABLE pages ADD COLUMN thumb TEXT; ALTER TABLE pages ADD COLUMN width INTEGER;
+        ALTER TABLE pages ADD COLUMN height INTEGER;
+        PRAGMA user_version = {version};
+    """)
+    if version == 3:
+        old.executescript("CREATE INDEX boreholes_status ON boreholes (review_status, score); "
+                          "ALTER TABLE lab_values DROP COLUMN value_upper; DROP TABLE upload_jobs; DROP TABLE llm_calls;")
+    old.commit()
+    old.close()
+
+
+def schema_shape(con) -> dict:
+    tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")]
+    return {"columns": {t: [r[1] for r in con.execute(f"PRAGMA table_xinfo('{t}')")] for t in tables},
+            "indexes": sorted(r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'index'"))}
+
+
+@pytest.mark.parametrize("version", [3, 4])
+def test_old_database_is_migrated_with_human_data(con, db_path, tmp_path, version):
+    store.save_borehole(con, record())
+    store.save_borehole(con, record(bid="rep:BH02", name="BH-02"))
+    store.save_document(con, "rep", "rep.pdf", [(1, "rep/0001.jpg")])
+    con.execute("UPDATE pages SET kind = 'borehole_log'")
     con.commit()
+    store.record_review(con, "rep:BH01", ReviewStatus.approved, "Ana", None)
+    reviewed = con.execute("SELECT version_id FROM boreholes WHERE id = 'rep:BH01'").fetchone()[0]
+    store.save_borehole(con, record(ucs=55.0))  # reopened: the reviewed version stays
+    store.record_review(con, "rep:BH02", ReviewStatus.rejected, "Ben", "wrong sheet")
+    store.add_correction(con, "borehole", "rep:BH02", "field", {"field": "depth_m", "value": 9.0}, "Ben", None)
+    store.add_knowledge(con, "global", None, "term", {"term": "Mu", "meaning": "silt"}, "review", None, "Ben")
+    store.record_llm_call(con, {"at": "2026-01-02T03:04:05+00:00", "doc_id": "rep", "page": 1, "stage": "classify",
+                                "model": "m", "input_tokens": 10, "outcome": "ok"})
+    con.execute("INSERT INTO upload_jobs (id, task, status, created_at) VALUES ('j1', '{}', 'done', 'then')")
+    uid = con.execute("SELECT uid FROM boreholes WHERE id = 'rep:BH01'").fetchone()[0]
+    con.execute("INSERT INTO record_versions (uid, content_hash, data, created_at) VALUES (?, 'x', '{}', 'then')",
+                (uid,))  # an unreviewed replaced version, as older code kept them
+    con.commit()
+    kept_tables = ("review_events", "corrections", "knowledge", "borehole_aliases")
+    if version == 4:
+        kept_tables += ("llm_calls", "upload_jobs")
+    human = {t: con.execute(f"SELECT * FROM {t} ORDER BY 1").fetchall() for t in kept_tables}
+    rows = con.execute("SELECT rid, id, uid, review_status, content_hash, data FROM boreholes ORDER BY rid").fetchall()
+    kept = {reviewed} | {r[0] for r in con.execute("SELECT version_id FROM boreholes")}
+    versions = con.execute(f"SELECT * FROM record_versions WHERE id IN ({', '.join(map(str, kept))}) ORDER BY id"
+                           ).fetchall()
     con.close()
+    downgrade(db_path, version)
+
+    store.migrate(db_path)
+    migrated = store.connect(db_path)
+    store.migrate(tmp_path / "fresh.sqlite")
+    fresh = store.connect(tmp_path / "fresh.sqlite")
+    try:
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
+        assert schema_shape(migrated) == schema_shape(fresh)
+        for table, before in human.items():
+            assert migrated.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() == before
+        assert migrated.execute("SELECT rid, id, uid, review_status, content_hash, data FROM boreholes ORDER BY rid"
+                                ).fetchall() == rows
+        assert migrated.execute("SELECT * FROM record_versions ORDER BY id").fetchall() == versions
+        pages = [tuple(r) for r in migrated.execute("SELECT page, kind, image FROM pages")]
+        assert pages == [(1, "borehole_log", "rep/0001.jpg")]
+        assert migrated.execute("SELECT COUNT(*) FROM boreholes_fts").fetchone()[0] == 2
+        assert migrated.execute("SELECT COUNT(*) FROM boreholes_rtree").fetchone()[0] == 2
+        assert migrated.execute("SELECT value_upper IS NULL FROM lab_values").fetchone()[0] == 1
+        assert store.group_borehole_ids(migrated, "rep") == ["rep:BH01", "rep:BH02"]
+        assert store.load_borehole(migrated, "rep:BH02").review_status == ReviewStatus.rejected
+        with pytest.raises(sqlite3.IntegrityError):
+            migrated.execute("UPDATE boreholes SET review_status = 'released' WHERE id = 'rep:BH01'")
+    finally:
+        migrated.close()
+        fresh.close()
+
+
+def test_database_before_v3_is_refused(tmp_path):
+    path = tmp_path / "old.sqlite"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE boreholes (rid INTEGER PRIMARY KEY, id TEXT, data TEXT)")
+    old.execute("INSERT INTO boreholes (id, data) VALUES ('rep:BH01', '{}')")
+    old.commit()
+    old.close()
+    with pytest.raises(RuntimeError, match="schema version 0"):
+        store.migrate(path)
+    assert sqlite3.connect(path).execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 1
+
+
+def test_migrate_creates_a_fresh_database_once(tmp_path):
+    path = tmp_path / "new.sqlite"
+    store.migrate(path)
+    store.migrate(path)
     con = store.connect(path)
     assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
-    assert tuple(con.execute("SELECT uid IS NOT NULL, version_id IS NOT NULL FROM boreholes").fetchone()) == (1, 1)
-    assert con.execute("SELECT COUNT(*) FROM layers").fetchone()[0] == 2
+    assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    con.close()
 
 
 def test_share_package(con, tmp_path, monkeypatch):
@@ -184,16 +306,15 @@ def test_metadata_changes_reopen_review(con, field, value):
     assert con.execute("SELECT COUNT(*) FROM record_versions").fetchone()[0] == 2
 
 
-def test_lab_projection_migration_preserves_reviews(con):
+def test_lab_projection_migration_preserves_reviews(con, db_path):
     bh = record()
     bh.lab_results = [LabResult(parameter="ucs", value=5, value_upper=10, qualifier="range", value_raw="5–10 MPa")]
     store.save_borehole(con, bh)
     store.record_review(con, bh.borehole_id, ReviewStatus.approved, "Ana", None)
-    con.execute("ALTER TABLE lab_values DROP COLUMN value_upper")
-    con.execute("PRAGMA user_version = 3")
-    con.commit()
-    path = con.execute("PRAGMA database_list").fetchone()["file"]
-    migrated = store.connect(Path(path))
+    con.close()
+    downgrade(db_path, 3)
+    store.migrate(db_path)
+    migrated = store.connect(db_path)
     try:
         assert migrated.execute("SELECT value_upper FROM lab_values").fetchone()[0] == 10
         assert store.load_borehole(migrated, bh.borehole_id).review_status == ReviewStatus.approved
@@ -209,12 +330,23 @@ def test_demo_data_refuses_the_real_database(con):
     assert con.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 1
 
 
+def test_a_rerendered_document_keeps_its_page_classes_and_drops_lost_pages(con):
+    store.save_document(con, "rep", "rep.pdf", [(1, "rep/0001.jpg"), (2, "rep/0002.jpg")])
+    con.execute("UPDATE pages SET kind = 'borehole_log'")
+    con.commit()
+    store.save_document(con, "rep", "rep.pdf", [(1, "rep/0001.jpg")])
+    assert [tuple(r) for r in con.execute("SELECT page, kind FROM pages")] == [(1, "borehole_log")]
+    assert con.execute("SELECT pages FROM documents").fetchone()[0] == 1
+
+
 def test_reset_keeps_review_decisions(con):
     store.save_borehole(con, record())
     store.record_review(con, "rep:BH01", ReviewStatus.rejected, "Ana", None)
     store.reset(con)
     assert con.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 0
-    assert con.execute("SELECT decision FROM review_events").fetchone()[0] == "rejected"
+    version = con.execute("SELECT decision, version_id FROM review_events").fetchone()
+    assert version[0] == "rejected"
+    assert con.execute("SELECT COUNT(*) FROM record_versions WHERE id = ?", (version[1],)).fetchone()[0] == 1
 
 
 def test_share_package_without_git(con, tmp_path, monkeypatch):

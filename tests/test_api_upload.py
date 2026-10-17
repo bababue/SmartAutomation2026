@@ -23,7 +23,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "MAX_UPLOAD_PAGES", 2)
     monkeypatch.setattr(config, "MAX_UPLOAD_BYTES", 10_000)
     monkeypatch.setattr("pipeline.runner.missing_credentials", lambda: None)
-    store.connect(path).close()
+    store.migrate(path)
     with TestClient(app) as client:
         yield client
 

@@ -36,6 +36,7 @@ def record(bid: str, east: float = E) -> Borehole:
 def client(tmp_path, monkeypatch):
     path = tmp_path / "test.sqlite"
     monkeypatch.setattr(config, "DB_PATH", path)
+    store.migrate(path)
     con = store.connect(path)
     for bid, east in [("demo__a:BH1", E), ("demo__b:BH2", E + 50), ("other:BH3", E)]:
         store.save_borehole(con, record(bid, east))
