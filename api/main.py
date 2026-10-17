@@ -18,9 +18,11 @@ from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from datetime import date as date_type
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
+import pymupdf
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
@@ -469,6 +471,9 @@ async def upload_document(file: UploadFile = File(...)):
     suffix = Path(filename).suffix.lower()
     if suffix not in ingest.SUPPORTED:
         raise HTTPException(415, f"unsupported file type {suffix or '(none)'}; use PDF, JPG, PNG, TIFF or DOCX")
+    from pipeline.__main__ import _missing_credentials
+    if msg := _missing_credentials():
+        raise HTTPException(503, msg)
     job_id = uuid.uuid4().hex[:12]
     doc_id = f"upload-{job_id}"
     upload_dir = config.UPLOADS_DIR / doc_id
@@ -486,10 +491,18 @@ async def upload_document(file: UploadFile = File(...)):
 
     kind = "pdf" if suffix == ".pdf" else "docx" if suffix == ".docx" else "image"
     doc = ingest.SourceDoc(doc_id=doc_id, path=filename, kind=kind)
-    pages = ingest.render(doc, upload_dir)
-    if len(pages) > config.MAX_UPLOAD_PAGES:
+    try:
+        if kind == "pdf":  # count before rendering: a long PDF would take minutes to render only to be rejected
+            with pymupdf.open(dest) as pdf:
+                _check_page_count(pdf.page_count)
+        pages = await run_in_threadpool(ingest.render, doc, upload_dir)
+        _check_page_count(len(pages))
+    except Exception as exc:
         shutil.rmtree(upload_dir, ignore_errors=True)
-        raise HTTPException(413, f"{len(pages)} pages exceeds the {config.MAX_UPLOAD_PAGES}-page upload limit")
+        shutil.rmtree(config.PAGES_DIR / doc_id, ignore_errors=True)
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(422, f"could not read {filename}: is it a valid {suffix.lstrip('.').upper()} file?") from exc
 
     UPLOADS[job_id] = {"status": "processing", "boreholes": [], "error": None}
 
@@ -510,6 +523,11 @@ async def upload_document(file: UploadFile = File(...)):
 
     threading.Thread(target=work, daemon=True).start()
     return {"job_id": job_id, "pages": len(pages)}
+
+
+def _check_page_count(pages: int) -> None:
+    if pages > config.MAX_UPLOAD_PAGES:
+        raise HTTPException(413, f"{pages} pages exceeds the {config.MAX_UPLOAD_PAGES}-page upload limit")
 
 
 @app.get("/api/upload/{job_id}")

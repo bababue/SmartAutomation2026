@@ -19,6 +19,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
     monkeypatch.setattr(config, "MAX_UPLOAD_PAGES", 2)
     monkeypatch.setattr(config, "MAX_UPLOAD_BYTES", 10_000)
+    monkeypatch.setattr("pipeline.__main__._missing_credentials", lambda: None)
     store.connect(path).close()
     return TestClient(app)
 
@@ -39,6 +40,21 @@ def test_rejects_file_over_the_page_cap(client):
     res = client.post("/api/upload", files={"file": ("log.pdf", _pdf_bytes(3), "application/pdf")})
     assert res.status_code == 413
     assert "3 pages" in res.json()["detail"]
+    assert not any(config.UPLOADS_DIR.iterdir())
+
+
+def test_rejects_unreadable_file_and_leaves_nothing_behind(client):
+    res = client.post("/api/upload", files={"file": ("log.pdf", b"not a pdf", "application/pdf")})
+    assert res.status_code == 422
+    assert not any(config.UPLOADS_DIR.iterdir())
+    assert not config.PAGES_DIR.exists() or not any(config.PAGES_DIR.iterdir())
+
+
+def test_rejects_upload_without_credentials_before_saving(client, monkeypatch):
+    monkeypatch.setattr("pipeline.__main__._missing_credentials", lambda: "No key")
+    res = client.post("/api/upload", files={"file": ("log.pdf", _pdf_bytes(1), "application/pdf")})
+    assert res.status_code == 503
+    assert not config.UPLOADS_DIR.exists()
 
 
 def test_rejects_file_over_the_byte_cap(client):
