@@ -48,3 +48,21 @@ def test_export_next_to_docx_is_used(tmp_path, monkeypatch):
     pdf.save(tmp_path / "r.pdf")
     pages = ingest.render(ingest.SourceDoc("r", "r.docx", "docx"), tmp_path)
     assert len(pages) == 1 and "Log sheet" in pages[0].text
+
+
+def test_replaced_export_is_rendered_again(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
+    monkeypatch.setattr(config, "CONVERTED_DIR", tmp_path / "converted")
+    docx.Document().save(tmp_path / "r.docx")
+    def export(n):
+        pdf = pymupdf.open()
+        for i in range(n):
+            pdf.new_page().insert_text((72, 72), f"sheet {i + 1}")
+        pdf.save(tmp_path / "r.pdf")
+    doc = ingest.SourceDoc("r", "r.docx", "docx")
+    export(1)
+    assert len(ingest.render(doc, tmp_path)) == 1
+    export(2)  # corrected export saved over the old one
+    os.utime(tmp_path / "r.pdf", ns=(1, 2_000_000_000_000_000_000))
+    assert len(ingest.render(doc, tmp_path)) == 2

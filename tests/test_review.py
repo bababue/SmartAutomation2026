@@ -510,3 +510,33 @@ def test_stale_approval_is_refused_and_lab_values_are_part_of_the_review(con):
     assert store.load_borehole(con, bh.borehole_id).review_status == ReviewStatus.pending_review
     with pytest.raises(store.StaleReview):  # a browser still showing the old version cannot approve
         store.record_review(con, bh.borehole_id, ReviewStatus.approved, "Anna", None, expected_hash=seen)
+
+
+def test_merge_rules_keep_contradictions_and_core_loss_has_a_budget():
+    from pipeline.assemble import fill_core_loss
+    from schema.borehole import CoreRun
+    # Page 2 says limestone from 0 m where page 1 had sand and clay: kept as an overlap, not clipped away.
+    sheets = _sheets([_xlayer(0, 5, "sand"), _xlayer(5, 10, "clay", "clay")], [_xlayer(0, 15, "LIMESTONE", "limestone")])
+    layers = _layers(sheets, final_depth=15)
+    assert (0, 15) in [(l.top_m, l.bottom_m) for l in layers]
+    # The same interval read with another material is kept for a person to decide.
+    sheets = _sheets([_xlayer(0, 5, "sand")], [_xlayer(0, 5, "CLAY", "clay")])
+    assert len(_layers(sheets, final_depth=5)) == 2
+    # 10 % of a 10 m run is lost (1 m): two gaps of 0.8 m cannot both be core loss.
+    bh = make(layers=[Layer(top_m=0, bottom_m=3, description_original="a", primary="sandstone"),
+                      Layer(top_m=3.8, bottom_m=6, description_original="b", primary="sandstone"),
+                      Layer(top_m=6.8, bottom_m=10, description_original="c", primary="sandstone")])
+    bh.depth_m = 10
+    bh.core_runs = [CoreRun(top_m=0, bottom_m=10, total_core_recovery_pct=90)]
+    assert len(fill_core_loss(bh)) == 1
+    assert any(i.startswith("gap 6.0–6.8") for i in bh.validate_log())
+
+
+def test_document_with_conflicting_crs_statements_gets_none():
+    from pipeline.assemble import PageResult, document_crs
+    pages = [PageResult("d", "d.pdf", 1, "text", None, "All coordinates MGA94 Zone 56"),
+             PageResult("d", "d.pdf", 2, "text", None, "Coordinates in MGA2020 Zone 56 " * 3)]  # one page, repeated
+    assert document_crs(pages) is None  # 1 page each: comparable support, a person decides
+    pages.append(PageResult("d", "d.pdf", 3, "text", None, "Grid: MGA94 Zone 56"))
+    pages.append(PageResult("d", "d.pdf", 4, "text", None, "Grid: MGA94 Zone 56"))
+    assert "MGA94" in document_crs(pages)[0]

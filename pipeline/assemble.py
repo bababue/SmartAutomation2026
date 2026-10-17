@@ -141,7 +141,28 @@ def _date(raw: str | None) -> date | None:
 
 
 # Unit conversion for lab values: (parameter, unit pattern) → factor to the target unit.
+# Units each parameter is stored in, as printed without conversion (see LAB_UNITS); a value with any
+# other unit that has no factor below is dropped rather than published in the wrong unit.
+_STRENGTH = {LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}
+_LAB_NATIVE: list[tuple[set[LabParameter], str]] = [
+    (_STRENGTH, r"^(mpa|n/mm2)$"),
+    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^(kpa|kn/m2)$"),
+    ({LabParameter.unit_weight, LabParameter.dry_unit_weight}, r"^kn/m3$"),
+    ({LabParameter.water_content, LabParameter.consistency, LabParameter.fines, LabParameter.sand, LabParameter.gravel,
+      LabParameter.liquid_limit, LabParameter.plastic_limit}, r"^(%|percent)$"),
+    ({LabParameter.friction_angle}, r"^(°|deg|degrees?)$"),
+    ({LabParameter.hydraulic_conductivity}, r"^m/s(ec)?$"),
+]
+_DIMENSIONLESS = {LabParameter.cai, LabParameter.rmr, LabParameter.q, LabParameter.gsi, LabParameter.plasticity_index,
+                  LabParameter.consistency_index, LabParameter.poissons_ratio, LabParameter.other}
+
 _LAB_FACTORS: list[tuple[set[LabParameter], str, float]] = [
+    (_STRENGTH, r"^psi$", 0.00689476),
+    (_STRENGTH, r"^ksi$", 6.89476),
+    (_STRENGTH, r"^kn/m2$", 0.001),
+    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^psi$", 6.89476),
+    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^t/?m2$", 9.80665),
+    ({LabParameter.unit_weight, LabParameter.dry_unit_weight}, r"^pcf$|^lb/ft3$", 0.157087),
     ({LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}, r"^kpa$", 0.001),
     ({LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}, r"^kg/?cm2|kgf/cm", 0.0980665),
     ({LabParameter.ucs, LabParameter.tensile_strength, LabParameter.e_modulus}, r"^gpa$", 1000.0),
@@ -153,15 +174,27 @@ _LAB_FACTORS: list[tuple[set[LabParameter], str, float]] = [
 ]
 
 
+def lab_qualifier(value_raw: str) -> str | None:
+    """'<0.01' → '<', '5 - 10' → 'range': the stored number is then not an exact value."""
+    m = re.match(r"\s*([<>≤≥])", value_raw or "")
+    if m:
+        return m.group(1)
+    return "range" if re.search(r"\d\s*[-–~]\s*\d", value_raw or "") else None
+
+
 def _lab_value(parameter: LabParameter, value_raw: str, unit_raw: str | None) -> float | None:
     value = _num(value_raw)
     if value is None:
         return None
-    unit = (unit_raw or "").lower().replace(" ", "").replace("³", "3").replace("²", "2")
+    unit = (unit_raw or "").lower().replace(" ", "").replace("³", "3").replace("²", "2").strip("()[]")
     for params, pattern, factor in _LAB_FACTORS:
         if parameter in params and re.search(pattern, unit):
             return value * factor
-    return value
+    if not unit or unit == "-" or parameter in _DIMENSIONLESS:
+        return value
+    if any(parameter in params and re.search(pattern, unit) for params, pattern in _LAB_NATIVE):
+        return value
+    return None  # unknown unit: do not publish a number in the wrong unit
 
 
 def _bbox(raw: list[float] | None) -> tuple[float, float, float, float] | None:
@@ -249,7 +282,8 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
         if top is None or bottom is None:
             continue
         if (layers and not _same_page(src, layers[-1].source) and top < layers[-1].bottom_m < bottom
-                and any(abs(l.top_m - top) < 0.05 for l in layers)):
+                and any(abs(l.top_m - top) < 0.05 and (l.primary == x.primary or Lithology.unknown in (l.primary, x.primary))
+                        for l in layers)):  # a different material with the same top is a contradiction, not a restatement
             # A unit running over several sheets, restated with its full range on a later sheet:
             # keep only the part below what the earlier sheets already cover.
             if notes is not None:
@@ -286,8 +320,9 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
         if layers and _continues(layers[-1], layer):
             layers[-1].bottom_m = layer.bottom_m  # continuation across a sheet break
             continue
-        if layers and abs(layers[-1].top_m - top) < 0.01 and abs(layers[-1].bottom_m - bottom) < 0.01:
-            continue  # same layer read twice (overlapping sheets)
+        if (layers and abs(layers[-1].top_m - top) < 0.01 and abs(layers[-1].bottom_m - bottom) < 0.01
+                and layers[-1].primary == layer.primary):
+            continue  # same layer read twice (overlapping sheets); a different material stays as an overlap
         prev = layers[-1] if layers else None
         if (prev and not _same_page(src, prev.source) and abs(prev.bottom_m - bottom) < 0.01
                 and prev.top_m < top < prev.bottom_m and prev.primary == layer.primary):
@@ -310,6 +345,7 @@ def fill_core_loss(bh: Borehole, tol: float = 0.05) -> list[str]:
     """A gap inside one core run with less than full recovery, no longer than the unrecovered length,
     is core loss: fill it with a no_recovery layer and say so."""
     notes = []
+    budget: dict[int, float] = {}  # unrecovered length left per core run: two gaps cannot spend it twice
     layers = sorted(bh.layers, key=lambda layer: layer.top_m)
     for a, b in zip(layers, layers[1:]):
         gap = b.top_m - a.bottom_m
@@ -317,8 +353,12 @@ def fill_core_loss(bh: Borehole, tol: float = 0.05) -> list[str]:
             continue
         run = next((c for c in bh.core_runs if c.top_m - tol <= a.bottom_m and b.top_m <= c.bottom_m + tol), None)
         tcr = run.total_core_recovery_pct if run else None
-        if tcr is None or tcr >= 100 or gap > (1 - tcr / 100) * (run.bottom_m - run.top_m) + tol:
+        if tcr is None or tcr >= 100:
             continue
+        left = budget.setdefault(id(run), (1 - tcr / 100) * (run.bottom_m - run.top_m))
+        if gap > left + tol:
+            continue
+        budget[id(run)] = left - gap
         bh.layers.append(Layer(top_m=a.bottom_m, bottom_m=b.top_m, description_original="core loss (inferred)",
                                primary=Lithology.no_recovery, source=a.source))
         notes.append(f"core loss inferred: {a.bottom_m:g}–{b.top_m:g} m in core run {run.top_m:g}–{run.bottom_m:g} m "
@@ -352,7 +392,12 @@ def document_crs(pages: list[PageResult]) -> tuple[str, int] | None:
     resolved = [(tuple(epsgs), text, page) for text, page in found if (epsgs := crs_from_hint(text))]
     if not resolved:
         return None
-    top = Counter(epsgs for epsgs, _, _ in resolved).most_common(1)[0][0]
+    # Count pages, not mentions (a table repeats its header on every row), and refuse to choose when the
+    # document names different systems with comparable support.
+    support = Counter(epsgs for epsgs, _ in {(e, p) for e, _, p in resolved})
+    (top, n), *rest = support.most_common()
+    if rest and rest[0][1] * 2 >= n:
+        return None
     _, text, page = next(x for x in resolved if x[0] == top)
     return " ".join(text.split()), page
 
@@ -491,7 +536,8 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
             for x, src in logs for g in x.groundwater),
         lab_results=[LabResult(parameter=lab.parameter, parameter_raw=lab.parameter_raw, value=v,
                                value_raw=f"{lab.value_raw} {lab.unit_raw or ''}".strip(), top_m=lab.top_m,
-                               bottom_m=lab.bottom_m, sample_name=lab.sample_name, source=src)
+                               bottom_m=lab.bottom_m, sample_name=lab.sample_name, source=src,
+                               qualifier=lab_qualifier(lab.value_raw))
                      for x, src in logs for lab in x.lab_results
                      if (v := _lab_value(lab.parameter, lab.value_raw, lab.unit_raw)) is not None],
         sources=[src for _, src in logs],
@@ -644,7 +690,8 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
             bottom = row.bottom_m if row.bottom_m is not None else (sample.bottom_m if sample and row.top_m is None else None)
             result = LabResult(parameter=row.parameter, parameter_raw=row.parameter_raw, value=value,
                                value_raw=f"{row.value_raw} {row.unit_raw or ''}".strip(), top_m=top, bottom_m=bottom,
-                               sample_name=row.sample_name, source=SourceRef(file=r.source_file, page=r.page))
+                               sample_name=row.sample_name, source=SourceRef(file=r.source_file, page=r.page),
+                               qualifier=lab_qualifier(row.value_raw))
             # The same test is often on the log and on the lab sheet (only the sheet has the sample id).
             same = next((x for x in bh.lab_results if x.parameter == result.parameter
                          and _same_value(x.value, result.value) and x.top_m == result.top_m), None)

@@ -70,7 +70,7 @@ def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) 
 
 
 # Findings that need a look before release, without blocking: they cap the extraction confidence.
-NEEDS_LOOK = ("boundary inferred", "core loss inferred", "lithology of layer", "reached at the final depth")
+NEEDS_LOOK = ("boundary inferred", "core loss inferred", "lithology of layer")
 NEEDS_LOOK_RE = re.compile(r"^core run .*: (?:(?:SCR|RQD) [\d.]+% above TCR|\w+ [\d.]+% outside)")
 
 
@@ -136,7 +136,9 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
     # Plausible is not the same as correct: release automatically only with positive evidence. With a text
     # layer only the text can confirm, and it has to cover most layers (scanned extra sheets don't ride along);
     # without one, a log from 0 m to a stated final depth counts.
-    confirmed = agreement is not None and agreement >= 0.8 and checked >= 0.8 * max(1, checkable)
+    # Few boundaries (a one-layer pit): all of them must be in the text.
+    confirmed = ((agreement is not None and agreement >= 0.8) or (0 < total < 3 and found == total)) \
+        and checked >= 0.8 * max(1, checkable)
     if bh.layers and not confirmed and (has_text or not covers_full_depth(bh)):
         if extraction > UNCONFIRMED_CAP:
             extraction = UNCONFIRMED_CAP

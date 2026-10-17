@@ -445,11 +445,15 @@ def georeference(
             if not explicit:
                 issues.append(f"coordinate system inferred, not stated: {best.crs}" if best.epsg != GEOGRAPHIC
                               else "coordinate axes inferred, not labelled")
+            # A rival is another reading the place estimate cannot rule out (within its own uncertainty).
+            # Readings that ignore printed axis labels are no rivals of a labelled reading.
+            labelled = "guessed" not in best.note
             rivals = [
                 c for c in cands[1:]
                 if c.distance_km is not None
-                and c.distance_km <= max(25.0, best.distance_km * 3)
+                and c.distance_km <= max(25.0, best.distance_km * 3, min(2 * precision, 300.0))
                 and haversine_km(c.lat, c.lon, best.lat, best.lon) > 1.0
+                and not (labelled and "guessed" in c.note)
             ]
             if rivals:
                 loc.crs_candidates = list(dict.fromkeys([best.crs] + [c.crs for c in rivals]))

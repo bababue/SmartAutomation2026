@@ -106,8 +106,12 @@ def _layer(bh: Borehole, p: dict) -> bool:
 
 def _layer_add(bh: Borehole, p: dict) -> bool:
     top, bottom = float(p["top"]), float(p["bottom"])
-    if any(abs(l.top_m - top) < 0.01 and abs(l.bottom_m - bottom) < 0.01 for l in bh.layers):
-        return True  # the extraction has it now
+    same = next((l for l in bh.layers if abs(l.top_m - top) < 0.01 and abs(l.bottom_m - bottom) < 0.01), None)
+    if same is not None:  # the extraction has the interval now: the reviewer's reading still wins
+        same.primary = Lithology(p["primary"])
+        if p.get("description_original"):
+            same.description_original = p["description_original"]
+        return True
     bh.layers.append(Layer(top_m=top, bottom_m=bottom, primary=Lithology(p["primary"]),
                            description_original=p.get("description_original") or "added by reviewer"))
     bh.layers.sort(key=lambda layer: layer.top_m)

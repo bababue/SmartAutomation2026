@@ -276,6 +276,19 @@
           "description": "Value + unit as written, e.g. '0,35 kg/cm2'",
           "title": "Value Raw"
         },
+        "qualifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "'<', '>', '≤', '≥' or 'range' when the printed value is not exact; value is then the bound or the lower end",
+          "title": "Qualifier"
+        },
         "top_m": {
           "anyOf": [
             {

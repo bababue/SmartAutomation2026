@@ -110,8 +110,17 @@ def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool =
     src = dataset_dir / doc.path
     converted = converted_pdf(doc, dataset_dir)
     source = str(converted or src)  # rendered from; a new PDF export of a DOCX triggers a re-render
+    origin = Path(source)
+    stat = origin.stat() if origin.exists() else None
+    # Replacing a file at the same path, or other render settings, must re-render too.
+    fingerprint = f"{stat.st_size}:{stat.st_mtime_ns}:{config.EXTRACT_LONG_EDGE}:{config.THUMB_LONG_EDGE}" if stat else ""
     marker = out_dir / "source.txt"
-    same_source = marker.read_text() == source if marker.exists() else converted is None
+    if marker.exists():
+        recorded = marker.read_text().splitlines() + [""]
+        # Markers written before fingerprints only name the source.
+        same_source = recorded[0] == source and (not recorded[1] or recorded[1] == fingerprint)
+    else:
+        same_source = converted is None
     if manifest.exists() and same_source and not force:
         return [PageImage(**p) for p in json.loads(manifest.read_text())]
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -148,5 +157,5 @@ def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool =
             )
         )
     manifest.write_text(json.dumps([asdict(p) for p in pages], ensure_ascii=False))
-    marker.write_text(source)
+    marker.write_text(f"{source}\n{fingerprint}")
     return pages

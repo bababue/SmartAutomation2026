@@ -53,3 +53,13 @@ def test_value_on_log_and_lab_sheet_is_kept_once():
     a.lab_results = [LabResult(parameter="ucs", value=28.9, value_raw="28.9 MPa", top_m=2.1)]  # from the log page
     link_lab_results([a], [lab_page(row("BH17", "019/13", "ucs", "28.9", "MPa", top=2.1))])
     assert len(a.lab_results) == 1 and a.lab_results[0].sample_name == "019/13"
+
+
+def test_units_are_converted_or_the_value_is_dropped():
+    from pipeline.assemble import _lab_value, lab_qualifier
+    from schema.borehole import LabParameter as P
+    assert _lab_value(P.ucs, "1500", "psi") == pytest.approx(10.342, rel=1e-3)
+    assert _lab_value(P.ucs, "25", "MPa") == 25 and _lab_value(P.ucs, "25", None) == 25
+    assert _lab_value(P.ucs, "25", "bananas") is None  # never publish a number in the wrong unit
+    assert _lab_value(P.cai, "2.1", "-") == 2.1
+    assert lab_qualifier("<0.01") == "<" and lab_qualifier("5 - 10") == "range" and lab_qualifier("12.5") is None
