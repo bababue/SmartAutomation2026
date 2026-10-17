@@ -42,56 +42,74 @@ const SELECTED = 'Haiku 5.5'
 // Within this share of the best value is a tie: run-to-run noise, not a better model.
 const TIE = 0.05
 
-/** One tested model: measured against the reference records, screened on the benchmark pages, or both. */
-interface Tested { name: string; route: string | null; measured: ModelRun | null; screened: Benchmarked | null; reference: boolean }
+interface Cell { value: number | null; text: ReactNode }
+interface Row { name: string; route: string | null; cells: Cell[] }
 
-const mid = ([low, high]: [number, number]) => (low + high) / 2
-
-/** Column label, group, value for comparing (null: none), cell; `lower`: the smaller value is the better one. */
-const COLUMNS: { label: string; group: 'measured' | 'screened' | 'page'; value: (t: Tested) => number | null; show: (t: Tested) => ReactNode; lower?: boolean }[] = [
-  ...(([['boundaries', 'Boundaries'], ['precision', 'Precision'], ['lab', 'Lab values']]) as const).map(([key, label]) => ({
-    label, group: 'measured' as const,
-    value: (t: Tested) => (t.measured ? ratio(t.measured.metrics[key]) : null),
-    show: (t: Tested) => (t.measured ? percent(t.measured.metrics[key]) : '–'),
-  })),
-  ...(([['boundaries', 'Boundaries'], ['lithology', 'Lithology']]) as const).map(([key, label]) => ({
-    label, group: 'screened' as const,
-    value: (t: Tested) => (t.screened ? mid(t.screened[key]) : null),
-    show: (t: Tested) => (t.reference ? <span className="muted">reference</span> : t.screened ? wholePercent(t.screened[key]) : '–'),
-  })),
-  {
-    label: 'Cost', group: 'page', lower: true,
-    value: (t) => t.measured?.usd_per_page ?? t.screened?.usd_per_page ?? null,
-    show: (t) => {
-      if (t.measured?.usd_per_page != null) return `${t.measured.usd_measured ? '' : '≈ '}${usd(t.measured.usd_per_page)}`
-      return t.screened ? usd(t.screened.usd_per_page) : '–'
-    },
-  },
-  {
-    label: 'Seconds', group: 'page', lower: true,
-    value: (t) => t.measured?.seconds_per_page ?? (t.screened ? mid(t.screened.seconds_per_page) : null),
-    show: (t) => t.measured?.seconds_per_page ?? (t.screened ? range(t.screened.seconds_per_page, String) : '–'),
-  },
+/** Label; `lower`: the smaller value is the better one. */
+const COLUMNS: { label: string; lower?: boolean }[] = [
+  { label: 'Boundaries' }, { label: 'Precision' }, { label: 'Lithology' }, { label: 'Final depth' },
+  { label: 'Groundwater' }, { label: 'Lab values' }, { label: 'Cost / page', lower: true }, { label: 's / page', lower: true },
 ]
 
+const mid = ([low, high]: [number, number]) => (low + high) / 2
 const points = (a: Share, b: Share) => Math.round(100 * ((ratio(a) ?? 0) - (ratio(b) ?? 0)))
+const shareCell = (s: Share): Cell => ({ value: ratio(s), text: percent(s) })
+const rangeCell = (r: [number, number]): Cell => ({ value: mid(r), text: wholePercent(r) })
 
-/** Every tested model once: the reference runs first, then the benchmark models; a model in both keeps both. */
-function testedModels(ev: ModelEvaluation): Tested[] {
-  const against = modelName(ev.benchmark.against)
-  const tested: Tested[] = (ev.models?.runs ?? []).map((r) => {
-    const name = modelName(r.model)
-    return { name, route: null, measured: r, screened: null, reference: name === against }
-  })
-  for (const b of ev.benchmark.rows) {
-    const known = tested.find((t) => t.name === b.model)
-    if (known) Object.assign(known, { screened: b, route: b.route })
-    else tested.push({ name: b.model, route: b.route, measured: null, screened: b, reference: false })
+function measuredRow(r: ModelRun, route: string | null): Row {
+  const m = r.metrics
+  return {
+    name: modelName(r.model), route,
+    cells: [shareCell(m.boundaries), shareCell(m.precision), shareCell(m.lithology_depth), shareCell(m.final_depth),
+      shareCell(m.groundwater), shareCell(m.lab),
+      { value: r.usd_per_page, text: r.usd_per_page == null ? '–' : `${r.usd_measured ? '' : '≈ '}${usd(r.usd_per_page)}` },
+      { value: r.seconds_per_page, text: r.seconds_per_page ?? '–' }],
   }
-  return tested
 }
 
-/** The models tab: every tested model in one table, the selected one outlined, the best value per column in bold. */
+function screenedRow(b: Benchmarked): Row {
+  return {
+    name: b.model, route: b.route,
+    cells: [rangeCell(b.boundaries), rangeCell(b.precision), rangeCell(b.lithology), rangeCell(b.final_depth),
+      rangeCell(b.groundwater), rangeCell(b.lab), { value: b.usd_per_page, text: usd(b.usd_per_page) },
+      { value: mid(b.seconds_per_page), text: range(b.seconds_per_page, String) }],
+  }
+}
+
+/** Per column, whether each row holds the best value of its section (within TIE of it). */
+function bestOf(rows: Row[]): boolean[][] {
+  const best = COLUMNS.map((c, i) => {
+    const values = rows.map((r) => r.cells[i].value).filter((v): v is number => v != null)
+    return values.length > 1 ? (c.lower ? Math.min(...values) : Math.max(...values)) : null
+  })
+  return rows.map((r) => r.cells.map((cell, i) => {
+    const b = best[i]
+    return cell.value != null && b != null && Math.abs(cell.value - b) <= TIE * Math.abs(b)
+  }))
+}
+
+function Section({ title, rows }: { title: ReactNode; rows: Row[] }) {
+  const top = bestOf(rows)
+  return (
+    <tbody>
+      <tr className="models-section"><th colSpan={COLUMNS.length + 1} scope="rowgroup">{title}</th></tr>
+      {rows.map((r, i) => (
+        <tr key={r.name} className={r.name === SELECTED ? 'models-selected' : undefined}>
+          <th scope="row">
+            {r.name}{r.name === SELECTED && <span className="models-tag">Selected</span>}
+            {r.route && <span className="models-hint">{r.route}</span>}
+          </th>
+          {r.cells.map((cell, j) => (
+            <td key={COLUMNS[j].label} className={`num${top[i][j] ? ' models-best' : ''}`}>{cell.text}</td>
+          ))}
+        </tr>
+      ))}
+    </tbody>
+  )
+}
+
+/** The models tab: every tested model, measured against the checked records or screened against the reference
+ * model, the selected one outlined, the best value per column and section in bold. */
 export function ModelSummary({ quality, error, onDetails }: {
   quality: Quality | null
   error: string | null
@@ -100,69 +118,52 @@ export function ModelSummary({ quality, error, onDetails }: {
   if (error) return <p className="error" role="alert">{error}</p>
   if (!quality) return <p className="muted">Loading…</p>
   const ev = quality.evaluation
-  const tested = ev ? testedModels(ev) : []
-  if (!ev || !tested.length) {
+  if (!ev) {
     return <p className="stats-intro muted">No model comparison yet: run the same prompt as experiment arms with different
       models, then <code>python -m pipeline eval snapshot-models</code>.</p>
   }
-  const best = COLUMNS.map((c) => {
-    const values = tested.map(c.value).filter((v): v is number => v != null)
-    return values.length > 1 ? (c.lower ? Math.min(...values) : Math.max(...values)) : null
-  })
-  const top = (i: number, t: Tested) => {
-    const v = COLUMNS[i].value(t)
-    const b = best[i]
-    return v != null && b != null && Math.abs(v - b) <= TIE * Math.abs(b)
-  }
-  const selected = tested.find((t) => t.name === SELECTED)
-  const accurate = tested.filter((t) => t.measured).reduce<Tested | null>((a, t) =>
-    !a || (ratio(t.measured!.metrics.boundaries) ?? -1) > (ratio(a.measured!.metrics.boundaries) ?? -1) ? t : a, null)
-  const versus = selected?.measured && accurate && accurate !== selected ? { s: selected.measured, a: accurate.measured! } : null
-  const factor = versus?.s.usd_per_page && versus.a.usd_per_page ? Math.round(versus.a.usd_per_page / versus.s.usd_per_page) : null
-  const measured = COLUMNS.filter((c) => c.group === 'measured').length
-  const screened = COLUMNS.filter((c) => c.group === 'screened').length
+  const bench = ev.benchmark
+  const runs = ev.models?.runs ?? []
+  const routeOf = (name: string) => bench.rows.find((b) => b.model === name)?.route ?? null
+  const measured = runs.map((r) => measuredRow(r, routeOf(modelName(r.model))))
+  const screened = bench.rows.map(screenedRow)
+  const against = modelName(bench.against)
+  const selected = runs.find((r) => modelName(r.model) === SELECTED)
+  const accurate = runs.reduce<ModelRun | null>((a, r) =>
+    !a || (ratio(r.metrics.boundaries) ?? -1) > (ratio(a.metrics.boundaries) ?? -1) ? r : a, null)
+  const versus = selected && accurate && accurate !== selected
+  const factor = versus && selected.usd_per_page && accurate.usd_per_page ? Math.round(accurate.usd_per_page / selected.usd_per_page) : null
+  const c = bench.compared
   return (
     <div className="stats-grid stats-grid-models">
       <section className="stats-card stats-wide" aria-labelledby="models-head">
         <h3 id="models-head">Models we tested</h3>
-        {selected && (
-          <p className="stats-lede">
-            <b>{selected.name}</b> is selected{versus && <>: {factor && factor > 1 ? `about ${factor}× cheaper` : 'cheaper'} per
-              page than {accurate!.name}, {points(versus.a.metrics.boundaries, versus.s.metrics.boundaries)} points lower on
-              layer boundaries and {points(versus.a.metrics.lab, versus.s.metrics.lab)} on lab values</>}.
-          </p>
-        )}
+        <p className="stats-lede">
+          <b>{SELECTED}</b> is selected{versus && <>: {factor && factor > 1 ? `about ${factor}× cheaper` : 'cheaper'} per
+            page than {modelName(accurate.model)}, {points(accurate.metrics.boundaries, selected.metrics.boundaries)} points
+            lower on layer boundaries and {points(accurate.metrics.lab, selected.metrics.lab)} on lab values</>}.
+        </p>
         <div className="stats-scroll">
           <table className="models-table">
             <thead>
-              <tr>
-                <th rowSpan={2} scope="col">Model</th>
-                <th colSpan={measured} scope="colgroup" className="models-group">Against {n(ev.models?.records ?? 0)} checked records</th>
-                <th colSpan={screened} scope="colgroup" className="models-group">Agreement with {modelName(ev.benchmark.against)}</th>
-                <th colSpan={COLUMNS.length - measured - screened} scope="colgroup" className="models-group">Per page</th>
-              </tr>
-              <tr>{COLUMNS.map((c) => <th key={`${c.group}-${c.label}`} scope="col" className="num">{c.label}</th>)}</tr>
+              <tr><th scope="col">Model</th>{COLUMNS.map((col) => <th key={col.label} scope="col" className="num">{col.label}</th>)}</tr>
             </thead>
-            <tbody>
-              {tested.map((t) => (
-                <tr key={t.name} className={t === selected ? 'models-selected' : undefined}>
-                  <th scope="row">
-                    {t.name}{t === selected && <span className="models-tag">Selected</span>}
-                    {t.route && <span className="models-hint">{t.route}</span>}
-                  </th>
-                  {COLUMNS.map((c, i) => (
-                    <td key={`${c.group}-${c.label}`} className={`num${top(i, t) ? ' models-best' : ''}`}>{c.show(t)}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
+            {measured.length > 0 && (
+              <Section rows={measured} title={<>Measured against {n(ev.models!.records)} human-checked records
+                <span>accuracy</span></>} />
+            )}
+            {screened.length > 0 && (
+              <Section rows={screened} title={<>Screened on {n(bench.pages)} log pages, compared with {against}
+                <span>agreement, not accuracy</span></>} />
+            )}
           </table>
         </div>
         <p className="stats-note muted">
-          Best value per column in bold. Against checked records: the human-checked records every measured model
-          extracted itself. Agreement: before there were reviewed records, the models read the same {n(ev.benchmark.pages)} log
-          pages from {n(ev.benchmark.documents)} documents; agreement with {modelName(ev.benchmark.against)}, not accuracy.
-          Cost: billed, or ≈ an estimate at API list prices; a run on the Claude subscription is not billed per page.
+          Best value per section in bold; values within 5 % of the best count as equal. Measured: the checked records
+          every measured model extracted itself. Screened: before there were reviewed records; {against} had{' '}
+          {n(c.boundaries)} layer boundaries, {n(c.final_depth)} final depths, {n(c.groundwater)} groundwater levels and{' '}
+          {n(c.lab)} lab values on those pages, so one value moves the last three shares a lot. Cost: billed, or ≈ an
+          estimate at API list prices; a run on the Claude subscription is not billed per page.
         </p>
         <button className="link-button stats-more-link" onClick={onDetails}>All figures and the prompt versions in Details</button>
       </section>

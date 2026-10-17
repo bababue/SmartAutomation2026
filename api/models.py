@@ -321,13 +321,18 @@ class BenchmarkRow(Aggregate):
     seconds_per_page: tuple[float, float]  # range over repeated runs
     usd_per_page: float
     boundaries: tuple[float, float]
+    precision: tuple[float, float]
     lithology: tuple[float, float]
+    final_depth: tuple[float, float]
+    groundwater: tuple[float, float]
+    lab: tuple[float, float]
 
 
 class Benchmark(Aggregate):
     pages: int
     documents: int
     against: str
+    compared: dict[str, int]  # the reference model's values on the benchmark pages, the base of each share
     rows: list[BenchmarkRow]
 
 

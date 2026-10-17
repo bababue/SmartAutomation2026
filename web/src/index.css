@@ -922,8 +922,9 @@ select.field { padding: 0 4px; }
 .models-table th, .models-table td { padding: 12px 14px; border-bottom: 1px solid var(--rule-soft); text-align: left; }
 .models-table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .models-table thead th { font-size: 14px; font-weight: 500; color: var(--graphite); border-bottom: 1px solid var(--grid); vertical-align: bottom; }
-.models-table thead .models-group { padding-bottom: 4px; border-bottom: 2px solid var(--grid); text-align: center; font-size: 13px;
-  font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.models-table .models-section th { padding: 26px 14px 8px; border-bottom: 2px solid var(--grid); font-size: 13px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--water); white-space: normal; }
+.models-section th span { margin-left: 10px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--graphite); }
 .models-table tbody th { font-size: 17px; font-weight: 600; white-space: nowrap; }
 .models-table td { font-size: 20px; color: var(--graphite); }
 .models-table td.models-best { font-weight: 700; color: var(--ink); }

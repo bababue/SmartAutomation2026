@@ -1,37 +1,37 @@
 {
  "generated": "2026-10-17",
  "reference": {
-  "records": 124,
+  "records": 133,
   "documents": 24,
   "created": "2026-10-17"
  },
  "current": {
-  "records": 124,
+  "records": 133,
   "missing": 0,
-  "corrected": 65,
+  "corrected": 74,
   "boundaries": {
-   "hit": 776,
-   "of": 793
+   "hit": 823,
+   "of": 840
   },
   "precision": {
-   "hit": 776,
-   "of": 805
+   "hit": 823,
+   "of": 854
   },
   "lithology_depth": {
-   "hit": 1721.1,
-   "of": 1846.69
+   "hit": 2035.56,
+   "of": 2161.15
   },
   "final_depth": {
-   "hit": 122,
-   "of": 124
+   "hit": 131,
+   "of": 133
   },
   "groundwater": {
-   "hit": 87,
-   "of": 87
+   "hit": 88,
+   "of": 88
   },
   "lab": {
-   "hit": 873,
-   "of": 894
+   "hit": 902,
+   "of": 923
   },
   "position_median_m": 0.0,
   "position_max_m": 4007.4,
@@ -40,7 +40,7 @@
  },
  "models": {
   "prompt": "0c2e3063414e",
-  "records": 29,
+  "records": 26,
   "runs": [
    {
     "arm": "baseline-rerun",
@@ -52,37 +52,37 @@
     "usd_per_page": 0.15,
     "usd_measured": false,
     "metrics": {
-     "records": 29,
+     "records": 26,
      "missing": 0,
      "corrected": 0,
      "boundaries": {
-      "hit": 268,
-      "of": 278
+      "hit": 244,
+      "of": 254
      },
      "precision": {
-      "hit": 268,
-      "of": 293
+      "hit": 244,
+      "of": 269
      },
      "lithology_depth": {
-      "hit": 503.04,
-      "of": 534.95
+      "hit": 450.59,
+      "of": 482.5
      },
      "final_depth": {
-      "hit": 28,
-      "of": 29
+      "hit": 25,
+      "of": 26
      },
      "groundwater": {
-      "hit": 23,
-      "of": 25
+      "hit": 19,
+      "of": 21
      },
      "lab": {
-      "hit": 83,
-      "of": 92
+      "hit": 81,
+      "of": 90
      },
      "position_median_m": 0.0,
      "position_max_m": 7031.6,
      "without_position": 0,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    },
    {
@@ -95,50 +95,50 @@
     "usd_per_page": 0.00506,
     "usd_measured": true,
     "metrics": {
-     "records": 29,
+     "records": 26,
      "missing": 1,
      "corrected": 0,
      "boundaries": {
-      "hit": 254,
-      "of": 278
+      "hit": 230,
+      "of": 254
      },
      "precision": {
-      "hit": 254,
-      "of": 310
+      "hit": 230,
+      "of": 286
      },
      "lithology_depth": {
-      "hit": 467.5,
-      "of": 534.95
+      "hit": 419.7,
+      "of": 482.5
      },
      "final_depth": {
-      "hit": 25,
-      "of": 29
+      "hit": 22,
+      "of": 26
      },
      "groundwater": {
-      "hit": 17,
-      "of": 25
+      "hit": 14,
+      "of": 21
      },
      "lab": {
       "hit": 60,
-      "of": 92
+      "of": 90
      },
      "position_median_m": 0.0,
      "position_max_m": 6476.9,
      "without_position": 1,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    }
   ]
  },
  "arms": {
-  "records": 21,
-  "documents": 14,
+  "records": 18,
+  "documents": 12,
   "runs": [
    {
     "name": "baseline",
     "date": "2026-10-17",
     "prompt": null,
-    "covered": 79,
+    "covered": 80,
     "pages": 0,
     "model": null,
     "seconds_per_page": null,
@@ -147,44 +147,44 @@
     "usd_per_page": null,
     "usd_measured": false,
     "metrics": {
-     "records": 21,
+     "records": 18,
      "missing": 0,
      "corrected": 0,
      "boundaries": {
-      "hit": 198,
-      "of": 205
+      "hit": 174,
+      "of": 181
      },
      "precision": {
-      "hit": 198,
-      "of": 200
+      "hit": 174,
+      "of": 176
      },
      "lithology_depth": {
-      "hit": 378.08,
-      "of": 398.96
+      "hit": 325.63,
+      "of": 346.51
      },
      "final_depth": {
-      "hit": 20,
-      "of": 21
+      "hit": 17,
+      "of": 18
      },
      "groundwater": {
-      "hit": 16,
-      "of": 16
+      "hit": 12,
+      "of": 12
      },
      "lab": {
-      "hit": 44,
-      "of": 44
+      "hit": 42,
+      "of": 42
      },
      "position_median_m": 0.0,
      "position_max_m": 0.0,
      "without_position": 0,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    },
    {
     "name": "baseline-rerun",
     "date": "2026-10-17",
     "prompt": "0c2e3063414e",
-    "covered": 34,
+    "covered": 30,
     "pages": 70,
     "model": "claude-opus-5-5",
     "seconds_per_page": 29.6,
@@ -193,44 +193,44 @@
     "usd_per_page": 0.15,
     "usd_measured": false,
     "metrics": {
-     "records": 21,
+     "records": 18,
      "missing": 0,
      "corrected": 0,
      "boundaries": {
-      "hit": 197,
-      "of": 205
+      "hit": 173,
+      "of": 181
      },
      "precision": {
-      "hit": 197,
-      "of": 217
+      "hit": 173,
+      "of": 193
      },
      "lithology_depth": {
-      "hit": 369.08,
-      "of": 398.96
+      "hit": 316.63,
+      "of": 346.51
      },
      "final_depth": {
-      "hit": 20,
-      "of": 21
+      "hit": 17,
+      "of": 18
      },
      "groundwater": {
-      "hit": 15,
-      "of": 16
+      "hit": 11,
+      "of": 12
      },
      "lab": {
-      "hit": 41,
-      "of": 44
+      "hit": 39,
+      "of": 42
      },
      "position_median_m": 0.0,
      "position_max_m": 0.0,
      "without_position": 0,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    },
    {
     "name": "haiku-current",
     "date": "2026-10-17",
     "prompt": "0c2e3063414e",
-    "covered": 29,
+    "covered": 26,
     "pages": 63,
     "model": "anthropic/claude-haiku-5.5",
     "seconds_per_page": 29.1,
@@ -239,44 +239,44 @@
     "usd_per_page": 0.00506,
     "usd_measured": true,
     "metrics": {
-     "records": 21,
+     "records": 18,
      "missing": 1,
      "corrected": 0,
      "boundaries": {
-      "hit": 183,
-      "of": 205
+      "hit": 159,
+      "of": 181
      },
      "precision": {
-      "hit": 183,
-      "of": 231
+      "hit": 159,
+      "of": 207
      },
      "lithology_depth": {
-      "hit": 347.73,
-      "of": 398.96
+      "hit": 299.93,
+      "of": 346.51
      },
      "final_depth": {
-      "hit": 17,
-      "of": 21
+      "hit": 14,
+      "of": 18
      },
      "groundwater": {
-      "hit": 9,
-      "of": 16
+      "hit": 6,
+      "of": 12
      },
      "lab": {
       "hit": 15,
-      "of": 44
+      "of": 42
      },
      "position_median_m": 0.0,
      "position_max_m": 0.0,
      "without_position": 1,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    },
    {
     "name": "haiku-lean",
     "date": "2026-10-17",
     "prompt": "2670c4d4972f",
-    "covered": 29,
+    "covered": 26,
     "pages": 63,
     "model": "anthropic/claude-haiku-5.5",
     "seconds_per_page": 29.9,
@@ -285,44 +285,44 @@
     "usd_per_page": 0.00499,
     "usd_measured": true,
     "metrics": {
-     "records": 21,
+     "records": 18,
      "missing": 1,
      "corrected": 0,
      "boundaries": {
-      "hit": 177,
-      "of": 205
+      "hit": 154,
+      "of": 181
      },
      "precision": {
-      "hit": 177,
-      "of": 226
+      "hit": 154,
+      "of": 202
      },
      "lithology_depth": {
-      "hit": 332.97,
-      "of": 398.96
+      "hit": 281.22,
+      "of": 346.51
      },
      "final_depth": {
-      "hit": 18,
-      "of": 21
+      "hit": 16,
+      "of": 18
      },
      "groundwater": {
-      "hit": 9,
-      "of": 16
+      "hit": 6,
+      "of": 12
      },
      "lab": {
       "hit": 27,
-      "of": 44
+      "of": 42
      },
      "position_median_m": 0.0,
      "position_max_m": 0.0,
      "without_position": 1,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    },
    {
     "name": "not-stated",
     "date": "2026-10-17",
     "prompt": "54f881d53606",
-    "covered": 24,
+    "covered": 21,
     "pages": 54,
     "model": "claude-opus-5-5",
     "seconds_per_page": 32.1,
@@ -331,44 +331,44 @@
     "usd_per_page": 0.15,
     "usd_measured": false,
     "metrics": {
-     "records": 21,
+     "records": 18,
      "missing": 0,
      "corrected": 0,
      "boundaries": {
-      "hit": 196,
-      "of": 205
+      "hit": 172,
+      "of": 181
      },
      "precision": {
-      "hit": 196,
-      "of": 217
+      "hit": 172,
+      "of": 193
      },
      "lithology_depth": {
-      "hit": 377.21,
-      "of": 398.96
+      "hit": 324.76,
+      "of": 346.51
      },
      "final_depth": {
-      "hit": 20,
-      "of": 21
+      "hit": 17,
+      "of": 18
      },
      "groundwater": {
-      "hit": 15,
-      "of": 16
+      "hit": 11,
+      "of": 12
      },
      "lab": {
-      "hit": 39,
-      "of": 44
+      "hit": 37,
+      "of": 42
      },
      "position_median_m": 0.0,
      "position_max_m": 0.0,
      "without_position": 0,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    },
    {
     "name": "unreadable-fields",
     "date": "2026-10-17",
     "prompt": "26daf4000d19",
-    "covered": 24,
+    "covered": 21,
     "pages": 54,
     "model": "claude-opus-5-5",
     "seconds_per_page": 31.5,
@@ -377,44 +377,44 @@
     "usd_per_page": 0.15,
     "usd_measured": false,
     "metrics": {
-     "records": 21,
+     "records": 18,
      "missing": 0,
      "corrected": 0,
      "boundaries": {
-      "hit": 195,
-      "of": 205
+      "hit": 171,
+      "of": 181
      },
      "precision": {
-      "hit": 195,
-      "of": 205
+      "hit": 171,
+      "of": 181
      },
      "lithology_depth": {
-      "hit": 376.08,
-      "of": 398.96
+      "hit": 323.63,
+      "of": 346.51
      },
      "final_depth": {
-      "hit": 20,
-      "of": 21
+      "hit": 17,
+      "of": 18
      },
      "groundwater": {
-      "hit": 16,
-      "of": 16
+      "hit": 12,
+      "of": 12
      },
      "lab": {
-      "hit": 39,
-      "of": 44
+      "hit": 37,
+      "of": 42
      },
      "position_median_m": 0.0,
      "position_max_m": 0.0,
      "without_position": 0,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    },
    {
     "name": "v4-candidate",
     "date": "2026-10-17",
     "prompt": "97e853955a3d",
-    "covered": 29,
+    "covered": 26,
     "pages": 63,
     "model": "claude-opus-5-5",
     "seconds_per_page": 28.7,
@@ -423,44 +423,44 @@
     "usd_per_page": 0.15,
     "usd_measured": false,
     "metrics": {
-     "records": 21,
+     "records": 18,
      "missing": 1,
      "corrected": 0,
      "boundaries": {
-      "hit": 189,
-      "of": 205
+      "hit": 165,
+      "of": 181
      },
      "precision": {
-      "hit": 189,
-      "of": 204
+      "hit": 165,
+      "of": 180
      },
      "lithology_depth": {
-      "hit": 349.6,
-      "of": 398.96
+      "hit": 297.15,
+      "of": 346.51
      },
      "final_depth": {
-      "hit": 17,
-      "of": 21
+      "hit": 14,
+      "of": 18
      },
      "groundwater": {
-      "hit": 15,
-      "of": 16
+      "hit": 11,
+      "of": 12
      },
      "lab": {
-      "hit": 41,
-      "of": 44
+      "hit": 39,
+      "of": 42
      },
      "position_median_m": 0.0,
      "position_max_m": 0.0,
      "without_position": 1,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    },
    {
     "name": "v4-no-weathered",
     "date": "2026-10-17",
     "prompt": "290b88fba0cb",
-    "covered": 29,
+    "covered": 26,
     "pages": 63,
     "model": "claude-opus-5-5",
     "seconds_per_page": 27.7,
@@ -469,44 +469,44 @@
     "usd_per_page": 0.15,
     "usd_measured": false,
     "metrics": {
-     "records": 21,
+     "records": 18,
      "missing": 0,
      "corrected": 0,
      "boundaries": {
-      "hit": 196,
-      "of": 205
+      "hit": 172,
+      "of": 181
      },
      "precision": {
-      "hit": 196,
-      "of": 219
+      "hit": 172,
+      "of": 195
      },
      "lithology_depth": {
-      "hit": 371.88,
-      "of": 398.96
+      "hit": 321.63,
+      "of": 346.51
      },
      "final_depth": {
-      "hit": 17,
-      "of": 21
+      "hit": 14,
+      "of": 18
      },
      "groundwater": {
-      "hit": 15,
-      "of": 16
+      "hit": 11,
+      "of": 12
      },
      "lab": {
-      "hit": 36,
-      "of": 44
+      "hit": 34,
+      "of": 42
      },
      "position_median_m": 0.0,
      "position_max_m": 0.0,
      "without_position": 0,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    },
    {
     "name": "v4-prep",
     "date": "2026-10-17",
     "prompt": "b3facff0b9f7",
-    "covered": 34,
+    "covered": 30,
     "pages": 70,
     "model": "claude-opus-5-5",
     "seconds_per_page": 29.8,
@@ -515,44 +515,44 @@
     "usd_per_page": 0.15,
     "usd_measured": false,
     "metrics": {
-     "records": 21,
+     "records": 18,
      "missing": 0,
      "corrected": 0,
      "boundaries": {
-      "hit": 188,
-      "of": 205
+      "hit": 164,
+      "of": 181
      },
      "precision": {
-      "hit": 188,
-      "of": 199
+      "hit": 164,
+      "of": 175
      },
      "lithology_depth": {
-      "hit": 351.68,
-      "of": 398.96
+      "hit": 299.23,
+      "of": 346.51
      },
      "final_depth": {
-      "hit": 20,
-      "of": 21
+      "hit": 17,
+      "of": 18
      },
      "groundwater": {
-      "hit": 15,
-      "of": 16
+      "hit": 11,
+      "of": 12
      },
      "lab": {
-      "hit": 43,
-      "of": 44
+      "hit": 41,
+      "of": 42
      },
      "position_median_m": 0.0,
      "position_max_m": 0.0,
      "without_position": 0,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    },
    {
     "name": "v4-prep2",
     "date": "2026-10-17",
     "prompt": "2c34de43a3bb",
-    "covered": 34,
+    "covered": 30,
     "pages": 70,
     "model": "claude-opus-5-5",
     "seconds_per_page": 29.1,
@@ -561,37 +561,37 @@
     "usd_per_page": 0.15,
     "usd_measured": false,
     "metrics": {
-     "records": 21,
+     "records": 18,
      "missing": 0,
      "corrected": 0,
      "boundaries": {
-      "hit": 194,
-      "of": 205
+      "hit": 170,
+      "of": 181
      },
      "precision": {
-      "hit": 194,
-      "of": 235
+      "hit": 170,
+      "of": 211
      },
      "lithology_depth": {
-      "hit": 377.66,
-      "of": 398.96
+      "hit": 325.21,
+      "of": 346.51
      },
      "final_depth": {
-      "hit": 19,
-      "of": 21
+      "hit": 16,
+      "of": 18
      },
      "groundwater": {
-      "hit": 15,
-      "of": 16
+      "hit": 11,
+      "of": 12
      },
      "lab": {
-      "hit": 41,
-      "of": 44
+      "hit": 39,
+      "of": 42
      },
      "position_median_m": 0.0,
      "position_max_m": 0.0,
      "without_position": 0,
-     "crs_changed": 1
+     "crs_changed": 0
     }
    }
   ]
@@ -600,6 +600,12 @@
   "pages": 6,
   "documents": 4,
   "against": "claude-opus-5-5",
+  "compared": {
+   "boundaries": 37,
+   "final_depth": 4,
+   "groundwater": 3,
+   "lab": 4
+  },
   "rows": [
    {
     "model": "Sonnet 5.5",
@@ -613,9 +619,25 @@
      1.0,
      1.0
     ],
+    "precision": [
+     1.0,
+     1.0
+    ],
     "lithology": [
      0.84,
      0.84
+    ],
+    "final_depth": [
+     1.0,
+     1.0
+    ],
+    "groundwater": [
+     0.67,
+     0.67
+    ],
+    "lab": [
+     0.0,
+     0.0
     ]
    },
    {
@@ -630,9 +652,25 @@
      0.86,
      0.86
     ],
+    "precision": [
+     0.86,
+     0.86
+    ],
     "lithology": [
      0.95,
      0.95
+    ],
+    "final_depth": [
+     1.0,
+     1.0
+    ],
+    "groundwater": [
+     1.0,
+     1.0
+    ],
+    "lab": [
+     0.5,
+     0.5
     ]
    },
    {
@@ -647,9 +685,25 @@
      0.97,
      0.97
     ],
+    "precision": [
+     0.97,
+     0.97
+    ],
     "lithology": [
      0.89,
      0.89
+    ],
+    "final_depth": [
+     1.0,
+     1.0
+    ],
+    "groundwater": [
+     1.0,
+     1.0
+    ],
+    "lab": [
+     0.25,
+     0.25
     ]
    },
    {
@@ -664,9 +718,25 @@
      1.0,
      1.0
     ],
+    "precision": [
+     1.0,
+     1.0
+    ],
     "lithology": [
      0.85,
      0.85
+    ],
+    "final_depth": [
+     1.0,
+     1.0
+    ],
+    "groundwater": [
+     1.0,
+     1.0
+    ],
+    "lab": [
+     0.0,
+     0.0
     ]
    },
    {
@@ -681,9 +751,25 @@
      0.86,
      0.86
     ],
+    "precision": [
+     0.94,
+     0.94
+    ],
     "lithology": [
      0.88,
      0.88
+    ],
+    "final_depth": [
+     1.0,
+     1.0
+    ],
+    "groundwater": [
+     1.0,
+     1.0
+    ],
+    "lab": [
+     0.5,
+     0.5
     ]
    },
    {
@@ -698,9 +784,25 @@
      0.81,
      0.81
     ],
+    "precision": [
+     0.81,
+     0.81
+    ],
     "lithology": [
      0.77,
      0.77
+    ],
+    "final_depth": [
+     1.0,
+     1.0
+    ],
+    "groundwater": [
+     0.67,
+     0.67
+    ],
+    "lab": [
+     0.0,
+     0.0
     ]
    },
    {
@@ -715,12 +817,28 @@
      0.3,
      0.54
     ],
+    "precision": [
+     0.61,
+     0.85
+    ],
     "lithology": [
      0.09,
      0.52
+    ],
+    "final_depth": [
+     0.75,
+     1.0
+    ],
+    "groundwater": [
+     0.33,
+     0.67
+    ],
+    "lab": [
+     0.0,
+     0.0
     ]
    }
   ]
  },
- "log_pages": 694
+ "log_pages": 736
 }

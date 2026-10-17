@@ -351,8 +351,11 @@ export interface ModelEvaluation {
     pages: number
     documents: number
     against: string
+    /** The reference model's values on the benchmark pages, the base of each share. */
+    compared: { boundaries: number; final_depth: number; groundwater: number; lab: number }
     rows: { model: string; route: string; seconds_per_page: [number, number]; usd_per_page: number;
-      boundaries: [number, number]; lithology: [number, number] }[]
+      boundaries: [number, number]; precision: [number, number]; lithology: [number, number];
+      final_depth: [number, number]; groundwater: [number, number]; lab: [number, number] }[]
   }
   /** Log pages in the corpus, for projections. */
   log_pages: number

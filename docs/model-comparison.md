@@ -50,15 +50,18 @@ Before there were reviewed records, nine configurations read the same 6 log page
 same prompt and were compared with Opus. That measures agreement, not accuracy, and 6 pages are enough to see
 coarse differences only.
 
-| Model | Route | s / page | $ / page | Boundaries as Opus | Lithology by depth as Opus |
-|---|---|---|---|---|---|
-| Sonnet 5.5 | OpenRouter | 28 | 0.069 | 100 % | 84 % |
-| Gemini 4 Argon | OpenRouter | 30 | 0.035 | 86 % | 95 % |
-| GPT-6.1 Sol | OpenRouter | 44 | 0.039 | 97 % | 89 % |
-| Haiku 5.5 | OpenRouter | 27 | 0.0046 | 100 % | 85 % |
-| Gemini 3.8 Flash | OpenRouter | 32 | 0.026 | 86 % | 88 % |
-| GPT-6 Luna | OpenRouter | 29 | 0.0025 | 81 % | 77 % |
-| Qwen3-VL 8B, 4 bit | local (Apple M4, 24 GB) | 140–245 | 0 | 30–54 % | 9–52 % |
+| Model | Route | s / page | $ / page | Boundaries | Precision | Lithology by depth | Final depth | Groundwater | Lab values |
+|---|---|---|---|---|---|---|---|---|---|
+| Sonnet 5.5 | OpenRouter | 28 | 0.069 | 100 % | 100 % | 84 % | 100 % | 67 % | 0 % |
+| Gemini 4 Argon | OpenRouter | 30 | 0.035 | 86 % | 86 % | 95 % | 100 % | 100 % | 50 % |
+| GPT-6.1 Sol | OpenRouter | 44 | 0.039 | 97 % | 97 % | 89 % | 100 % | 100 % | 25 % |
+| Haiku 5.5 | OpenRouter | 27 | 0.0046 | 100 % | 100 % | 85 % | 100 % | 100 % | 0 % |
+| Gemini 3.8 Flash | OpenRouter | 32 | 0.026 | 86 % | 94 % | 88 % | 100 % | 100 % | 50 % |
+| GPT-6 Luna | OpenRouter | 29 | 0.0025 | 81 % | 81 % | 77 % | 100 % | 67 % | 0 % |
+| Qwen3-VL 8B, 4 bit | local (Apple M4, 24 GB) | 140–245 | 0 | 30–54 % | 61–85 % | 9–52 % | 75–100 % | 33–67 % | 0 % |
+
+All shares are agreement with Opus on those pages: 37 layer boundaries, 4 final depths, 3 groundwater levels
+and 4 lab values, so one value moves the last three columns a lot.
 
 The local model mismatched holes and put positions thousands of kilometres off; the review rules held all of
 its records back.

@@ -25,24 +25,33 @@ from .assemble import LOG_KINDS
 SNAPSHOT_PATH = config.ROOT / "fixtures" / "model_evaluation.json"
 
 # Transcribed from docs/model-comparison.md (wider benchmark): 6 log pages from 4 documents, same prompt,
-# compared with Opus. A pair is a range over repeated runs.
+# compared with Opus. A pair is a range over repeated runs. `compared`: Opus's values on those pages, the base
+# of each share.
 BENCHMARK = {
     "pages": 6, "documents": 4, "against": "claude-opus-5-5",
+    "compared": {"boundaries": 37, "final_depth": 4, "groundwater": 3, "lab": 4},
     "rows": [
         {"model": "Sonnet 5.5", "route": "OpenRouter", "seconds_per_page": [28, 28], "usd_per_page": 0.069,
-         "boundaries": [1.0, 1.0], "lithology": [0.84, 0.84]},
+         "boundaries": [1.0, 1.0], "precision": [1.0, 1.0], "lithology": [0.84, 0.84], "final_depth": [1.0, 1.0],
+         "groundwater": [0.67, 0.67], "lab": [0.0, 0.0]},
         {"model": "Gemini 4 Argon", "route": "OpenRouter", "seconds_per_page": [30, 30], "usd_per_page": 0.035,
-         "boundaries": [0.86, 0.86], "lithology": [0.95, 0.95]},
+         "boundaries": [0.86, 0.86], "precision": [0.86, 0.86], "lithology": [0.95, 0.95], "final_depth": [1.0, 1.0],
+         "groundwater": [1.0, 1.0], "lab": [0.5, 0.5]},
         {"model": "GPT-6.1 Sol", "route": "OpenRouter", "seconds_per_page": [44, 44], "usd_per_page": 0.039,
-         "boundaries": [0.97, 0.97], "lithology": [0.89, 0.89]},
+         "boundaries": [0.97, 0.97], "precision": [0.97, 0.97], "lithology": [0.89, 0.89], "final_depth": [1.0, 1.0],
+         "groundwater": [1.0, 1.0], "lab": [0.25, 0.25]},
         {"model": "Haiku 5.5", "route": "OpenRouter", "seconds_per_page": [27, 27], "usd_per_page": 0.0046,
-         "boundaries": [1.0, 1.0], "lithology": [0.85, 0.85]},
+         "boundaries": [1.0, 1.0], "precision": [1.0, 1.0], "lithology": [0.85, 0.85], "final_depth": [1.0, 1.0],
+         "groundwater": [1.0, 1.0], "lab": [0.0, 0.0]},
         {"model": "Gemini 3.8 Flash", "route": "OpenRouter", "seconds_per_page": [32, 32], "usd_per_page": 0.026,
-         "boundaries": [0.86, 0.86], "lithology": [0.88, 0.88]},
+         "boundaries": [0.86, 0.86], "precision": [0.94, 0.94], "lithology": [0.88, 0.88], "final_depth": [1.0, 1.0],
+         "groundwater": [1.0, 1.0], "lab": [0.5, 0.5]},
         {"model": "GPT-6 Luna", "route": "OpenRouter", "seconds_per_page": [29, 29], "usd_per_page": 0.0025,
-         "boundaries": [0.81, 0.81], "lithology": [0.77, 0.77]},
-        {"model": "Qwen3-VL 8B, 4 bit", "route": "local (Apple M4, 24 GB)", "seconds_per_page": [140, 245],
-         "usd_per_page": 0.0, "boundaries": [0.30, 0.54], "lithology": [0.09, 0.52]},
+         "boundaries": [0.81, 0.81], "precision": [0.81, 0.81], "lithology": [0.77, 0.77], "final_depth": [1.0, 1.0],
+         "groundwater": [0.67, 0.67], "lab": [0.0, 0.0]},
+        {"model": "Qwen3-VL 8B, 4 bit", "route": "local (Apple M4, 24 GB)", "seconds_per_page": [140, 245], "usd_per_page": 0.0,
+         "boundaries": [0.3, 0.54], "precision": [0.61, 0.85], "lithology": [0.09, 0.52], "final_depth": [0.75, 1.0],
+         "groundwater": [0.33, 0.67], "lab": [0.0, 0.0]},
     ],
 }
 
