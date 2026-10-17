@@ -190,3 +190,16 @@ def test_reset_keeps_review_decisions(con):
     store.reset(con)
     assert con.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 0
     assert con.execute("SELECT decision FROM review_events").fetchone()[0] == "rejected"
+
+
+def test_share_package_without_git(con, tmp_path, monkeypatch):
+    import argparse
+    import subprocess
+    from pipeline.__main__ import cmd_share
+
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+    monkeypatch.setattr(subprocess, "run", no_git)
+    out = tmp_path / "pkg"
+    cmd_share(argparse.Namespace(out=str(out), no_pages=True, with_cache=False))
+    assert "commit unknown" in (out / "README.md").read_text()

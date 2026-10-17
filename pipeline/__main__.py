@@ -577,8 +577,11 @@ def cmd_share(args) -> None:
         shutil.copytree(config.PAGES_DIR, out / "pages")
     if args.with_cache:
         shutil.copytree(config.CACHE_DIR, out / "cache")
-    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
-                            cwd=config.ROOT).stdout.strip() or "unknown"
+    try:
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                                cwd=config.ROOT).stdout.strip() or "unknown"
+    except OSError:  # git not installed
+        commit = "unknown"
     (out / "README.md").write_text(SHARE_README.format(
         commit=commit, created=datetime.date.today().isoformat(), source=config.DB_PATH.name,
         boreholes=counts[0], documents=counts[1]), encoding="utf-8")
