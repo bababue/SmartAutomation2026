@@ -59,7 +59,7 @@ def test_crs_for_whole_document(client):
     assert any(i.startswith("corrected by Anna") for i in issues)
     assert "unreadable: Coordinate reference system not printed" not in issues  # settled by the reviewer
     assert "unreadable: Elevation datum not printed" in issues  # not about the position
-    other = client.get("/api/boreholes/other:BH3/detail").json()["borehole"]["location"]
+    other = client.get("/api/boreholes/other:BH3").json()["borehole"]["location"]
     assert other["crs_epsg"] == 32756
 
 
@@ -119,7 +119,7 @@ def test_invalid_corrections_are_rejected(client):
     assert post(client, "demo__a:BH1", kind="position", scope="document", payload={"lat": 1, "lon": 2}).status_code == 422
     assert post(client, "demo__a:BH1", kind="layer", payload={"orig_top": 0, "orig_bottom": 1.2, "top": 2, "bottom": 1}).status_code == 422
     assert post(client, "demo__a:BH1", kind="layer", payload={"orig_top": 7, "orig_bottom": 8, "delete": True}).status_code == 422
-    assert client.get("/api/boreholes/demo__a:BH1/detail").json()["corrections"] == []
+    assert client.get("/api/boreholes/demo__a:BH1").json()["corrections"] == []
 
 
 def test_fill_in_missing_data(client):

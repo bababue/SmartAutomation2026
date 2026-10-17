@@ -139,7 +139,7 @@ def test_required_name_cannot_be_cleared(client, value):
     response = client.post("/api/boreholes/q:A/corrections", json={"kind": "field", "reviewer": "Ana",
                             "payload": {"field": "borehole_name", "value": value}})
     assert response.status_code == 422
-    assert client.get("/api/boreholes/q:A/detail").json()["borehole"]["borehole_name"] == "A"
+    assert client.get("/api/boreholes/q:A").json()["borehole"]["borehole_name"] == "A"
 
 
 def test_holes_group_by_document_labelled_with_their_most_frequent_project(client):
@@ -175,3 +175,19 @@ def test_statistics_aggregate_the_filtered_records_including_those_without_a_pos
     clay = client.get("/api/stats/detail?lithology=clay:10:").json()
     assert clay["boreholes"] == 1 and dict(clay["lithology_m"])["clay"] == 18.0
     assert client.get("/api/stats/detail?material=sand:0:20:5").status_code == 200  # the ground filters apply too
+
+
+@pytest.mark.parametrize("path", ["q:dir/H", "q%3Adir%2FH"])
+def test_ids_with_colon_and_slash_reach_the_record_and_its_sub_routes(client, path):
+    con = store.connect()
+    store.save_borehole(con, hole("q:dir/H", 47.0, 8.0, [(0, 9, "gravel")]))
+    con.close()
+    assert client.get(f"/api/boreholes/{path}").json()["borehole"]["borehole_id"] == "q:dir/H"
+    assert "similar" in client.get(f"/api/boreholes/{path}/similar").json()
+    fix = {"kind": "field", "reviewer": "Ana", "payload": {"field": "notes", "value": "checked"}}
+    assert client.post(f"/api/boreholes/{path}/corrections", json=fix).status_code == 200
+    detail = client.get(f"/api/boreholes/{path}").json()
+    review = client.post(f"/api/boreholes/{path}/review", json={
+        "decision": "approved", "reviewer": "Ana", "content_hash": detail["content_hash"],
+        "review_revision": detail["review_revision"]})
+    assert review.json()["borehole"]["review_status"] == "approved"

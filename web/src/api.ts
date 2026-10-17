@@ -59,7 +59,7 @@ export function fetchLayerStrips(bbox: string, signal?: AbortSignal): Promise<La
 
 const enc = (id: string) => encodeURIComponent(id)
 
-export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>(`/api/boreholes/${enc(id)}/detail`, { signal })
+export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>(`/api/boreholes/${enc(id)}`, { signal })
 export const fetchSimilar = (id: string, signal?: AbortSignal) =>
   request<SimilarGround>(`/api/boreholes/${enc(id)}/similar`, { signal })
 export const fetchStats = () => request<Stats>('/api/stats')
@@ -91,10 +91,10 @@ export function postReview(id: string, decision: ReviewStatus, reviewer: string,
 export function postUpload(files: File[]) {
   const body = new FormData()
   files.forEach((f) => body.append('files', f))
-  return request<UploadJob>('/api/upload', { method: 'POST', body })
+  return request<UploadJob>('/api/uploads', { method: 'POST', body })
 }
 
-export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/upload/${enc(jobId)}`)
+export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/uploads/${enc(jobId)}`)
 
 /** Download link for the released records. */
 export const exportUrl = (format: 'xlsx' | 'csv') => `/api/export.${format}`

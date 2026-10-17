@@ -324,35 +324,6 @@ def orphan_corrections(con: DB):
     return store.orphan_corrections(con)
 
 
-@app.get("/api/boreholes/{borehole_id:path}/detail")
-def get_borehole(borehole_id: str, con: DB):
-    bh = store.load_borehole(con, borehole_id)
-    if bh is None:
-        raise HTTPException(404, "borehole not found")
-    pages = {(s.file, s.page) for s in bh.sources}
-    files = sorted({f for f, _ in pages})
-    marks = ",".join("?" * len(files))
-    docs = {r["path"]: r["doc_id"] for r in con.execute(f"SELECT doc_id, path FROM documents WHERE path IN ({marks})", files)}
-    stored = {(r["doc_id"], r["page"]) for r in con.execute(
-        f"SELECT doc_id, page FROM pages WHERE doc_id IN ({','.join('?' * len(docs))})", list(docs.values()))}
-    source_pages = [
-        {"file": f, "page": p, "url": f"/api/pages/{docs[f]}/{p}"}
-        for f, p in sorted(pages, key=lambda x: (x[0], x[1] or 0))
-        if f in docs and (docs[f], p) in stored
-    ]
-    meta = con.execute("SELECT uid, version_id, review_revision FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
-    return {
-        "borehole": bh.model_dump(mode="json"),
-        "source_pages": source_pages,
-        "review_log": store.review_log(con, borehole_id),
-        "corrections": store.corrections_for(con, borehole_id, meta["uid"]),
-        "blocking": _blocking(bh),
-        "content_hash": _content_hash(con, borehole_id),
-        "uid": meta["uid"], "version_id": meta["version_id"], "review_revision": meta["review_revision"],
-        "threshold": config.AUTO_APPROVE_THRESHOLD,
-    }
-
-
 @app.get("/api/boreholes/{borehole_id:path}/similar")
 def similar_boreholes(borehole_id: str, con: DB, limit: int = Query(5, ge=1, le=20)):
     """Holes of other documents with the most similar ground (lithology per depth band, water level)."""
@@ -555,7 +526,37 @@ def correct(borehole_id: str, body: Correction, con: DB):
             "content_hash": _content_hash(con, borehole_id)}
 
 
-@app.post("/api/upload")
+# After the sub-routes: the path converter would also match '<id>/similar'.
+@app.get("/api/boreholes/{borehole_id:path}")
+def get_borehole(borehole_id: str, con: DB):
+    bh = store.load_borehole(con, borehole_id)
+    if bh is None:
+        raise HTTPException(404, "borehole not found")
+    pages = {(s.file, s.page) for s in bh.sources}
+    files = sorted({f for f, _ in pages})
+    marks = ",".join("?" * len(files))
+    docs = {r["path"]: r["doc_id"] for r in con.execute(f"SELECT doc_id, path FROM documents WHERE path IN ({marks})", files)}
+    stored = {(r["doc_id"], r["page"]) for r in con.execute(
+        f"SELECT doc_id, page FROM pages WHERE doc_id IN ({','.join('?' * len(docs))})", list(docs.values()))}
+    source_pages = [
+        {"file": f, "page": p, "url": f"/api/pages/{docs[f]}/{p}"}
+        for f, p in sorted(pages, key=lambda x: (x[0], x[1] or 0))
+        if f in docs and (docs[f], p) in stored
+    ]
+    meta = con.execute("SELECT uid, version_id, review_revision FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
+    return {
+        "borehole": bh.model_dump(mode="json"),
+        "source_pages": source_pages,
+        "review_log": store.review_log(con, borehole_id),
+        "corrections": store.corrections_for(con, borehole_id, meta["uid"]),
+        "blocking": _blocking(bh),
+        "content_hash": _content_hash(con, borehole_id),
+        "uid": meta["uid"], "version_id": meta["version_id"], "review_revision": meta["review_revision"],
+        "threshold": config.AUTO_APPROVE_THRESHOLD,
+    }
+
+
+@app.post("/api/uploads")
 async def upload_documents(files: list[UploadFile] = File(...)):
     """One batch of files, or zips of them, becomes one document group assembled in a single run, so
     records of one hole spread over several files are combined. Other files in the batch
@@ -714,7 +715,7 @@ def _check_page_count(pages: int) -> None:
         raise HTTPException(413, f"{pages} pages exceeds the {config.MAX_UPLOAD_PAGES}-page upload limit")
 
 
-@app.get("/api/upload/{job_id}")
+@app.get("/api/uploads/{job_id}")
 def upload_status(job_id: str, con: DB) -> uploads.UploadResult:
     job = uploads.result(con, job_id)
     if job is None:
