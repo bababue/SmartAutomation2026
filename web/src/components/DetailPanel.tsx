@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import type { Detail, DetailUpdate, Layer, SimilarGround, SourceRef } from '../types'
 import { lithStyle, patternId } from '../lithology'
-import { CardHead, CorrectionList, LayersEditor, NotesEditor, RecordEditor, TestsEditor, type TestRow } from './Corrections'
+import { CardHead, CorrectionList, HeaderEditor, LayersEditor, NotesEditor, RecordEditor, TestsEditor, type TestRow } from './Corrections'
 import { Profile } from './Profile'
 import { SimilarHoles } from './SimilarHoles'
 import { ReviewBox } from './ReviewBox'
@@ -45,7 +45,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
   const [hovered, setHovered] = useState<number | null>(null)
   const layerRows = useRef<HTMLTableSectionElement>(null)
   const [coordsHovered, setCoordsHovered] = useState(false)
-  const [editing, setEditing] = useState<'record' | 'layers' | 'tests' | 'notes' | null>(null)
+  const [editing, setEditing] = useState<'head' | 'record' | 'layers' | 'tests' | 'notes' | null>(null)
   const done = () => setEditing(null)
   const [sourceOpen, setSourceOpen] = useState(false)
 
@@ -85,11 +85,19 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
   return (
     <aside className="detail" aria-label={`Borehole ${bh.borehole_name}`}>
       <header className="detail-head">
+        {editing === 'head' ? <HeaderEditor borehole={bh} onChange={onReviewChange} onDone={done} /> : (
         <div>
           <h2>{bh.borehole_name}</h2>
           <p className="detail-sub">{[bh.project_name, bh.location_name].filter(Boolean).join(', ') || 'No project name on the log'}</p>
         </div>
+        )}
         <div className="detail-actions">
+          {!editing && (
+            <button className="btn btn-small btn-ghost head-edit-btn" onClick={() => setEditing('head')}
+              title="Edit name, project and location">
+              <span aria-hidden="true">✎</span> Edit
+            </button>
+          )}
           <button className="btn btn-icon" onClick={onClose} aria-label="Close details" title="Close (Esc)">✕</button>
         </div>
       </header>

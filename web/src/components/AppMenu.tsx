@@ -6,13 +6,13 @@ interface Props {
   inStats: boolean
   uploading: boolean
   dark: boolean
-  columns3d: boolean
+  view3d: boolean
   onToggleReview: () => void
   onToggleStats: () => void
   onCreateTunnel: () => void
   onUpload: () => void
   onToggleDark: () => void
-  onToggleColumns: () => void
+  onToggleView3d: () => void
 }
 
 type Sub = 'export'
@@ -35,8 +35,8 @@ function Icon({ d }: { d: string }) {
   return <svg className="menu-icon" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d={d} /></svg>
 }
 
-export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggleReview, onToggleStats,
-  onCreateTunnel, onUpload, onToggleDark, onToggleColumns }: Props) {
+export function AppMenu({ inReview, inStats, uploading, dark, view3d, onToggleReview, onToggleStats,
+  onCreateTunnel, onUpload, onToggleDark, onToggleView3d }: Props) {
   const [open, setOpen] = useState(false)
   const [sub, setSub] = useState<Sub | null>(null)
   const root = useRef<HTMLDivElement>(null)
@@ -133,10 +133,10 @@ export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggl
               </div>
             )}
           </div>
-          <button role="menuitemcheckbox" aria-checked={columns3d} className="app-menu-item" onClick={pick(onToggleColumns)}
-            onMouseEnter={() => setSub(null)} title="Depth columns when zoomed in; off shows flat points">
-            <Icon d={ICON.column} /><span className="menu-text">3D columns</span>
-            <span className={`switch${columns3d ? ' switch-on' : ''}`} aria-hidden="true" />
+          <button role="menuitemcheckbox" aria-checked={view3d} className="app-menu-item" onClick={pick(onToggleView3d)}
+            onMouseEnter={() => setSub(null)} title="Tilted map with depth columns and buildings when zoomed in; off shows a flat map with points">
+            <Icon d={ICON.column} /><span className="menu-text">3D view</span>
+            <span className={`switch${view3d ? ' switch-on' : ''}`} aria-hidden="true" />
           </button>
           <button role="menuitemcheckbox" aria-checked={dark} className="app-menu-item" onClick={pick(onToggleDark)}
             onMouseEnter={() => setSub(null)}>

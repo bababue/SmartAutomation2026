@@ -77,7 +77,7 @@ export default function App() {
     }
   }, [listOpen, sheetWidth])
   const [dark, setDark] = useStoredFlag('borehole-atlas.theme', 'dark', 'light', prefersDark)
-  const [columns3d, setColumns3d] = useStoredFlag('borehole-atlas.columns3d', 'on', 'off', always)
+  const [view3d, setView3d] = useStoredFlag('borehole-atlas.view3d', 'on', 'off', always)
 
   useEffect(() => { document.documentElement.dataset.theme = dark ? 'dark' : 'light' }, [dark])
 
@@ -381,7 +381,7 @@ export default function App() {
               )}
             </p>
           )}
-          <AppMenu inReview={view === 'review'} inStats={view === 'stats'} uploading={uploading} dark={dark} columns3d={columns3d}
+          <AppMenu inReview={view === 'review'} inStats={view === 'stats'} uploading={uploading} dark={dark} view3d={view3d}
             onToggleReview={() => {
               setAuditOnly(false)
               if (view !== 'review') { setSelectedId(null); setListOpen(true) }
@@ -389,7 +389,7 @@ export default function App() {
             }}
             onToggleStats={() => setView(view === 'stats' ? 'map' : 'stats')}
             onCreateTunnel={createTunnel}
-            onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} onToggleColumns={() => setColumns3d(!columns3d)} />
+            onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} onToggleView3d={() => setView3d(!view3d)} />
         </div>
       </header>
 
@@ -437,7 +437,7 @@ export default function App() {
         <MapView data={points} route={activeRoute} routeDraft={routeDraft}
           onRoutePoint={(point) => setRouteDraft((draft) => draft ? [...draft, point] : draft)}
           selectedId={selectedId} focus={focus} onSelect={(id) => { setSelectedId(id); setListOpen(true) }}
-          sheetWidth={detail ? sheetWidth : null} dark={dark} columns3d={columns3d} />
+          sheetWidth={detail ? sheetWidth : null} dark={dark} view3d={view3d} />
         <div className={`legend${detail ? ' legend-beside-sheet' : ''}`} aria-label="Map legend">
           <span><i className="dot dot-high" /> released</span>
           <span><i className="dot dot-medium" /> waiting for review</span>

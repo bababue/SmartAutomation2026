@@ -177,7 +177,8 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
 ## Using the app
 
 - **Map:** clusters by location, colour by release state, a ring for a position estimated from a place name.
-  From zoom 15, holes become 3D columns with lithology bands at a 1:1 metre scale.
+  From zoom 15, holes become 3D columns with lithology bands at a 1:1 metre scale; "3D view" in the menu switches
+  to a flat, north-up 2D map with points.
 - **Search and filters:** full text over names, projects, places and layer descriptions; release state and
   score range, lithology, depth to rock, groundwater.
 - **Detail:** two-column profile (stratigraphy, DIN 4023 lithology), layers, tests and lab values next to the
