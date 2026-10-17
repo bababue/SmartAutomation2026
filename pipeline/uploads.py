@@ -79,8 +79,9 @@ class UploadQueue:
                 try:
                     tasks.append(UploadTask.model_validate_json(row["task"]))
                 except ValueError:
-                    con.execute("UPDATE upload_jobs SET status = 'error', error = ? WHERE id = ?",
-                                ("The queued upload could not be resumed; submit the files again", row["id"]))
+                    with con:
+                        con.execute("UPDATE upload_jobs SET status = 'error', error = ? WHERE id = ?",
+                                    ("The queued upload could not be resumed; submit the files again", row["id"]))
         finally:
             con.close()
         for task in tasks:

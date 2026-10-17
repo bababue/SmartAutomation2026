@@ -93,3 +93,18 @@ def test_processing_failure_is_persisted(db_path, monkeypatch):
     queue.close()
     result = wait_result(db_path, "failed")
     assert result.status == "error" and "synthetic extraction failed" in result.error
+
+
+def test_unreadable_queued_job_is_marked_as_error(db_path):
+    con = store.connect(db_path)
+    with con:
+        con.execute("INSERT INTO upload_jobs (id, task, status, created_at) VALUES ('broken', '{\"job_id\": 1}', "
+                    "'queued', '2026-01-01')")
+    con.close()
+    uploads.UploadQueue(db_path).close()
+    con = store.connect(db_path)
+    try:
+        row = con.execute("SELECT status, error FROM upload_jobs WHERE id = 'broken'").fetchone()
+    finally:
+        con.close()
+    assert row["status"] == "error" and "could not be resumed" in row["error"]
