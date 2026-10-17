@@ -32,24 +32,29 @@ CREATE TABLE IF NOT EXISTS boreholes (
 );
 CREATE INDEX IF NOT EXISTS boreholes_status ON boreholes (review_status, score);
 CREATE VIRTUAL TABLE IF NOT EXISTS boreholes_rtree USING rtree(rid, min_lat, max_lat, min_lon, max_lon);
+CREATE INDEX IF NOT EXISTS boreholes_doc ON boreholes (doc_id);
+-- Full-text rows share the borehole's rid as rowid, so updates and deletes are point operations.
 CREATE VIRTUAL TABLE IF NOT EXISTS boreholes_fts USING fts5(
-    id UNINDEXED, name, project, location, descriptions, stratigraphy, tokenize = 'unicode61 remove_diacritics 2'
+    name, project, location, descriptions, stratigraphy, tokenize = 'unicode61 remove_diacritics 2'
 );
 CREATE TABLE IF NOT EXISTS review_events (
     id INTEGER PRIMARY KEY, borehole_id TEXT, decision TEXT, reviewer TEXT, comment TEXT, at TEXT,
     content_hash TEXT
 );
+CREATE INDEX IF NOT EXISTS review_events_borehole ON review_events (borehole_id, id);
 -- Reviewer corrections, re-applied after every run. scope 'borehole': target is a borehole id;
 -- scope 'document': target is a document group (doc id before '__'), e.g. one CRS for all holes.
 CREATE TABLE IF NOT EXISTS corrections (
     id INTEGER PRIMARY KEY, scope TEXT, target TEXT, kind TEXT, payload TEXT, reviewer TEXT, comment TEXT, at TEXT
 );
+CREATE INDEX IF NOT EXISTS corrections_target ON corrections (scope, target, id);
 -- What reviewers taught the system, beyond single records. scope_type: document | project | region | global;
 -- source: derived (from corrections) | review (entered from the documents) | external (phone, e-mail, site).
 CREATE TABLE IF NOT EXISTS knowledge (
     id INTEGER PRIMARY KEY, scope_type TEXT, scope_value TEXT, kind TEXT, payload TEXT, source TEXT, note TEXT,
     created_by TEXT, created_at TEXT, confirmations INTEGER DEFAULT 1, active INTEGER DEFAULT 1, evidence TEXT
 );
+CREATE INDEX IF NOT EXISTS knowledge_scope ON knowledge (scope_type, scope_value, kind);
 """
 
 HUMAN = (ReviewStatus.approved, ReviewStatus.rejected)
@@ -64,7 +69,15 @@ def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
     if columns and "review_status" not in columns:
         # Database from before the review workflow: derived tables, rebuildable via `pipeline rebuild`.
         con.executescript("DROP TABLE boreholes; DROP TABLE IF EXISTS boreholes_rtree; DROP TABLE IF EXISTS boreholes_fts;")
+    fts_columns = {r["name"] for r in con.execute("PRAGMA table_info(boreholes_fts)")}
+    rebuild_fts = "id" in fts_columns  # old full-text table keyed by a text id: derived, rebuilt below
+    if rebuild_fts:
+        con.execute("DROP TABLE boreholes_fts")
     con.executescript(SCHEMA)
+    if rebuild_fts:
+        with con:
+            for row in con.execute("SELECT rid, data FROM boreholes").fetchall():
+                _insert_fts(con, row["rid"], Borehole.model_validate_json(row["data"]))
     if "extracted" not in {r["name"] for r in con.execute("PRAGMA table_info(boreholes)")}:
         con.execute("ALTER TABLE boreholes ADD COLUMN extracted TEXT")  # database from before evaluation
     if "evidence" not in {r["name"] for r in con.execute("PRAGMA table_info(knowledge)")}:
@@ -113,7 +126,7 @@ def _delete(con: sqlite3.Connection, borehole_id: str) -> dict | None:
         return None
     con.execute("DELETE FROM boreholes WHERE rid = ?", (row["rid"],))
     con.execute("DELETE FROM boreholes_rtree WHERE rid = ?", (row["rid"],))
-    con.execute("DELETE FROM boreholes_fts WHERE id = ?", (borehole_id,))
+    con.execute("DELETE FROM boreholes_fts WHERE rowid = ?", (row["rid"],))
     return dict(row)
 
 
@@ -169,6 +182,10 @@ def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str |
     )
     if loc.lat is not None and loc.lon is not None:
         con.execute("INSERT INTO boreholes_rtree VALUES (?, ?, ?, ?, ?)", (cur.lastrowid, loc.lat, loc.lat, loc.lon, loc.lon))
+    _insert_fts(con, cur.lastrowid, bh)
+
+
+def _insert_fts(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
     descriptions = " ".join(
         " ".join(filter(None, [layer.description_original, layer.description_en, layer.primary.value]))
         for layer in bh.layers
@@ -178,8 +195,8 @@ def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str |
         for layer in bh.layers
     )
     con.execute(
-        "INSERT INTO boreholes_fts VALUES (?, ?, ?, ?, ?, ?)",
-        (bh.borehole_id, bh.borehole_name, bh.project_name or "", bh.location_name or "", descriptions, stratigraphy),
+        "INSERT INTO boreholes_fts (rowid, name, project, location, descriptions, stratigraphy) VALUES (?, ?, ?, ?, ?, ?)",
+        (rid, bh.borehole_name, bh.project_name or "", bh.location_name or "", descriptions, stratigraphy),
     )
 
 

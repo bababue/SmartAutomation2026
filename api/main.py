@@ -82,7 +82,7 @@ def list_boreholes(
         # Text match, or every search word appears in the source document's file path (e.g. 'AUS01').
         tokens = re.findall(r"\w+", q, flags=re.UNICODE)
         path_match = " AND ".join("path LIKE ? ESCAPE '\\'" for _ in tokens)
-        where.append("(id IN (SELECT id FROM boreholes_fts WHERE boreholes_fts MATCH ?) "
+        where.append("(rid IN (SELECT rowid FROM boreholes_fts WHERE boreholes_fts MATCH ?) "
                      f"OR doc_id IN (SELECT doc_id FROM documents WHERE {path_match}))")
         params += [fq, *(f"%{_like_escape(t)}%" for t in tokens)]
     if bbox:
