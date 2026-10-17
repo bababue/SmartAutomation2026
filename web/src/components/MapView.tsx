@@ -22,6 +22,7 @@ const STYLE = { light: 'https://tiles.openfreemap.org/styles/liberty', dark: 'ht
 interface Props {
   data: FeatureCollection<MapPoint>
   route: TunnelRoute | null
+  routeFocusKey: string | null
   inactiveRoutes: TunnelRoute[]
   routeDraft: RoutePoint[] | null
   hoveredHole: RoutePoint | null
@@ -137,7 +138,7 @@ function wrapLongitude(lon: number) {
   return ((lon + 180) % 360 + 360) % 360 - 180
 }
 
-export function MapView({ data, route, inactiveRoutes, routeDraft, hoveredHole, onHoverHole, onRoutePoint, selectedId, focus, onSelect, sheetWidth, dark, view3d }: Props) {
+export function MapView({ data, route, routeFocusKey, inactiveRoutes, routeDraft, hoveredHole, onHoverHole, onRoutePoint, selectedId, focus, onSelect, sheetWidth, dark, view3d }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibre | null>(null)
   const ready = useRef(false)
@@ -333,8 +334,10 @@ export function MapView({ data, route, inactiveRoutes, routeDraft, hoveredHole, 
     const m = map.current
     if (!m || !ready.current) return
     updateRouteOverlay(m, latest.current)
-    if (routeCoordinates) fitRoute(m, routeCoordinates)
-  }, [routeCoordinates])
+    if (!routeCoordinates) return
+    const frame = requestAnimationFrame(() => fitRoute(m, routeCoordinates))
+    return () => cancelAnimationFrame(frame)
+  }, [routeCoordinates, routeFocusKey])
 
   useEffect(() => {
     const m = map.current

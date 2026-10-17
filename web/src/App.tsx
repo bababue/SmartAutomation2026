@@ -488,7 +488,8 @@ export default function App() {
       </aside>
 
       <main className={`map-wrap${inTunnel ? ' map-wrap-section' : ''}`}>
-        <MapView data={points} route={activeRoute} inactiveRoutes={inactiveRoutes} routeDraft={routeDraft}
+        <MapView data={points} route={activeRoute} routeFocusKey={inTunnel ? activeTunnelId : null}
+          inactiveRoutes={inactiveRoutes} routeDraft={routeDraft}
           hoveredHole={hoveredHole?.geometry.coordinates ?? null} onHoverHole={setHoveredHoleId}
           onRoutePoint={(point) => setRouteDraft((draft) => draft ? [...draft, point] : draft)}
           selectedId={selectedId} focus={focus} onSelect={(id) => { setSelectedId(id); setListOpen(true) }}
