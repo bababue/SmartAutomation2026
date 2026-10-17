@@ -97,6 +97,24 @@ def test_stale_correction_blocks_release(client):
     assert rerun.review_status.value == "pending_review"
 
 
+def test_layers_added_for_a_missing_sheet_go_stale_when_the_sheet_is_extracted():
+    # The reviewer typed in a sheet the extraction lacked: extended the last unit and added one below it.
+    fixes = [{"kind": "layer", "reviewer": "Anna", "payload": {"orig_top": 4.5, "orig_bottom": 9.0, "top": 4.5,
+                                                               "bottom": 10.0}},
+             {"kind": "layer_add", "reviewer": "Anna", "payload": {"top": 10.0, "bottom": 12.0, "primary": "gravel"}},
+             {"kind": "layer_add", "reviewer": "Anna", "payload": {"top": 12.0, "bottom": 13.0, "primary": "sandstone"}}]
+    rerun = record("demo__a:BH1")
+    src = SourceRef(file="demo.pdf", page=2)
+    rerun.layers += [Layer(top_m=9.0, bottom_m=10.1, description_original="Clay", primary="clay", source=src),
+                     Layer(top_m=10.1, bottom_m=12.0, description_original="Gravel", primary="gravel", source=src),
+                     Layer(top_m=12.0, bottom_m=13.0, description_original="Rock", primary="unknown", source=src)]
+    assert corrections.apply(rerun, fixes) == [False, False, True]  # the same interval: the reviewer's reading
+    assert [(l.top_m, l.bottom_m) for l in rerun.layers][2:] == [(4.5, 9.0), (9.0, 10.1), (10.1, 12.0), (12.0, 13.0)]
+    assert rerun.layers[-1].primary.value == "sandstone"
+    assert sum(i.startswith("stale correction") for i in rerun.issues) == 2
+    assert rerun.review_status.value == "pending_review"
+
+
 def test_invalid_corrections_are_rejected(client):
     assert post(client, "demo__a:BH1", kind="crs", payload={"epsg": 1}).status_code == 422
     assert post(client, "demo__a:BH1", kind="position", scope="document", payload={"lat": 1, "lon": 2}).status_code == 422

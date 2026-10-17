@@ -166,6 +166,21 @@ def _groundwater(bh: Borehole, p: dict) -> bool:
     return True
 
 
+def _overlapping_fixes(bh: Borehole, items: list[dict]) -> set[int]:
+    """Layer fixes whose layer ends up overlapping another one: made while the extraction lacked what lies there
+    now (e.g. a sheet joined later), they would double it. Judged on the end result, since a reviewer's edits pass
+    through overlaps (extend one layer, then delete the next)."""
+    trial = bh.model_copy(deep=True)
+    owner: dict[int, int] = {}  # layer → the fix that last set its range
+    for n, c in enumerate(items):
+        if c["kind"] in ("layer", "layer_add"):
+            before = {id(l): (l.top_m, l.bottom_m) for l in trial.layers}
+            (_layer_add if c["kind"] == "layer_add" else _layer)(trial, c["payload"])
+            owner.update({id(l): n for l in trial.layers if before.get(id(l)) != (l.top_m, l.bottom_m)})
+    return {owner[id(a)] for a in trial.layers if id(a) in owner
+            and any(b is not a and min(a.bottom_m, b.bottom_m) - max(a.top_m, b.top_m) > 0.01 for b in trial.layers)}
+
+
 def apply(bh: Borehole, items: list[dict]) -> list[bool]:
     """Apply corrections in the order they were made, then re-check and re-score the record.
     Returns for each correction whether it fitted."""
@@ -175,9 +190,12 @@ def apply(bh: Borehole, items: list[dict]) -> list[bool]:
     existing = list(bh.issues)
     before = bh.validate_log()  # note: also overwrites bh.issues
     notes, georef_fixed = [], False
-    for c in items:
+    overlapping = _overlapping_fixes(bh, items)
+    for n, c in enumerate(items):
         kind, p = c["kind"], c["payload"]
-        if kind == "crs":
+        if n in overlapping:
+            ok = False
+        elif kind == "crs":
             ok = _crs(bh, int(p["epsg"]))
         elif kind == "position":
             ok = _position(bh, float(p["lat"]), float(p["lon"]), p.get("accuracy_m"))
