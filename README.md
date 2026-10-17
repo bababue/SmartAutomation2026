@@ -62,6 +62,9 @@ depths that literally appear in that text.
 Laboratory filters return results whose complete reported range satisfies the requested bounds. A value
 `<5 MPa` therefore does not establish a minimum of `4.5 MPa`. Excel exports retain qualifiers and ranges
 as text in the value cells and preserve repeated measurements in separate rows.
+Spreadsheet importers must accept these qualified cells alongside numeric exact values. Database
+initialization migrates the laboratory projection to SQLite schema v4; use the matching application code
+when writing to that database.
 
 ## Learning from reviewers
 

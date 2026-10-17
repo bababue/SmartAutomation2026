@@ -151,7 +151,8 @@ def _same_lab(reference: list, current: list, tol: float) -> bool:
     # Entries stored before qualifier, name and unit were kept have three fields and are compared without them.
     if len(reference) == 3 or len(current) == 3:
         return True
-    return reference[3] == current[3] and (parameter != "other" or reference[4:6] == current[4:6])
+    same_upper = len(reference) < 7 or len(current) < 7 or reference[6] == current[6]
+    return reference[3] == current[3] and same_upper and (parameter != "other" or reference[4:6] == current[4:6])
 
 
 def match_lab(reference: list[list], current: list[list], tol: float = DEPTH_TOLERANCE_M) -> int:
