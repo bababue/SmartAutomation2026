@@ -1,4 +1,4 @@
-import type { CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, KnowledgeItem, KnowledgeList, QueueItem, ReviewStatus, Stats } from './types'
+import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, KnowledgeItem, KnowledgeList, QueueItem, ReviewStatus, Stats } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -34,6 +34,11 @@ export function fetchBoreholes(f: Filters, offset = 0, limit = 200, signal?: Abo
 export function fetchMapPoints(f: Filters, signal?: AbortSignal): Promise<FeatureCollection> {
   const params = filterParams(f)
   params.set('fields', 'map')
+  return request(`/api/boreholes?${params}`, { signal })
+}
+
+export function fetchLayerStrips(bbox: string, signal?: AbortSignal): Promise<{ items: { id: string; strip: BoreholeSummary['strip'] }[] }> {
+  const params = new URLSearchParams({ fields: 'layers', bbox })
   return request(`/api/boreholes?${params}`, { signal })
 }
 
