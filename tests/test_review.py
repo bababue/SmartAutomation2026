@@ -304,14 +304,21 @@ def _sheet_logs(*sheets):
             for i, s in enumerate(sheets, start=1)]
 
 
-def test_missing_sheets_block_release():
+@pytest.mark.parametrize("sheets,expected", [
+    (("1 of 3", "3 of 3"), ["missing sheets: 2 of 3"]),
+    (("Hoja 1 de 2",), ["missing sheets: 2 of 2"]),
+    (("1 of 3",), ["missing sheets: 2, 3 of 3"]),  # a small total is always checked
+    (("Sheet 1/2", "Sheet 2/2"), []),
+    ((None, None), []),
+    (("5 of 40", "6 of 40"), []),  # report page numbers, not this hole's sheets
+    (("Page 2 of 20",), []),  # report pagination
+])
+def test_missing_sheets_count_only_this_holes_numbering(sheets, expected):
     from pipeline.assemble import missing_sheets
+    assert missing_sheets(_sheet_logs(*sheets)) == expected
 
-    assert missing_sheets(_sheet_logs("1 of 3", "3 of 3")) == ["missing sheets: 2 of 3"]
-    assert missing_sheets(_sheet_logs("Hoja 1 de 2")) == ["missing sheets: 2 of 2"]
-    assert missing_sheets(_sheet_logs("Sheet 1/2", "Sheet 2/2")) == []
-    assert missing_sheets(_sheet_logs(None, None)) == []
-    assert missing_sheets(_sheet_logs("5 of 40", "6 of 40")) == []  # report page numbers, not this hole's sheets
+
+def test_missing_sheets_block_release():
     bh = make()
     bh.issues.append("missing sheets: 2 of 3")
     score(bh, {}, unreadable=0)
@@ -450,15 +457,15 @@ def test_defect_intervals_are_not_printed_boundaries():
     assert prints_depths(bh, {("demo.pdf", 1): "x" * 300 + " 1.30 4.70 9.20"})
 
 
-def test_release_rules_from_the_second_review():
-    from schema.borehole import CoreRun
-    page = ("demo.pdf", 1)
-    # Integer depths printed, extraction reads other values: a contradiction, not "not printed".
+def test_printed_depths_that_disagree_block_release():
     bh = make()
-    text = "x" * 300 + " depth 1 2 3 4 5 6 7 8 9 SAND CLAY"
-    score(bh, {page: text}, unreadable=0)
+    text = "x" * 300 + " depth 1 2 3 4 5 6 7 8 9 SAND CLAY"  # printed, but not what was read: no "not printed"
+    score(bh, {("demo.pdf", 1): text}, unreadable=0)
     assert bh.review_status == ReviewStatus.pending_review
-    # Text confirms the first page only; the scanned second page must not ride along.
+
+
+def test_text_of_one_page_does_not_confirm_a_scanned_second_page():
+    page = ("demo.pdf", 1)
     src2 = SourceRef(file="demo.pdf", page=2)
     bh = make(layers=[Layer(top_m=0, bottom_m=1.2, description_original="Fill", primary="fill", source=SourceRef(file="demo.pdf", page=1)),
                       Layer(top_m=1.2, bottom_m=4.5, description_original="Sand", primary="sand", source=SourceRef(file="demo.pdf", page=1)),
@@ -468,20 +475,15 @@ def test_release_rules_from_the_second_review():
     bh.issues = bh.validate_log()
     score(bh, {page: "x" * 300 + " 1.20 4.50"}, unreadable=0)
     assert bh.review_status == ReviewStatus.pending_review
-    # Contradictory core runs and inferred boundaries cap below release.
-    for issue in ("core run 3–4.5 m: RQD 80% above TCR 60%", "boundary inferred: top of the first layer not readable, set to 0 m"):
-        bh = make()
-        bh.issues = bh.validate_log() + [issue]
-        score(bh, {}, unreadable=0)
-        assert bh.review_status == ReviewStatus.pending_review, issue
 
 
-def test_small_sheet_totals_are_always_checked():
-    from pipeline.assemble import missing_sheets
-    def log(sheet):
-        return (type("L", (), {"sheet": sheet})(), SourceRef(file="f", page=1))
-    assert missing_sheets([log("1 of 3")]) == ["missing sheets: 2, 3 of 3"]
-    assert missing_sheets([log("Page 2 of 20")]) == []  # report pagination
+@pytest.mark.parametrize("issue", ["core run 3–4.5 m: RQD 80% above TCR 60%",
+                                   "boundary inferred: top of the first layer not readable, set to 0 m"])
+def test_inconsistent_core_runs_and_inferred_boundaries_cap_below_release(issue):
+    bh = make()
+    bh.issues = bh.validate_log() + [issue]
+    score(bh, {}, unreadable=0)
+    assert bh.review_status == ReviewStatus.pending_review
 
 
 def test_stale_approval_is_refused_and_lab_values_are_part_of_the_review(con):
@@ -501,16 +503,21 @@ def test_stale_approval_is_refused_and_lab_values_are_part_of_the_review(con):
         store.record_review(con, bh.borehole_id, ReviewStatus.approved, "Anna", None, expected_hash=seen)
 
 
-def test_merge_rules_keep_contradictions_and_core_loss_has_a_budget():
-    from pipeline.assemble import fill_core_loss
-    from schema.borehole import CoreRun
-    # Page 2 says limestone from 0 m where page 1 had sand and clay: kept as an overlap, not clipped away.
+def test_a_restated_range_with_another_material_is_kept_as_an_overlap():
+    # Page 2 says limestone from 0 m where page 1 had sand and clay: not clipped away.
     sheets = _sheets([_xlayer(0, 5, "sand"), _xlayer(5, 10, "clay", "clay")], [_xlayer(0, 15, "LIMESTONE", "limestone")])
     layers = _layers(sheets, final_depth=15)
     assert (0, 15) in [(l.top_m, l.bottom_m) for l in layers]
-    # The same interval read with another material is kept for a person to decide.
+
+
+def test_the_same_interval_read_with_another_material_is_kept_for_a_person():
     sheets = _sheets([_xlayer(0, 5, "sand")], [_xlayer(0, 5, "CLAY", "clay")])
     assert len(_layers(sheets, final_depth=5)) == 2
+
+
+def test_core_loss_cannot_spend_the_lost_length_of_a_run_twice():
+    from pipeline.assemble import fill_core_loss
+    from schema.borehole import CoreRun
     # 10 % of a 10 m run is lost (1 m): two gaps of 0.8 m cannot both be core loss.
     bh = make(layers=[Layer(top_m=0, bottom_m=3, description_original="a", primary="sandstone"),
                       Layer(top_m=3.8, bottom_m=6, description_original="b", primary="sandstone"),
@@ -531,16 +538,23 @@ def test_document_with_conflicting_crs_statements_gets_none():
     assert "MGA94" in document_crs(pages)[0]
 
 
-def test_toughone_patterns():
-    from pipeline.assemble import extend_sampled_layers, hole_key
-    assert hole_key("Hull nr. 7", None) == hole_key("7", "borehole") == ("borehole", "7")
+def test_hole_words_in_other_languages_and_probings_are_typed():
+    from pipeline.assemble import hole_key
+    assert hole_key("Hull nr. 4", None) == hole_key("4", "borehole") == ("borehole", "4")
     assert hole_key("CPT 1", None) == ("probe", "1") != hole_key("BH 1", None)
-    # Last row with no thickness: what the hand auger hit, not a layer.
+
+
+def test_a_last_row_without_thickness_is_a_finding_not_a_layer():
+    # What the hand auger hit at the end.
     sheets = _sheets([_xlayer(0, 0.8, "sandy CLAY", "clay"), _xlayer(0.8, 1.6, "silt", "silt"), _xlayer(1.6, 1.6, "Hard rock, refusal", "unknown")])
     notes: list[str] = []
     assert [(l.top_m, l.bottom_m) for l in _layers(sheets, final_depth=1.6, notes=notes)] == [(0, 0.8), (0.8, 1.6)]
     assert notes and notes[0].startswith("reached at the final depth 1.6 m")
-    # Sample-wise description: 12.0-12.45 described, next description at 13.5.
+
+
+def test_a_sample_wise_description_is_extended_to_the_next_one():
+    from pipeline.assemble import extend_sampled_layers
+    # 12.0-12.45 described at a sample, the next description at 13.5.
     bh = make(layers=[Layer(top_m=10.5, bottom_m=12.0, description_original="a", primary="clay"),
                       Layer(top_m=12.0, bottom_m=12.45, description_original="b", primary="silt"),
                       Layer(top_m=13.5, bottom_m=15.0, description_original="c", primary="silt")])
