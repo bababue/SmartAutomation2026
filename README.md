@@ -1,5 +1,8 @@
 # Borehole Extraction & Global Geodatabase
 
+Google Docs:
+https://docs.google.com/document/d/1oF8L_CllB7ZKJRZlteJ-rA2rpJSwZHjLtPjd0RyANeg/edit?usp=sharing
+
 Black Forest Hackathon 2026 – Smart Automation Edition (16–18 Oct 2026, Offenburg)
 Challenge by **Herrenknecht AG**: *Automated extraction and standardisation of drilling data for a global geodatabase.*
 
