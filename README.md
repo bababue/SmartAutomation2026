@@ -206,13 +206,13 @@ Ollama's default context window can be smaller than the extraction needs: the pr
 ```bash
 .venv/bin/python -m pipeline ingest                    # render all pages, list document ids (no API calls)
 .venv/bin/python -m pipeline estimate                  # page count, rough API cost, cost measured on cached pages
-.venv/bin/python -m pipeline run --doc profile01       # smoke test: one page
-.venv/bin/python -m pipeline run --doc MEA03-jpg --doc AUS01 --max-pages 6
+.venv/bin/python -m pipeline run --doc demo-log        # smoke test: one page
+.venv/bin/python -m pipeline run --doc scans-jpg --doc site-report --max-pages 6
 .venv/bin/python -m pipeline run --all --yes           # everything (~1,000 pages)
 ```
 
 - `--doc` takes a document id (relative path without extension, folders joined by `__`, e.g.
-  `SEA03-png__Report01`) or a folder prefix (`MEA03-jpg` = all images in that folder). Repeatable.
+  `scans-png__report-04`) or a folder prefix (`scans-jpg` = all images in that folder). Repeatable.
 - `--max-pages N` treats the first N pages of each document as the whole document (cheap demo runs).
 - Runs above ~$5 estimated cost ask for `--yes`.
 - Every LLM answer is cached per page in `data/cache/`. Interrupted runs resume; repeated runs are free.
@@ -222,7 +222,7 @@ Ollama's default context window can be smaller than the extraction needs: the pr
   (pass the same `--doc` / `--max-pages` as the run):
 
 ```bash
-.venv/bin/python -m pipeline rebuild --doc MEA03-jpg --doc AUS01 --max-pages 6
+.venv/bin/python -m pipeline rebuild --doc scans-jpg --doc site-report --max-pages 6
 ```
 
 At the end of a run the pipeline prints how many boreholes were stored, how many were released

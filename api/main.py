@@ -94,7 +94,7 @@ def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, co
         where.append(f"id IN ({','.join('?' * len(ids))})")
         params += ids
     if q and (fq := _fts_query(q)):
-        # Text match, or every search word appears in the source document's file path (e.g. 'AUS01').
+        # Text match, or every search word appears in the source document's file path (e.g. 'report').
         tokens = re.findall(r"\w+", q, flags=re.UNICODE)
         path_match = " AND ".join("path LIKE ? ESCAPE '\\'" for _ in tokens)
         where.append("(rid IN (SELECT rowid FROM boreholes_fts WHERE boreholes_fts MATCH ?) "

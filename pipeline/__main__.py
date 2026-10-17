@@ -2,10 +2,10 @@
 
     python -m pipeline ingest                 # render all pages (no API calls)
     python -m pipeline estimate               # page counts and rough API cost
-    python -m pipeline run --doc AUS01        # classify + extract + store selected documents
+    python -m pipeline run --doc site-report  # classify + extract + store selected documents
     python -m pipeline run --all --yes        # everything
     python -m pipeline rebuild                # re-assemble from cached extractions (no API calls)
-    python -m pipeline rebuild --doc SEA01 --max-pages 6   # same page limit as the run
+    python -m pipeline rebuild --doc site-report --max-pages 6   # same page limit as the run
     python -m pipeline eval snapshot          # approved records become the evaluation reference
     python -m pipeline eval                   # model output (before corrections) against that reference
     python -m pipeline eval --corrected       # final values, reviewer corrections included
