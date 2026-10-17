@@ -41,11 +41,14 @@ export function ReviewBox({ detail, onChange, nav }: Props) {
     setError(null)
     try {
       saveReviewer(reviewer.trim())
-      onChange(await postReview(bh.borehole_id, decision, reviewer.trim(), comment.trim() || null))
+      onChange(await postReview(bh.borehole_id, decision, reviewer.trim(), comment.trim() || null, detail.content_hash ?? null))
       setComment('')
       if (nav && decision !== 'pending_review') nav.advance()
     } catch (e) {
-      setError(`Decision not saved (${(e as Error).message}).`)
+      const msg = (e as Error).message
+      setError(msg.startsWith('409')
+        ? 'Not saved: this record changed since you opened it (a re-run or another reviewer). Reopen it and check again.'
+        : `Decision not saved (${msg}).`)
     } finally {
       setBusy(false)
     }

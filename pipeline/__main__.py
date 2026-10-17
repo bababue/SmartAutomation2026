@@ -216,19 +216,27 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     ]
     boreholes = assemble(results)
     extracted = {bh.borehole_id: store.extracted_summary(bh) for bh in boreholes}  # before fixes, for `eval`
-    knowledge.apply_all(con, boreholes)  # what reviewers taught beyond single records
-    for bh in boreholes:  # reviewer fixes survive re-extraction, and win over learned knowledge
-        corrections.apply(bh, store.corrections_for(con, bh.borehole_id))
-    if dry_run:
-        _report(boreholes, len(done))
-        return
-    with con:  # replace complete documents atomically; human decisions carry over if content is unchanged
-        previous: dict[str, dict] = {}
+    # Read knowledge and corrections and replace the records in one write transaction: a correction saved
+    # in the meantime cannot be lost, and the API waits for us instead of overwriting.
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        knowledge.apply_all(con, boreholes)  # what reviewers taught beyond single records
+        for bh in boreholes:  # reviewer fixes survive re-extraction, and win over learned knowledge
+            corrections.apply(bh, store.corrections_for(con, bh.borehole_id))
+        if dry_run:
+            con.rollback()
+            _report(boreholes, len(done))
+            return
+        previous: dict[str, dict] = {}  # human decisions carry over if the content is unchanged
         for doc_id in done:
             previous.update(store.delete_document_boreholes(con, doc_id))
         for bh in boreholes:
             store.save_borehole(con, bh, commit=False, previous=previous.get(bh.borehole_id),
                                 extracted=extracted[bh.borehole_id])
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
     located = sum(1 for b in boreholes if b.location.lat is not None)
     auto = sum(1 for b in boreholes if b.review_status.value == "auto_approved")
     print(f"Stored {len(boreholes)} boreholes ({located} georeferenced) from {len(done)} documents in {config.DB_PATH}")

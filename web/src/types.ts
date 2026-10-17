@@ -217,11 +217,13 @@ export interface Detail {
   corrections: CorrectionRecord[]
   /** Findings that keep the record in the queue whatever its score. */
   blocking: string[]
+  /** Version of the content shown; a decision on an outdated version is refused. */
+  content_hash: string | null
   threshold: number
 }
 
 /** What a review decision or a correction changes in the open record. */
-export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log'> & Partial<Pick<Detail, 'corrections' | 'blocking'>>
+export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log'> & Partial<Pick<Detail, 'corrections' | 'blocking' | 'content_hash'>>
 
 export interface Stats {
   boreholes: number

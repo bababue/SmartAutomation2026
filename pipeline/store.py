@@ -89,10 +89,12 @@ def save_document(con: sqlite3.Connection, doc_id: str, path: str, kind: str, pa
 
 
 def content_hash(bh: Borehole) -> str:
-    """Hash of what a reviewer judged: layers, position and key metadata (not review fields)."""
+    """Hash of everything a reviewer judged and the export publishes (not review fields): an approval
+    stays only while exactly this content is stored."""
     payload = bh.model_dump(
         mode="json",
-        include={"borehole_name", "location", "surface_elevation_m", "depth_m", "layers", "spt", "groundwater"},
+        include={"borehole_name", "location", "surface_elevation_m", "elevation_datum", "depth_m", "length_m",
+                 "inclination_deg", "layers", "spt", "groundwater", "core_runs", "samples", "lab_results"},
     )
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -181,13 +183,21 @@ def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str |
     )
 
 
+class StaleReview(Exception):
+    """The record changed after the reviewer opened it."""
+
+
 def record_review(con: sqlite3.Connection, borehole_id: str, decision: ReviewStatus, reviewer: str,
-                  comment: str | None) -> Borehole | None:
-    """Store a human decision in place (no delete/re-insert) and append it to the review log."""
+                  comment: str | None, expected_hash: str | None = None) -> Borehole | None:
+    """Store a human decision in place (no delete/re-insert) and append it to the review log. With
+    `expected_hash`, the decision is refused if the content changed since the reviewer saw it."""
     with con:
+        con.execute("BEGIN IMMEDIATE")
         row = con.execute("SELECT data, content_hash FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
         if row is None:
             return None
+        if expected_hash and row["content_hash"] != expected_hash:
+            raise StaleReview(borehole_id)
         bh = Borehole.model_validate_json(row["data"])
         now = datetime.now(timezone.utc)
         bh.review_status = decision

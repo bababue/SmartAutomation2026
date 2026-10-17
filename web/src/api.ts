@@ -48,10 +48,11 @@ export function postCorrection(id: string, kind: CorrectionKind, payload: Record
   })
 }
 
-export function postReview(id: string, decision: ReviewStatus, reviewer: string, comment: string | null) {
-  return request<Pick<Detail, 'borehole' | 'review_log'>>(`/api/boreholes/${enc(id)}/review`, {
+export function postReview(id: string, decision: ReviewStatus, reviewer: string, comment: string | null,
+  contentHash: string | null = null) {
+  return request<DetailUpdate>(`/api/boreholes/${enc(id)}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision, reviewer, comment }),
+    body: JSON.stringify({ decision, reviewer, comment, content_hash: contentHash }),
   })
 }

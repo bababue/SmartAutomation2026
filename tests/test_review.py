@@ -493,3 +493,20 @@ def test_small_sheet_totals_are_always_checked():
         return (type("L", (), {"sheet": sheet})(), SourceRef(file="f", page=1))
     assert missing_sheets([log("1 of 3")]) == ["missing sheets: 2, 3 of 3"]
     assert missing_sheets([log("Page 2 of 20")]) == []  # report pagination
+
+
+def test_stale_approval_is_refused_and_lab_values_are_part_of_the_review(con):
+    from schema.borehole import LabResult
+    bh = make()
+    score(bh, {}, 0)
+    store.save_borehole(con, bh)
+    seen = con.execute("SELECT content_hash FROM boreholes WHERE id = ?", (bh.borehole_id,)).fetchone()[0]
+    store.record_review(con, bh.borehole_id, ReviewStatus.approved, "Anna", None, expected_hash=seen)
+
+    rerun = make()
+    rerun.lab_results = [LabResult(parameter="ucs", value=100.0, value_raw="100 MPa")]  # was not there when approved
+    score(rerun, {}, 0)
+    store.save_borehole(con, rerun)
+    assert store.load_borehole(con, bh.borehole_id).review_status == ReviewStatus.pending_review
+    with pytest.raises(store.StaleReview):  # a browser still showing the old version cannot approve
+        store.record_review(con, bh.borehole_id, ReviewStatus.approved, "Anna", None, expected_hash=seen)

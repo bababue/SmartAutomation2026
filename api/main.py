@@ -171,6 +171,7 @@ def get_borehole(borehole_id: str, con: DB):
         "review_log": store.review_log(con, borehole_id),
         "corrections": store.corrections_for(con, borehole_id),
         "blocking": _blocking(bh),
+        "content_hash": _content_hash(con, borehole_id),
         "threshold": config.AUTO_APPROVE_THRESHOLD,
     }
 
@@ -184,14 +185,25 @@ class Review(BaseModel):
     decision: Literal["approved", "rejected", "pending_review"]
     reviewer: str = Field(min_length=1, max_length=80)
     comment: str | None = Field(None, max_length=2000)
+    content_hash: str | None = Field(None, description="Version the reviewer saw; refused if it changed since")
+
+
+def _content_hash(con: sqlite3.Connection, borehole_id: str) -> str | None:
+    row = con.execute("SELECT content_hash FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
+    return row["content_hash"] if row else None
 
 
 @app.post("/api/boreholes/{borehole_id:path}/review")
 def review(borehole_id: str, body: Review, con: DB):
-    bh = store.record_review(con, borehole_id, ReviewStatus(body.decision), body.reviewer.strip(), body.comment)
+    try:
+        bh = store.record_review(con, borehole_id, ReviewStatus(body.decision), body.reviewer.strip(), body.comment,
+                                 body.content_hash)
+    except store.StaleReview:
+        raise HTTPException(409, "the record changed since you opened it; reload it and check again")
     if bh is None:
         raise HTTPException(404, "borehole not found")
-    return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id)}
+    return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
+            "content_hash": _content_hash(con, borehole_id)}
 
 
 class CrsFix(BaseModel):
@@ -305,6 +317,7 @@ def correct(borehole_id: str, body: Correction, con: DB):
     item = {"kind": body.kind, "payload": payload, "reviewer": body.reviewer.strip()}
     updated = []
     with con:
+        con.execute("BEGIN IMMEDIATE")  # read-modify-write: concurrent corrections and rebuilds wait
         for target in targets:
             bh = store.load_borehole(con, target)
             if bh is None or (body.kind == "crs" and not bh.location.coords_raw):
@@ -324,7 +337,8 @@ def correct(borehole_id: str, body: Correction, con: DB):
                                     f"confirmed for {group}", item["reviewer"], evidence=f"document:{group}")
     bh = store.load_borehole(con, borehole_id)
     return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
-            "corrections": store.corrections_for(con, borehole_id), "blocking": _blocking(bh), "updated": updated}
+            "corrections": store.corrections_for(con, borehole_id), "blocking": _blocking(bh), "updated": updated,
+            "content_hash": _content_hash(con, borehole_id)}
 
 
 # --- knowledge -------------------------------------------------------------------------------------
