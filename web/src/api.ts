@@ -44,7 +44,7 @@ export function fetchMapPoints(f: Filters, signal?: AbortSignal): Promise<Featur
   return request(`/api/boreholes?${params}`, { signal })
 }
 
-/** Summaries of the given boreholes regardless of the filters, e.g. a section restored from the URL. */
+/** Summaries of the given boreholes regardless of the filters, e.g. a route profile restored from the URL. */
 export function fetchBoreholesById(ids: string[], signal?: AbortSignal): Promise<FeatureCollection> {
   const params = new URLSearchParams()
   ids.forEach((id) => params.append('id', id))

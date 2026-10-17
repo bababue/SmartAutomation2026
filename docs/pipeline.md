@@ -27,7 +27,7 @@ flowchart TD
     P -->|correct a value| H
     R --> DB[(SQLite: R-tree, FTS5,<br/>versions, review log)]
     Q --> DB
-    DB --> UI[Map, search, profile,<br/>section, export]
+    DB --> UI[Map, search, profile,<br/>tunnel route, export]
 ```
 
 Only the two LLM boxes call a model. Everything after the cache is code, so changing a rule means
