@@ -252,7 +252,7 @@ def _plain(text: str) -> str:
 
 
 PROPERTIES = sorted(set(Layer.model_fields) - {"top_m", "bottom_m", "description_original", "description_en",
-                                               "language", "source", "confidence"})
+                                               "source"})
 
 
 def _same_properties(a: Layer, b: Layer) -> bool:

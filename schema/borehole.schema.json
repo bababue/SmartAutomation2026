@@ -372,19 +372,6 @@
           "title": "Description Original",
           "type": "string"
         },
-        "language": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "ISO 639-1 code of the original description",
-          "title": "Language"
-        },
         "description_en": {
           "anyOf": [
             {
@@ -501,19 +488,6 @@
           "description": "Material colour as described, e.g. 'greyish brown'",
           "title": "Color"
         },
-        "pattern_raw": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Graphic log symbol as shown on the source, if not DIN 4023",
-          "title": "Pattern Raw"
-        },
         "consistency": {
           "anyOf": [
             {
@@ -576,20 +550,6 @@
           ],
           "default": null,
           "title": "Moisture"
-        },
-        "confidence": {
-          "anyOf": [
-            {
-              "maximum": 1.0,
-              "minimum": 0.0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Confidence"
         },
         "source": {
           "anyOf": [

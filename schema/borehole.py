@@ -200,7 +200,6 @@ class Layer(BaseModel):
     top_m: float
     bottom_m: float
     description_original: str = Field(description="Description verbatim, original language")
-    language: str | None = Field(None, description="ISO 639-1 code of the original description")
     description_en: str | None = Field(None, description="English translation of the description")
     primary: Lithology = Field(description="Main constituent, drives the DIN 4023 pattern")
     secondary: list[SecondaryComponent] = []
@@ -211,13 +210,11 @@ class Layer(BaseModel):
     engineering_unit: str | None = Field(None, description="EngineeringSoilUnit / geotechnical unit")
     geologic_age: str | None = Field(None, description="Age as written, e.g. 'Quaternary', 'Lower Miocene'")
     color: str | None = Field(None, description="Material colour as described, e.g. 'greyish brown'")
-    pattern_raw: str | None = Field(None, description="Graphic log symbol as shown on the source, if not DIN 4023")
     consistency: str | None = Field(None, description="Cohesive soils, e.g. 'stiff', 'weich'")
     relative_density: str | None = Field(None, description="Granular soils, e.g. 'medium dense'")
     weathering: str | None = Field(None, description="Rock weathering grade, e.g. 'slightly weathered', 'W2'")
     rock_strength: str | None = None
     moisture: str | None = None
-    confidence: Confidence | None = None
     source: SourceRef | None = None
 
 
@@ -464,14 +461,3 @@ class Borehole(BaseModel):
         elif len(loc.crs_candidates) > 1 and loc.crs_epsg is None and loc.crs_proj is None:
             issues.append("CRS ambiguous")
         return issues
-
-
-class SourceDocument(BaseModel):
-    """One input file and what was found in it."""
-
-    file: str
-    kind: Literal["pdf_text", "pdf_scan", "pdf_vector", "image", "docx"]
-    page_count: int | None = None
-    log_pages: list[int] = Field([], description="Pages classified as borehole logs")
-    coordinate_table_pages: list[int] = Field([], description="Pages with borehole coordinate summaries")
-    boreholes: list[str] = Field([], description="borehole_id values extracted from this file")
