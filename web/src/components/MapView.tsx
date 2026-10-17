@@ -85,13 +85,15 @@ function updateRouteOverlay(m: MapLibre, state: { route: TunnelRoute | null; ina
   updateRouteCorridorWidth(m, state.route)
 }
 
+// fitBounds adds its padding to the map's current one, which the last flight to a hole set for its sheet;
+// absolutePadding replaces it.
 function fitRoute(m: MapLibre, coordinates: RoutePoint[]) {
   if (coordinates.length < 2) return
   const bounds = coordinates.reduce((box, point) => box.extend(point), new LngLatBounds(coordinates[0], coordinates[0]))
   const { right, bottom } = uncovered(m)
   // Below column zoom: in the flat view the depth columns would be seen end-on and the holes disappear.
   m.fitBounds(bounds, { padding: { top: 60, bottom: 60 + bottom, left: 60, right: 60 + Math.min(right, m.getContainer().clientWidth * 0.55) },
-    maxZoom: COLUMN_MIN_ZOOM - 0.5, duration: 450 })
+    maxZoom: COLUMN_MIN_ZOOM - 0.5, duration: 450, absolutePadding: true })
 }
 
 function pickerList(items: MapPoint[], onPick: (id: string) => void) {
@@ -591,5 +593,5 @@ function fit(m: MapLibre, data: FeatureCollection<MapPoint>) {
   data.features.forEach((f) => bounds.extend(f.geometry.coordinates))
   // Flat: fitBounds ignores the tilt, and a tilted wide view reaches past the poles. Columns only start at
   // COLUMN_MIN_ZOOM, so the tilt returns when a hole is opened.
-  m.fitBounds(bounds, { padding: 80, maxZoom: 12, pitch: 0, duration: 600 })
+  m.fitBounds(bounds, { padding: 80, maxZoom: 12, pitch: 0, duration: 600, absolutePadding: true })
 }
