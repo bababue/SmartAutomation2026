@@ -201,6 +201,9 @@ Ollama's default context window can be smaller than the extraction needs: the pr
 10k plus the answer, hence `OLLAMA_CONTEXT_LENGTH`. A local server runs one request at a time, so
 `MAX_WORKERS=1` keeps the measured seconds per page free of queueing.
 
+On OpenRouter, requests go only to providers with zero data retention (`OPENROUTER_ZDR`). A model without
+such a provider fails with "no endpoints found"; run it with `OPENROUTER_ZDR=0` only if that is acceptable.
+
 ### 6. Process documents
 
 ```bash
@@ -347,6 +350,7 @@ Environment variables, read from the shell or from `.env`:
 | `ANTHROPIC_API_KEY` | – | API key for `LLM_BACKEND=api` |
 | `LLM_BACKEND` | `api` | `api` (Anthropic API), `claude-code` (local `claude -p`) or `openai` (OpenAI-compatible API) |
 | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | `http://localhost:11434/v1` / – | server and key for `LLM_BACKEND=openai` (e.g. OpenRouter) |
+| `OPENROUTER_ZDR` | `1` | OpenRouter only: route to providers with zero data retention; `0` for a model without one |
 | `CLAUDE_CLI` | `claude` | path to the Claude Code CLI |
 | `CLAUDE_CONFIG_DIR` | CLI default | profile directory for another subscription (CLI backend) |
 | `CLAUDE_CLI_TOKEN_FILE` | – | token file for another subscription (CLI backend) |

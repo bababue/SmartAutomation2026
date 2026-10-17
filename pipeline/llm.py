@@ -311,9 +311,11 @@ def _call_openai(model: str, system: str, image: Path, text: str, out: type[T], 
     ]
     response_format = ({"type": "json_schema", "json_schema": {"name": out.__name__, "schema": out.model_json_schema()}}
                        if strict else {"type": "json_object"})
+    body = {"model": model, "max_tokens": max_tokens, "response_format": response_format}
+    if config.OPENROUTER_ZDR and "openrouter.ai" in config.OPENAI_BASE_URL:
+        body["provider"] = {"zdr": True}
     for attempt in range(2):
-        response = _post_chat({"model": model, "messages": messages, "max_tokens": max_tokens,
-                               "response_format": response_format})
+        response = _post_chat({**body, "messages": messages})
         usage = response.get("usage") or {}
         tokens = {"input_tokens": usage.get("prompt_tokens", 0), "output_tokens": usage.get("completion_tokens", 0)}
         if usage.get("cost") is not None:

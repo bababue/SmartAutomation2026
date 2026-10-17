@@ -38,6 +38,9 @@ EXTRACT_EFFORT = os.getenv("EXTRACT_EFFORT", "medium")
 # (https://openrouter.ai/api/v1) or a local Ollama server (the default). Model names are the server's.
 LLM_BACKEND = os.getenv("LLM_BACKEND", "api")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
+# OpenRouter only: route to providers with zero data retention (the dataset is confidential). Set 0 for
+# a model that has no such provider.
+OPENROUTER_ZDR = os.getenv("OPENROUTER_ZDR", "1") == "1"
 CLAUDE_CLI = os.getenv("CLAUDE_CLI", "claude")
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "3" if LLM_BACKEND == "claude-code" else "6"))
 
