@@ -93,11 +93,11 @@ def proxy(con: sqlite3.Connection, docs, rendered) -> dict:
 
 
 def save_proxy(name: str, data: dict) -> None:
-    (arm_dir(name) / "proxy.json").write_text(json.dumps(data, indent=1))
+    (arm_dir(name) / "proxy.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
 
 
 def proxy_report(names: list[str]) -> list[str]:
-    data = {n: json.loads(p.read_text()) for n in names if (p := arm_dir(n) / "proxy.json").exists()}
+    data = {n: json.loads(p.read_text(encoding="utf-8")) for n in names if (p := arm_dir(n) / "proxy.json").exists()}
     if not data:
         return []
     codes = sorted({c for d in data.values() for c in d["blocking"]})

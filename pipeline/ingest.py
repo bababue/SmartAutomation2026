@@ -116,13 +116,13 @@ def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool =
     fingerprint = f"{stat.st_size}:{stat.st_mtime_ns}:{config.EXTRACT_LONG_EDGE}:{config.THUMB_LONG_EDGE}" if stat else ""
     marker = out_dir / "source.txt"
     if marker.exists():
-        recorded = marker.read_text().splitlines() + [""]
+        recorded = marker.read_text(encoding="utf-8").splitlines() + [""]
         # Markers written before fingerprints only name the source.
         same_source = recorded[0] == source and (not recorded[1] or recorded[1] == fingerprint)
     else:
         same_source = converted is None
     if manifest.exists() and same_source and not force:
-        return [PageImage(**p) for p in json.loads(manifest.read_text())]
+        return [PageImage(**p) for p in json.loads(manifest.read_text(encoding="utf-8"))]
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("*.jpg"):
         old.unlink()  # page count may change
@@ -156,6 +156,6 @@ def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool =
                 height=h,
             )
         )
-    manifest.write_text(json.dumps([asdict(p) for p in pages], ensure_ascii=False))
-    marker.write_text(f"{source}\n{fingerprint}")
+    manifest.write_text(json.dumps([asdict(p) for p in pages], ensure_ascii=False), encoding="utf-8")
+    marker.write_text(f"{source}\n{fingerprint}", encoding="utf-8")
     return pages
