@@ -106,26 +106,28 @@ def reason(p: Profile) -> str:
 def similar(con: sqlite3.Connection, borehole_id: str, limit: int = 5) -> dict | None:
     """This hole's ground and the `limit` closest holes of other documents, rejected records left out; None if
     the hole is unknown."""
-    rows = {r["rid"]: r for r in con.execute(
-        "SELECT rid, id, name, doc_id, project, country, review_status, score, ground FROM boreholes "
-        "WHERE review_status != 'rejected' OR id = ?", (borehole_id,))}
-    target = next((r for r in rows.values() if r["id"] == borehole_id), None)
+    columns = "rid, id, name, doc_id, project, country, review_status, score, ground"
+    target = con.execute(f"SELECT {columns} FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
     if target is None:
         return None
+    # A hole without layers has no band to compare, so only logged holes of other documents are candidates.
+    candidates = ("SELECT rid FROM boreholes WHERE review_status != 'rejected' AND doc_id != ? "
+                  "AND rid IN (SELECT rid FROM layers)")
+    rows = {r["rid"]: r for r in con.execute(
+        f"SELECT {columns} FROM boreholes WHERE rid IN ({candidates}) ORDER BY rid", (target["doc_id"],))}
     layers: dict[int, list[tuple[float | None, float | None, str]]] = {}
-    for rid, top, bottom, code in con.execute("SELECT rid, top_m, bottom_m, primary_code FROM layers"):
-        if rid in rows:
-            layers.setdefault(rid, []).append((top, bottom, code))
-    profiles = {rid: profile(layers.get(rid, []), json.loads(r["ground"]) if r["ground"] else None)
-                for rid, r in rows.items()}
-    mine = profiles[target["rid"]]
+    for rid, top, bottom, code in con.execute(
+            f"SELECT rid, top_m, bottom_m, primary_code FROM layers WHERE rid = ? OR rid IN ({candidates}) "
+            "ORDER BY rid, seq",
+            (target["rid"], target["doc_id"])):
+        layers.setdefault(rid, []).append((top, bottom, code))
+    mine = profile(layers.get(target["rid"], []), json.loads(target["ground"]) if target["ground"] else None)
     found = []
     for rid, r in rows.items():
-        if r["doc_id"] == target["doc_id"]:
-            continue
-        d = distance(mine, profiles[rid])
+        p = profile(layers[rid], json.loads(r["ground"]) if r["ground"] else None)
+        d = distance(mine, p)
         if d is not None:
-            found.append((d, r, profiles[rid]))
+            found.append((d, r, p))
     found.sort(key=lambda x: (x[0], x[1]["name"] or ""))
     return {"ground": reason(mine) if any(mine.bands) else None,
             "like": like(mine, layers.get(target["rid"], [])) if any(mine.bands) else None,
