@@ -592,6 +592,9 @@ function fit(m: MapLibre, data: FeatureCollection<MapPoint>) {
   const bounds = new LngLatBounds()
   data.features.forEach((f) => bounds.extend(f.geometry.coordinates))
   // Flat: fitBounds ignores the tilt, and a tilted wide view reaches past the poles. Columns only start at
-  // COLUMN_MIN_ZOOM, so the tilt returns when a hole is opened.
-  m.fitBounds(bounds, { padding: 80, maxZoom: 12, pitch: 0, duration: 600, absolutePadding: true })
+  // COLUMN_MIN_ZOOM, so the tilt returns when a hole is opened. The tilt goes first: keepWorldInView would
+  // check the target against the old tilt and push it off centre.
+  if (m.getPitch()) m.jumpTo({ pitch: 0 })
+  // With absolutePadding the padding goes on to the flight as given, and only an object replaces the map's current one.
+  m.fitBounds(bounds, { padding: { top: 80, bottom: 80, left: 80, right: 80 }, maxZoom: 12, pitch: 0, duration: 600, absolutePadding: true })
 }
