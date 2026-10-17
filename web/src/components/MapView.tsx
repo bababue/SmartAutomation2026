@@ -5,8 +5,9 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { fetchLayerStrips } from '../api'
+import { tooltipContent } from '../boreholeTooltip'
 import { LITHOLOGY, lithStyle, patternId } from '../lithology'
-import { STATUS_COLOR as STATUS_COLORS, STATUS_LABEL, scoreText } from '../review'
+import { STATUS_COLOR as STATUS_COLORS, STATUS_LABEL } from '../review'
 import type { BoreholeSummary, FeatureCollection, ReviewStatus } from '../types'
 
 // MapLibre resolves its worker next to its own module, which does not exist in the production bundle.
@@ -52,20 +53,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
   node.className = className
   if (text != null) node.textContent = text  // textContent: names come from documents, never as HTML
   return node
-}
-
-function tooltipContent(p: BoreholeSummary) {
-  const root = el('div', 'tip')
-  root.append(el('strong', 'tip-name', p.name))
-  if (p.location_name) root.append(el('span', 'tip-line', p.location_name))
-  if (p.depth != null) root.append(el('span', 'tip-line', `Depth ${p.depth.toLocaleString('en', { maximumFractionDigits: 1 })} m`))
-  if (p.loc_method === 'geocoded_place') root.append(el('span', 'tip-line', 'Approximate position'))
-  const status = p.review_status as ReviewStatus
-  root.append(el('span', `tip-line tip-${status}`, `${STATUS_LABEL[status]}, score ${scoreText(p.score)}`))
-  const layer = p as BoreholeSummary & { layer_top?: number; layer_bottom?: number; layer_lithology?: string }
-  if (layer.layer_lithology) root.append(el('span', 'tip-line',
-    `${layer.layer_top}–${layer.layer_bottom} m: ${lithStyle(layer.layer_lithology).label}`))
-  return root
 }
 
 function pickerList(items: BoreholeSummary[], onPick: (id: string) => void) {
