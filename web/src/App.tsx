@@ -18,6 +18,7 @@ import { AppMenu } from './components/AppMenu'
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
 const THEME_KEY = 'borehole-atlas.theme'
+const COLUMNS_KEY = 'borehole-atlas.columns3d'
 
 function loadDark(): boolean {
   try {
@@ -25,6 +26,13 @@ function loadDark(): boolean {
     if (saved) return saved === 'dark'
   } catch { /* storage blocked */ }
   return window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
+function loadColumns3d(): boolean {
+  try {
+    return localStorage.getItem(COLUMNS_KEY) !== 'off'
+  } catch { /* storage blocked */ }
+  return true
 }
 
 export default function App() {
@@ -68,11 +76,16 @@ export default function App() {
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const [dark, setDark] = useState(loadDark)
+  const [columns3d, setColumns3d] = useState(loadColumns3d)
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     try { localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light') } catch { /* private mode: the choice lasts this visit */ }
   }, [dark])
+
+  useEffect(() => {
+    try { localStorage.setItem(COLUMNS_KEY, columns3d ? 'on' : 'off') } catch { /* private mode: the choice lasts this visit */ }
+  }, [columns3d])
 
   useEffect(() => {
     const t = setTimeout(() => setFilters((f) => ({ ...f, q: query })), 250)
@@ -320,10 +333,10 @@ export default function App() {
               )}
             </p>
           )}
-          <AppMenu inReview={view === 'review'} inStats={view === 'stats'} uploading={uploading} dark={dark}
+          <AppMenu inReview={view === 'review'} inStats={view === 'stats'} uploading={uploading} dark={dark} columns3d={columns3d}
             onToggleReview={() => setView(view === 'review' ? 'map' : 'review')}
             onToggleStats={() => setView(view === 'stats' ? 'map' : 'stats')}
-            onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} />
+            onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} onToggleColumns={() => setColumns3d(!columns3d)} />
         </div>
       </header>
 
@@ -349,7 +362,7 @@ export default function App() {
       </aside>
 
       <main className={`map-wrap${sectionFeatures.length ? ' map-wrap-section' : ''}`}>
-        <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} sheetWidth={detail ? sheetWidth : null} dark={dark} />
+        <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} sheetWidth={detail ? sheetWidth : null} dark={dark} columns3d={columns3d} />
         <div className={`legend${detail ? ' legend-beside-sheet' : ''}`} aria-label="Map legend">
           <span><i className="dot dot-high" /> released</span>
           <span><i className="dot dot-medium" /> waiting for review</span>

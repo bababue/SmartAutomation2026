@@ -231,7 +231,6 @@ button, input, select { font: inherit; color: inherit; }
 .flag-ok, .flag-auto_approved, .flag-approved { background: var(--approved-soft); color: var(--high); }
 .flag-pending_review { background: var(--pending-soft); color: var(--warn-ink); }
 .flag-rejected { background: var(--rejected-soft); color: var(--low); }
-.flag-score { font-weight: 600; margin-left: 3px; }
 
 /* Result groups: one project (or document) per heading ------------------- */
 .group-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding-right: 12px;

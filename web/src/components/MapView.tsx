@@ -35,6 +35,8 @@ interface Props {
   /** Width of the detail sheet over the map; the selected hole stays centred beside it. */
   sheetWidth: number | null
   dark: boolean
+  /** Off: flat points at every zoom instead of the depth columns. */
+  columns3d: boolean
 }
 
 const CLUSTER_MAX_ZOOM = 14
@@ -124,6 +126,7 @@ interface ColumnSpread {
   drawn: Map<string, Offset>  // offset each visible column was last drawn at
   start: number
   frame: number
+  show: boolean  // the 3D columns are switched on
 }
 
 const SPREAD_GAP_M = 3
@@ -134,7 +137,7 @@ const NO_OFFSET: Offset = [0, 0]
 
 function updateColumns(m: MapLibre, data: FeatureCollection, strips: Map<string, BoreholeSummary['strip']>, spread: ColumnSpread) {
   const columns: Column[] = []
-  if (m.getZoom() >= COLUMN_MIN_ZOOM) {
+  if (spread.show && m.getZoom() >= COLUMN_MIN_ZOOM) {
     const bounds = m.getBounds()
     const offsets = columnOffsets(data)
     for (const feature of data.features) {
@@ -315,16 +318,16 @@ function wrapLongitude(lon: number) {
   return ((lon + 180) % 360 + 360) % 360 - 180
 }
 
-export function MapView({ data, section, selectedId, focus, onSelect, sheetWidth, dark }: Props) {
+export function MapView({ data, section, selectedId, focus, onSelect, sheetWidth, dark, columns3d }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibre | null>(null)
   const ready = useRef(false)
-  const latest = useRef({ data, onSelect, selectedId, focus, section, dark })
+  const latest = useRef({ data, onSelect, selectedId, focus, section, dark, columns3d })
   const layerStrips = useRef(new Map<string, BoreholeSummary['strip']>())
-  latest.current = { data, onSelect, selectedId, focus, section, dark }
+  latest.current = { data, onSelect, selectedId, focus, section, dark, columns3d }
   const [loaded, setLoaded] = useState(false)
   const shownDark = useRef(dark)  // the basemap currently on the map
-  const spread = useRef<ColumnSpread>({ columns: [], drawn: new Map(), start: 0, frame: 0 })
+  const spread = useRef<ColumnSpread>({ columns: [], drawn: new Map(), start: 0, frame: 0, show: columns3d })
 
   useEffect(() => {
     const columnSpread = spread.current
@@ -503,6 +506,14 @@ export function MapView({ data, section, selectedId, focus, onSelect, sheetWidth
     })
   }, [dark, loaded])
 
+  useEffect(() => {
+    spread.current.show = columns3d
+    const m = map.current
+    if (!m || !ready.current) return
+    showColumns(m, columns3d)
+    updateColumns(m, latest.current.data, layerStrips.current, spread.current)
+  }, [columns3d])
+
   return <div ref={container} className="map" />
 }
 
@@ -514,7 +525,7 @@ function loadPatterns() {
 
 /** The borehole sources and layers on top of the basemap; a style switch drops them, so they are added again. */
 function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>>,
-  state: { data: FeatureCollection; section: [number, number][]; dark: boolean }) {
+  state: { data: FeatureCollection; section: [number, number][]; dark: boolean; columns3d: boolean }) {
   if (m.getSource('boreholes')) return
   const ink = state.dark ? '#E2E7E5' : '#1D2528', paper = state.dark ? '#1B2225' : '#FFFFFF'
   for (const [key, image] of images) m.addImage(patternId(key), image, { pixelRatio: 2 })
@@ -581,18 +592,30 @@ function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>
   m.addLayer({
     id: 'points-approx', type: 'circle', source: 'boreholes',
     filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'loc_method'], 'geocoded_place']],
-    paint: { 'circle-color': '#FFFFFF', 'circle-opacity': ['step', ['zoom'], 0.6, COLUMN_MIN_ZOOM, 0],
-      'circle-radius': ['step', ['zoom'], 6, COLUMN_MIN_ZOOM, 10],
-      'circle-stroke-color': STATUS_COLOR, 'circle-stroke-width': 2.5,
-      // At column zoom the spot marker of the fanned-out columns stands here instead.
-      'circle-stroke-opacity': ['step', ['zoom'], 1, COLUMN_MIN_ZOOM, ['case', ['>', ['coalesce', ['get', 'depth'], 0], 0], 0, 1]] },
+    paint: { 'circle-color': '#FFFFFF', 'circle-stroke-color': STATUS_COLOR, 'circle-stroke-width': 2.5 },
   })
   m.addLayer({
     // Below column zoom only: at column zoom the centred 3D column marks the selection.
     id: 'selected', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM, filter: ['==', ['get', 'id'], ''],
     paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 11, 'circle-stroke-color': ACCENT, 'circle-stroke-width': 3 },
   })
+  showColumns(m, state.columns3d)
 }
+
+/** With the 3D columns off, the flat points stay at column zoom too and stand in for the columns. */
+function showColumns(m: MapLibre, on: boolean) {
+  const top = on ? COLUMN_MIN_ZOOM : 24
+  m.setLayerZoomRange('points', 0, top)
+  m.setLayerZoomRange('selected', 0, top)
+  m.setLayoutProperty('points-no-depth', 'visibility', on ? 'visible' : 'none')
+  m.setPaintProperty('points-approx', 'circle-opacity', on ? ['step', ['zoom'], 0.6, COLUMN_MIN_ZOOM, 0] : 0.6)
+  m.setPaintProperty('points-approx', 'circle-radius', on ? ['step', ['zoom'], 6, COLUMN_MIN_ZOOM, 10] : 6)
+  m.setPaintProperty('points-approx', 'circle-stroke-opacity', on ? APPROX_STROKE_OPACITY : 1)
+}
+
+// At column zoom the spot marker of the fanned-out columns stands in for the approximate-position ring.
+const APPROX_STROKE_OPACITY: ExpressionSpecification =
+  ['step', ['zoom'], 1, COLUMN_MIN_ZOOM, ['case', ['>', ['coalesce', ['get', 'depth'], 0], 0], 0, 1]]
 
 function applySelection(m: MapLibre, selectedId: string | null, focus: Props['focus']) {
   const radius = markSelection(m, selectedId, focus)
