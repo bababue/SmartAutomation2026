@@ -27,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from datetime import date as date_type
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, StringConstraints, ValidationError, model_validator
 import pymupdf
 from pyproj import CRS
 from pyproj.exceptions import CRSError
@@ -351,7 +351,8 @@ def crs_groups(con: DB) -> list[models.CrsGroup]:
     groups: dict[tuple[str, int], dict] = {}
     rows = con.execute(
         f"SELECT boreholes.id, f.epsg, {SOURCE_FILE} FROM findings f JOIN boreholes ON boreholes.rid = f.rid "
-        "WHERE f.code = 'crs_inferred' AND boreholes.review_status = 'pending_review' ORDER BY boreholes.id"
+        "WHERE f.code = 'crs_inferred' AND f.epsg IS NOT NULL AND boreholes.review_status = 'pending_review' "
+        "ORDER BY boreholes.id"
     )
     for r in rows:
         key = (store.document_group(r["id"]), r["epsg"])
@@ -386,9 +387,12 @@ def _blocking(bh: Borehole) -> list[str]:
     return [i for i in bh.issues if scoring.finding_severity(i) == "blocking"]
 
 
+Reviewer = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+
+
 class Review(BaseModel):
     decision: Literal["approved", "rejected", "pending_review"]
-    reviewer: str = Field(min_length=1, max_length=80)
+    reviewer: Reviewer
     comment: str | None = Field(None, max_length=2000)
     content_hash: str = Field(min_length=1, description="Version the reviewer saw; refused if it changed since")
     review_revision: int = Field(description="Review state the reviewer saw; refused if another decision was "
@@ -408,7 +412,7 @@ def _record(con: sqlite3.Connection, borehole_id: str) -> dict:
 @app.post("/api/boreholes/{borehole_id:path}/review")
 def review(borehole_id: str, body: Review, con: DB) -> models.ReviewResult:
     try:
-        bh = store.record_review(con, borehole_id, ReviewStatus(body.decision), body.reviewer.strip(), body.comment,
+        bh = store.record_review(con, borehole_id, ReviewStatus(body.decision), body.reviewer, body.comment,
                                  body.content_hash, body.review_revision)
     except store.StaleReview:
         raise HTTPException(409, "the record changed since you opened it; reload it and check again")
@@ -526,7 +530,7 @@ class Correction(BaseModel):
     kind: Literal["crs", "position", "layer", "layer_add", "field", "groundwater", "test"]
     scope: Literal["borehole", "document"] = "borehole"
     payload: dict
-    reviewer: str = Field(min_length=1, max_length=80)
+    reviewer: Reviewer
     comment: str | None = Field(None, max_length=2000)
 
 
@@ -550,7 +554,7 @@ def correct(borehole_id: str, body: Correction, con: DB) -> models.CorrectionRes
 
     group = store.document_group(borehole_id)
     targets = store.group_borehole_ids(con, group) if body.scope == "document" else [borehole_id]
-    item = {"kind": body.kind, "payload": payload, "reviewer": body.reviewer.strip()}
+    item = {"kind": body.kind, "payload": payload, "reviewer": body.reviewer}
     updated = []
     with con:
         con.execute("BEGIN IMMEDIATE")  # read-modify-write: concurrent corrections and rebuilds wait
@@ -595,7 +599,7 @@ def get_borehole(borehole_id: str, con: DB) -> models.Detail:
     ]
     inferred = con.execute(
         "SELECT f.epsg FROM findings f JOIN boreholes b ON b.rid = f.rid WHERE b.id = ? AND f.code = 'crs_inferred' "
-        "AND b.review_status = 'pending_review'", (borehole_id,)).fetchone()
+        "AND f.epsg IS NOT NULL AND b.review_status = 'pending_review'", (borehole_id,)).fetchone()
     # The document-wide confirmation this waiting hole belongs to, if its document has one.
     crs_group = inferred and next((g for g in crs_groups(con) if g["group"] == store.document_group(borehole_id)
                                    and g["epsg"] == inferred["epsg"]), None)

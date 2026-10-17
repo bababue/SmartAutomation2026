@@ -227,3 +227,27 @@ def test_ids_with_colon_and_slash_reach_the_record_and_its_sub_routes(client, pa
         "decision": "approved", "reviewer": "Ana", "content_hash": detail["content_hash"],
         "review_revision": detail["review_revision"]})
     assert review.json()["borehole"]["review_status"] == "approved"
+
+
+@pytest.mark.parametrize("route, body", [
+    ("review", {"decision": "approved", "content_hash": "h", "review_revision": 0}),
+    ("corrections", {"kind": "field", "payload": {"field": "notes", "value": "checked"}}),
+])
+def test_blank_reviewer_is_rejected(client, route, body):
+    assert client.post(f"/api/boreholes/q:A/{route}", json={**body, "reviewer": "   "}).status_code == 422
+
+
+def test_inferred_crs_without_a_code_is_left_out_of_document_confirmations(client):
+    con = store.connect()
+    for bid in ("r:H1", "r:H2"):
+        store.save_borehole(con, hole(bid, 47.0, 8.0, [(0, 9, "gravel")]))
+    con.execute("UPDATE boreholes SET review_status = 'pending_review'")
+    for bid, epsg in [("q:A", None), ("q:B", None), ("r:H1", 25832), ("r:H2", 25832)]:
+        con.execute("INSERT INTO findings (rid, seq, code, severity, epsg, text) SELECT rid, 900, 'crs_inferred', "
+                    "'warning', ?, 'inferred' FROM boreholes WHERE id = ?", (epsg, bid))
+    con.commit()
+    con.close()
+    groups = client.get("/api/review-queue/crs-groups")
+    assert groups.status_code == 200 and [(g["group"], g["epsg"]) for g in groups.json()] == [("r", 25832)]
+    detail = client.get("/api/boreholes/q:A")
+    assert detail.status_code == 200 and detail.json()["crs_group"] is None
