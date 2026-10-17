@@ -855,8 +855,6 @@ select.field { padding: 0 4px; }
 .stats-card h4 { margin: 18px 0 8px; font-size: 15px; font-weight: 600; }
 .stats-card > p { margin: 0 0 12px; font-size: 14px; max-width: 90ch; }
 .stats-card .stats-note { margin-top: 14px; }
-.stats-figure { margin: 4px 0 12px; font-size: 15px; }
-.stats-figure b { font-size: 34px; font-weight: 600; margin-right: 4px; }
 .stats-action { margin-top: 14px; align-self: flex-start; }
 .stats-tiles { display: flex; flex-wrap: wrap; gap: 10px 40px; margin: 8px 0 4px; }
 .stats-tiles dt { font-size: 14px; color: var(--graphite); }

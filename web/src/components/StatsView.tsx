@@ -180,6 +180,7 @@ function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }:
   const lithRows = lith.length > LITH_ROWS + 1
     ? [...lith.slice(0, LITH_ROWS), ['other', lith.slice(LITH_ROWS).reduce((sum, [, m]) => sum + m, 0)] as [string, number]]
     : lith
+  const lithMax = Math.max(0, ...lithRows.map(([, m]) => m))  // the summed rest can outweigh the top class
   const depthMax = Math.max(1, ...(s?.depths ?? []))
   // Notes (unreadable items, corrections) hold nothing back; they would only dwarf the findings that do.
   const findings = s?.findings.filter((f) => f.severity !== 'info') ?? []
@@ -241,7 +242,7 @@ function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }:
                     return (
                       <li key={key}>
                         <span className="stats-label">{label}</span>
-                        <Bar value={m} max={lithRows[0][1]} title={`${label}: ${n(Math.round(m))} m`}
+                        <Bar value={m} max={lithMax} title={`${label}: ${n(Math.round(m))} m`}
                           {...(key === 'other' ? { fill: 'var(--graphite)' } : { pattern: patternId(key) })} />
                         <span className="stats-value">{pct(m, lithTotal)} %</span>
                       </li>
@@ -373,7 +374,7 @@ function Coordinates({ s, quality, onReview }: { s: StatsDetail; quality: Qualit
         {ev && <>Position error on checked records: median <b>{fmtError(ev.current.position_median_m)}</b>, largest{' '}
           <b>{fmtError(ev.current.position_max_m)}</b>. </>}
         <b>{n(s.positions_withheld)}</b> {s.positions_withheld === 1 ? 'hole' : 'holes'} held back: they would share one place-name point.{' '}
-        {p.none > 0 && (
+        {s.positions_withheld > 0 && (
           <button className="link-button" onClick={() => onReview({ ...DEFAULT_REVIEW_FILTERS, position: 'none' })}>
             Place them
           </button>
