@@ -93,7 +93,7 @@ exactly what runs without them:
 | Stage | Checks |
 |---|---|
 | Web | `npm ci`, `oxlint`, unit tests, TypeScript check and production build |
-| Python | `pip install`, the full test suite (~290 tests: coordinate parsing in every notation that broke, CRS resolution, sheet assembly, scoring and blocking rules, review persistence, corrections, API, upload queue, export) |
+| Python | `pip install`, the full test suite (330+ tests: coordinate parsing in every notation that broke, CRS resolution, sheet assembly, scoring and blocking rules, review persistence, corrections, API, upload queue, export) |
 | App | creates a database of synthetic boreholes at public places (`fixtures/demo_data.py`) and serves API and UI on port 8000 |
 
 Not part of the build: extraction itself, which needs an LLM key and the confidential documents. Tests never
