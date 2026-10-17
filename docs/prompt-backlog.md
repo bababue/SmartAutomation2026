@@ -38,3 +38,17 @@ the spread of a plain re-extraction), not with `baseline` (the reference was app
   take the last layer's bottom. Drop it, or keep it only together with a code fallback to the last bottom.
 - Item 2 moves weathered rock to soil classes (sandstone → sand, tuff → sand). Drop it in this form.
 - Items 3, 6 and 7: no effect measurable on 24 reference records; re-test once the reference is larger.
+- Items 10, 12 and 13 together (`v4-prep`, 36 reference records, 70 pages): boundaries 92.4 % and lithology
+  metres 91.5 % against 95.2 % and 94.4 % for `baseline-rerun`; final depth 94.4 % against 97.2 %; groundwater
+  and lab slightly better. Most of the gap is one page that came back without layers; the other records swing
+  both ways within the spread. Item 10 stays as measured before: ship it.
+- Item 12 harms coordinates: the model took a printed datum ('Kartdatum …') for a field label and removed it
+  from `crs_raw`, so one document's holes lost their grid (coordinates unmatched on 6 holes instead of 1,
+  4 new `CRS ambiguous`). Ship it only narrowed to the hole name, place and date fields, with `coords_raw`,
+  `crs_raw` and `elevation_raw` copied verbatim, and measure that again.
+- Item 13: no change in country, CRS or positions on the reference (it has no case of a place name shared by
+  two countries, so its benefit is not shown either). Low risk; ship with the narrowed item 12 once that is
+  measured.
+- Two holes that the reference names after their page because their names repeat came back under their full
+  printed names (with the site reference) and matched the reference records layer for layer; `eval` counted
+  them as missing until mapped by hand.
