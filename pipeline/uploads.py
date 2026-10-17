@@ -167,10 +167,10 @@ class UploadQueue:
                 task.cancelled = cancelled
                 result.cancelled = _paths(task, cancelled)
                 result.calls = _calls(con, job_id)
+                _remove_files(task, cancelled, whole=result.status == "cancelled")  # gone before the status says so
                 with con:
                     con.execute("UPDATE upload_jobs SET status = ?, task = ?, result = ?, error = ? WHERE id = ?",
                                 (result.status, task.model_dump_json(), result.model_dump_json(), result.error, job_id))
-            _remove_files(task, cancelled, whole=result.status == "cancelled")
             self.progress.pop(job_id, None)
         finally:
             con.close()
