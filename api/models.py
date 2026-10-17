@@ -166,9 +166,22 @@ class Stats(BaseModel):
 
 
 class PositionCounts(BaseModel):
-    exact: int
-    approximate: int
+    """Holes by where their position comes from."""
+    printed: int  # coordinates printed on the log
+    linked_table: int  # a coordinate table elsewhere in the document
+    manual: int  # set by a reviewer
+    place_name: int  # the place name only, approximate
     none: int
+
+
+class CrsDetermination(BaseModel):
+    """Holes positioned from printed or tabled coordinates, by how their coordinate system was settled."""
+    stated: int  # on the sheet, or labelled latitude and longitude
+    document: int  # stated elsewhere in the document
+    reviewer: int  # a reviewer's coordinate system correction
+    knowledge: int  # learned from reviewer decisions on other holes, or a local grid fitted to them
+    inferred: int  # not stated: the system that lands nearest the named place
+    ambiguous: int  # several systems fit; left to a person
 
 
 class Funnel(BaseModel):
@@ -214,6 +227,9 @@ class StatsDetail(BaseModel):
     countries: int
     status: dict[ReviewStatus, int]
     position: PositionCounts
+    crs_determination: CrsDetermination
+    positions_withheld: int  # holes that would share one place-name position, left for a reviewer to place
+    waiting_blocking: int  # records waiting for review with a blocking finding
     funnel: Funnel
     threshold: float
     findings: list[FindingCount]
@@ -221,7 +237,8 @@ class StatsDetail(BaseModel):
     depth_bin_m: int
     depths: list[int]
     groups: list[GroupStats]
-    crs: list[tuple[int, int]]
+    crs: list[tuple[int, int]]  # EPSG code, holes positioned from coordinates read in it
+    crs_without_epsg: int  # of those, holes in a local grid or PROJ definition without an EPSG code
 
 
 class Aggregate(BaseModel):
