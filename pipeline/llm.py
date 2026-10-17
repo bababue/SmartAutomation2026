@@ -261,7 +261,7 @@ def cost_usd(usage: dict[str, dict[str, float]]) -> float | None:
 def measured_costs() -> dict[str, tuple[int, float]]:
     """Per stage: pages with recorded usage and their total cost in USD (from the cache)."""
     out: dict[str, tuple[int, float]] = {}
-    for stage in ("classify", "extract", "lab"):
+    for stage in ("classify", "extract", "extract-retry", "lab", "coords"):
         n, total = 0, 0.0
         for path in (config.CACHE_DIR / stage).glob("*/*.json"):
             usage = json.loads(path.read_text(encoding="utf-8")).get("usage")
