@@ -44,7 +44,8 @@ export function Profile({ borehole, hovered, onHover }: Props) {
           </text>
         </g>
       ))}
-      <text x={10} y={top + height / 2} className="tick" transform={`rotate(-90 10 ${top + height / 2})`} textAnchor="middle">
+      {/* Along the top of the axis: the card scrolls a long profile, and the start is what shows first. */}
+      <text x={10} y={top} className="tick" transform={`rotate(-90 10 ${top})`} textAnchor="end">
         {elev != null ? `Level (m ${borehole.elevation_datum ?? 'above datum'})` : 'Depth (m)'}
       </text>
 
@@ -53,12 +54,14 @@ export function Profile({ borehole, hovered, onHover }: Props) {
         const h = Math.max(1, (l.bottom_m - l.top_m) * pxPerM)
         const active = hovered === i
         const style = lithStyle(l.primary)
+        const unit = stratColor(l)
         return (
           <g key={i} onMouseEnter={() => onHover(i)} onMouseLeave={() => onHover(null)} className="profile-layer">
             <title>{`${fmtNum(l.top_m)}–${fmtNum(l.bottom_m)} m · ${style.label}\n${l.description_en ?? l.description_original}`}</title>
-            <rect x={strat.x} y={y1} width={strat.w} height={h} fill={stratColor(l)} className="cell" />
+            <rect x={strat.x} y={y1} width={strat.w} height={h} fill={unit?.color}
+              className={!unit ? 'cell strat-empty' : unit.data ? 'cell' : 'cell strat-tint'} />
             {l.stratigraphic_code && h >= 11 && (
-              <text x={strat.x + strat.w / 2} y={y1 + h / 2 + 4} textAnchor="middle" className="strat-code">
+              <text x={strat.x + strat.w / 2} y={y1 + h / 2 + 4} textAnchor="middle" className={`strat-code${unit?.data ? ' on-data' : ''}`}>
                 {l.stratigraphic_code}
               </text>
             )}

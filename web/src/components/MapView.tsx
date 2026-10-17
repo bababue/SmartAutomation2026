@@ -156,7 +156,7 @@ export function MapView({ data, route, inactiveRoutes, routeDraft, hoveredHole, 
       style: STYLE[latest.current.dark ? 'dark' : 'light'],
       center: [10, 25],
       zoom: 1.4,
-      pitch: latest.current.view3d ? PITCH : 0,
+      pitch: 0,
       maxPitch: latest.current.view3d ? MAX_PITCH : 0,
       transformConstrain: keepWorldInView(container.current!, () => created),
       canvasContextAttributes: { antialias: true },
@@ -288,7 +288,8 @@ export function MapView({ data, route, inactiveRoutes, routeDraft, hoveredHole, 
       setLoaded(true)  // a theme switch made before this point applies now
       if (latest.current.route) fitRoute(m, latest.current.route.coordinates)
       else if (!latest.current.selectedId) fit(m, latest.current.data)
-      applySelection(m, latest.current.selectedId, latest.current.focus)  // selection made before load
+      applySelection(m, latest.current.selectedId, latest.current.focus, latest.current.view3d)  // selection made before load
+      if (latest.current.selectedId) foldAttribution(m)
       refreshColumns()
     })
     return () => {
@@ -312,8 +313,12 @@ export function MapView({ data, route, inactiveRoutes, routeDraft, hoveredHole, 
   useEffect(() => {
     const m = map.current
     if (!m || !ready.current) return
-    applySelection(m, selectedId, focus)
+    applySelection(m, selectedId, focus, latest.current.view3d)
   }, [selectedId, focus])
+
+  useEffect(() => {
+    if (map.current && ready.current && selectedId) foldAttribution(map.current)
+  }, [selectedId])
 
   useEffect(() => {
     const m = map.current
@@ -513,11 +518,19 @@ function showColumns(m: MapLibre, on: boolean) {
 const APPROX_STROKE_OPACITY: ExpressionSpecification =
   ['step', ['zoom'], 1, COLUMN_MIN_ZOOM, ['case', ['>', ['coalesce', ['get', 'depth'], 0], 0], 0, 1]]
 
-function applySelection(m: MapLibre, selectedId: string | null, focus: Props['focus']) {
+function applySelection(m: MapLibre, selectedId: string | null, focus: Props['focus'], view3d: boolean) {
   const radius = markSelection(m, selectedId, focus)
   if (!focus) return
   const zoom = radius && !focus.hasDepth ? Math.max(6, Math.min(13, 16 - Math.log2(radius / 100))) : 16
-  m.flyTo({ center: [focus.lon, focus.lat], zoom, duration: 500, padding: uncovered(m) })
+  m.flyTo({ center: [focus.lon, focus.lat], zoom, pitch: view3d ? PITCH : 0, duration: 500, padding: uncovered(m) })
+}
+
+/**
+ * Beside the open sheet, the full attribution would cover the scale bar and the legend. It folds to its
+ * button, as MapLibre does on the first drag.
+ */
+function foldAttribution(m: MapLibre) {
+  m.getContainer().querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show')
 }
 
 function markSelection(m: MapLibre, selectedId: string | null, focus: Props['focus']) {
@@ -538,7 +551,7 @@ function keepWorldInView(el: HTMLElement, getMap: () => MapLibre | undefined): T
     const m = getMap()
     const h = el.clientHeight
     const half = ((m?.getVerticalFieldOfView() ?? 36.87) * Math.PI) / 360
-    const pitch = ((m?.getPitch() ?? PITCH) * Math.PI) / 180
+    const pitch = ((m?.getPitch() ?? 0) * Math.PI) / 180
     const dist = h / 2 / Math.tan(half)
     const height = dist * Math.cos(pitch), across = dist * Math.sin(pitch)
     const top = height * Math.tan(pitch + half) - across
@@ -569,5 +582,7 @@ function fit(m: MapLibre, data: FeatureCollection<MapPoint>) {
   if (!data.features.length) return
   const bounds = new LngLatBounds()
   data.features.forEach((f) => bounds.extend(f.geometry.coordinates))
-  m.fitBounds(bounds, { padding: 80, maxZoom: 12, duration: 600 })
+  // Flat: fitBounds ignores the tilt, and a tilted wide view reaches past the poles. Columns only start at
+  // COLUMN_MIN_ZOOM, so the tilt returns when a hole is opened.
+  m.fitBounds(bounds, { padding: 80, maxZoom: 12, pitch: 0, duration: 600 })
 }

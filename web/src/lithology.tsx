@@ -164,14 +164,16 @@ const AGE_COLORS: [RegExp, string][] = [
 
 const MUTED = ['#D9E3E8', '#E5DDD0', '#DCE6D5', '#E8DCE3', '#DDE0EA', '#EDE6CF']
 
-export function stratColor(layer: { stratigraphic_color: string | null; geologic_age: string | null; stratigraphic_code: string | null }): string {
-  if (layer.stratigraphic_color && /^#[0-9a-f]{6}$/i.test(layer.stratigraphic_color)) return layer.stratigraphic_color
+/** Fill of a stratigraphic unit; null when nothing is known. Only colours from the log or the ICS chart are `data`:
+ *  the tints per code just keep neighbouring units apart, so they may follow the theme. */
+export function stratColor(layer: { stratigraphic_color: string | null; geologic_age: string | null; stratigraphic_code: string | null }): { color: string; data: boolean } | null {
+  if (layer.stratigraphic_color && /^#[0-9a-f]{6}$/i.test(layer.stratigraphic_color)) return { color: layer.stratigraphic_color, data: true }
   for (const [re, color] of AGE_COLORS) {
-    if (layer.geologic_age && re.test(layer.geologic_age)) return color
+    if (layer.geologic_age && re.test(layer.geologic_age)) return { color, data: true }
   }
   const code = layer.stratigraphic_code ?? ''
-  if (!code) return '#F1F3F1'
+  if (!code) return null
   let h = 0
   for (const ch of code) h = (h * 31 + ch.charCodeAt(0)) >>> 0
-  return MUTED[h % MUTED.length]
+  return { color: MUTED[h % MUTED.length], data: false }
 }

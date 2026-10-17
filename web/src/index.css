@@ -27,6 +27,7 @@
   --shadow: #1d2528;
   --highlight: #c2410c;    /* outline on the source page, which stays a light scan in both themes */
   --page: #ffffff;         /* behind the source page image in both themes */
+  --ink-on-data: #1d2528;  /* text on data colours (ICS units), which stay light in both themes */
   --font: 'IBM Plex Sans Condensed', 'Arial Narrow', sans-serif;
   --sidebar: 340px;
   --top: 56px;
@@ -323,11 +324,15 @@ button, input, select { font: inherit; color: inherit; }
 
 .legend {
   position: absolute; left: 12px; bottom: 36px;
-  display: flex; flex-wrap: wrap; gap: 12px; max-width: calc(100% - 24px); padding: 6px 10px;
+  display: flex; flex-wrap: wrap; gap: 12px; max-width: calc(100% - 64px); padding: 6px 10px;  /* clear of the zoom buttons */
   background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--grid); border-radius: 3px;
   font-size: 12px; color: var(--graphite);
 }
-.legend-beside-sheet { max-width: calc(100% - var(--sheet) - 24px); }  /* the detail sheet covers the map's right part */
+.legend-beside-sheet { max-width: calc(100% - var(--sheet) - 64px); }  /* the detail sheet covers the map's right part */
+@media (min-width: 761px) {
+  .app:has(> .detail) .maplibregl-ctrl-bottom-right { right: var(--sheet); }
+  .tunnel-detail-open .maplibregl-ctrl-bottom-right { right: var(--tunnel-sheet); }
+}
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--panel); box-shadow: 0 0 0 1px color-mix(in srgb, var(--shadow) 12%, transparent); }
 .dot-high { background: var(--high); }
@@ -390,7 +395,7 @@ button, input, select { font: inherit; color: inherit; }
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 250px minmax(0, 1fr) minmax(300px, 480px);
+  grid-template-columns: 270px minmax(0, 1fr) minmax(300px, 480px);  /* the profile drawing is 236 px plus the card padding */
   grid-template-areas: "profile data source";
   gap: 18px;
   padding: 18px 22px;
@@ -407,7 +412,7 @@ button, input, select { font: inherit; color: inherit; }
 .card-actions { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; }
 .card-head .btn-icon { width: 26px; flex: none; }
 .card-head .source-title { flex: 1; }
-.source-closed { grid-template-columns: 250px minmax(0, 1fr); grid-template-areas: "profile data"; }
+.source-closed { grid-template-columns: 270px minmax(0, 1fr); grid-template-areas: "profile data"; }
 
 .card { background: var(--panel); border: 1px solid var(--grid); border-radius: 4px; padding: 14px 16px; }
 .card-flush { padding: 0; }
@@ -428,6 +433,9 @@ button, input, select { font: inherit; color: inherit; }
 .profile .cell { stroke: var(--ink); stroke-width: 0.8; }
 .profile .cell-active { fill: none; stroke: var(--water); stroke-width: 2.5; }
 .profile .strat-code { font-size: 11px; font-weight: 600; fill: var(--ink); }
+.profile .strat-code.on-data { fill: var(--ink-on-data); }
+.profile .strat-empty { fill: var(--grid-soft); }
+:root[data-theme="dark"] .profile .strat-tint { fill-opacity: 0.3; }
 .profile-layer { cursor: default; }
 .groundwater path { fill: var(--water); }
 .groundwater line { stroke: var(--water); stroke-width: 1.2; }
@@ -534,6 +542,8 @@ button, input, select { font: inherit; color: inherit; }
 .checks-levels { display: inline-flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-weight: 400; color: var(--graphite); }
 .review-summary { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); }
 .review-changes { margin: 12px 0 0; background: var(--panel); }
+/* A re-extraction can change dozens of values: the list scrolls so the record stays in view. */
+.review-changes ul { max-height: 10em; overflow-y: auto; }
 .review-summary .checks { margin-bottom: 10px; }
 .checks h4 { margin: 10px 0 2px; font-size: 14px; }
 .review-toggle { border-color: transparent; background: none; color: var(--graphite); }
@@ -680,7 +690,9 @@ button, input, select { font: inherit; color: inherit; }
   .stats { font-size: 12px; }
   .map-wrap { grid-row: 2; }
   .sidebar { grid-row: 3; border-right: 0; }
-  .legend { display: none; }
+  .legend { top: 8px; bottom: auto; left: 8px; gap: 2px 10px; max-width: calc(100% - 16px); padding: 3px 8px; font-size: 11px; }
+  /* MapLibre opens the attribution until the first drag; the scale bar stays above it meanwhile. */
+  .map-wrap:not(.map-wrap-section):has(.maplibregl-compact-show) .maplibregl-ctrl-scale { margin-bottom: 34px; }
   .detail { top: 0; width: 100vw; }
   .tunnel-detail { top: 0; width: 100vw; }
   .tunnel-detail-open .section { right: 0; }
@@ -688,8 +700,9 @@ button, input, select { font: inherit; color: inherit; }
   .list-closed .sidebar { visibility: visible; }
   .app > .sidebar, .app > .map-wrap { grid-column: 1; }
   .app > .sidebar { grid-row: 3; }
-  .detail-body, .source-closed { grid-template-columns: 1fr; grid-template-rows: none; grid-template-areas: "profile" "data" "source"; overflow: auto; }
-  .detail-body > section { overflow: visible; }
+  .detail-body, .source-closed { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: "profile" "data" "source"; overflow: auto; }
+  /* The body scrolls as one: each section keeps its full height instead of shrinking into the screen. */
+  .detail-body > section { overflow: visible; min-height: auto; }
   .detail-profile { max-height: none; }
   .record { grid-template-columns: 1fr; }
 }
@@ -841,6 +854,11 @@ select.field { padding: 0 4px; }
 .coord-sub { margin: 0 0 8px; font-size: 13px; }
 @media (max-width: 1000px) {
   .claims ul { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* On phones the map is a band above the list: the statistics take over both rather than scrolling inside the band. */
+@media (max-width: 760px) {
+  .app:has(> .map-wrap > .stats-view) { grid-template-rows: auto minmax(0, 1fr); }
+  .app:has(> .map-wrap > .stats-view) > .sidebar { display: none; }
 }
 @media (max-width: 700px) {
   .stats-view { padding: 16px; }
