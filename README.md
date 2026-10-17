@@ -193,7 +193,10 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
   LineString, select boreholes in the corridor, and view the longitudinal section below the map. Spans over
   150 m are drawn lighter as less certain. Tunnels and selected boreholes are saved in this browser, and the
   selected tunnel reopens from its URL after a reload.
-- **Statistics:** lithology, depth and release distributions and recurring findings for the current filter.
+- **Statistics:** two tabs. **Data**: lithology, depth and release distributions and recurring findings for the
+  current filter. **Quality & models**: extraction quality against the reviewed reference, the release audit,
+  Opus against Haiku with cost per page, the wider benchmark, the prompt experiments side by side and the
+  recorded model calls.
 - **Export:** released records as BoreholeDataFormat workbook or CSV, one row per layer.
 
 ## Evaluation
@@ -202,6 +205,7 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
 .venv/bin/python -m pipeline eval snapshot      # records a person approved become the reference
 .venv/bin/python -m pipeline eval               # model output (before corrections) against the reference
 .venv/bin/python -m pipeline eval audit         # draw automatic releases for a person to check
+.venv/bin/python -m pipeline eval snapshot-models  # aggregates for the statistics page (fixtures/, committed)
 ```
 
 `eval` compares the model's own output, before reviewer corrections, so a fixed record still counts the
@@ -214,7 +218,8 @@ A prompt change is tried on the reference documents before it becomes the next `
 (`pipeline experiment init|run|compare`): each arm has its own cache and a fresh database without corrections,
 so the scores are the model's alone. The same commands compare models;
 [docs/model-comparison.md](docs/model-comparison.md) compares Opus 5.5 with Haiku 5.5 on quality, time and
-cost. [docs/prompt-backlog.md](docs/prompt-backlog.md) collects prompt changes for the next version.
+cost. The statistics page computes the same figures live from `data/eval`; without it (e.g. in the Docker
+image) it shows `fixtures/model_evaluation.json`, which holds aggregates only. [docs/prompt-backlog.md](docs/prompt-backlog.md) collects prompt changes for the next version.
 
 ## Data model
 

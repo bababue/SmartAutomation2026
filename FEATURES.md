@@ -81,6 +81,8 @@ the challenge owner's priorities are in [docs/challenge-owner-feedback.md](docs/
 - Result list grouped by project (document group) with count and release share; "Show on map" filters and
   zooms to the group.
 - Drag-and-drop upload, menu with review queue and export, dark mode, shareable URLs for view and selection.
+- Statistics with a quality tab: extraction quality against the reviewed reference, release audit, Opus against
+  Haiku with cost per page, prompt experiments side by side, recorded model calls.
 
 ## Feature ideas
 
@@ -90,7 +92,6 @@ the challenge owner's priorities are in [docs/challenge-owner-feedback.md](docs/
 | Anomalies across the collection: depth, elevation or lithology outliers against neighbouring holes | Feedback #9 | M |
 | Draw a tunnel route and pick the holes in a corridor along it for the section | Feedback #5 | M |
 | Search by ground profile ("rock above 10 m, clay on top") instead of by a single hole | Feedback #6 | M |
-| Model comparison page in the app (quality against cost per page) | Feedback #8 | S |
 | Interface in English and German | Users at the challenge owner | M |
 | Measure Mistral or Azure OpenAI through the OpenAI-compatible backend | Feedback #7, #8 | S–M |
 | Projects and sites as entities with one canonical project name across sheets | Data model review | M |

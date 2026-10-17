@@ -4,6 +4,12 @@ export const fmtNum = (v: number | null | undefined, digits = 2) =>
 
 export const fmtMetres = (v: number | null | undefined, digits = 1) => (v == null ? '–' : `${fmtNum(v, digits)} m`)
 
+/** A count with thousands separators. */
+export const fmtCount = (v: number) => v.toLocaleString('en')
+
+/** A share as a whole percentage; 0 when there is nothing to share. */
+export const percentOf = (part: number, whole: number) => (whole ? Math.round((100 * part) / whole) : 0)
+
 /** A distance along a route: km from 1 km on, finer steps below 10 m for zoomed-in axes. */
 export const fmtDistance = (m: number) =>
   m >= 1000 ? `${fmtNum(m / 1000, 2)} km` : `${fmtNum(m, m < 1 ? 2 : m < 10 ? 1 : 0)} m`
