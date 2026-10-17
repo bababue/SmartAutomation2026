@@ -85,7 +85,7 @@ export function ResultList({ features, groups, activeGroup, onShowGroup, selecte
                       <CoreStrip strip={p.strip} depth={p.depth} />
                       <span className="result-flags">
                         <span className={`flag flag-${p.review_status}`} title={`Release score ${scoreText(p.score)}`}>
-                          {STATUS_LABEL[p.review_status]} <span className="flag-score">{scoreText(p.score)}</span>
+                          {STATUS_LABEL[p.review_status]}
                         </span>
                         {p.loc_method === 'geocoded_place' && <span className="flag flag-warn" title="Position estimated from the place name">approx. position</span>}
                       </span>

@@ -5,10 +5,12 @@ interface Props {
   inStats: boolean
   uploading: boolean
   dark: boolean
+  columns3d: boolean
   onToggleReview: () => void
   onToggleStats: () => void
   onUpload: () => void
   onToggleDark: () => void
+  onToggleColumns: () => void
 }
 
 type Sub = 'export'
@@ -18,6 +20,7 @@ const ICON = {
   map: 'M2.5 4.5 6.5 3l5 1.5 4-1.5v10.5l-4 1.5-5-1.5-4 1.5zM6.5 3v10.5M11.5 4.5V15',
   upload: 'M9 12V3M5.5 6.5 9 3l3.5 3.5M3 12v3h12v-3',
   export: 'M9 3v9M5.5 8.5 9 12l3.5-3.5M3 12v3h12v-3',
+  column: 'M4.5 4.5c0-1.1 2-2 4.5-2s4.5.9 4.5 2v9c0 1.1-2 2-4.5 2s-4.5-.9-4.5-2zM4.5 4.5c0 1.1 2 2 4.5 2s4.5-.9 4.5-2M4.5 9c0 1.1 2 2 4.5 2s4.5-.9 4.5-2',
   dark: 'M14.5 11A6 6 0 0 1 7 3.5a6 6 0 1 0 7.5 7.5z',
   table: 'M3 4h12v10H3zM3 7.5h12M3 11h12M7.5 4v10',
   file: 'M5 2.5h5.5l3 3v10H5zM10.5 2.5v3h3',
@@ -29,7 +32,7 @@ function Icon({ d }: { d: string }) {
   return <svg className="menu-icon" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d={d} /></svg>
 }
 
-export function AppMenu({ inReview, inStats, uploading, dark, onToggleReview, onToggleStats, onUpload, onToggleDark }: Props) {
+export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggleReview, onToggleStats, onUpload, onToggleDark, onToggleColumns }: Props) {
   const [open, setOpen] = useState(false)
   const [sub, setSub] = useState<Sub | null>(null)
   const root = useRef<HTMLDivElement>(null)
@@ -123,6 +126,11 @@ export function AppMenu({ inReview, inStats, uploading, dark, onToggleReview, on
               </div>
             )}
           </div>
+          <button role="menuitemcheckbox" aria-checked={columns3d} className="app-menu-item" onClick={pick(onToggleColumns)}
+            onMouseEnter={() => setSub(null)} title="Depth columns when zoomed in; off shows flat points">
+            <Icon d={ICON.column} /><span className="menu-text">3D columns</span>
+            <span className={`switch${columns3d ? ' switch-on' : ''}`} aria-hidden="true" />
+          </button>
           <button role="menuitemcheckbox" aria-checked={dark} className="app-menu-item" onClick={pick(onToggleDark)}
             onMouseEnter={() => setSub(null)}>
             <Icon d={ICON.dark} /><span className="menu-text">Dark mode</span>
