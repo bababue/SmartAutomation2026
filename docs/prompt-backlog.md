@@ -42,7 +42,7 @@ the spread of a plain re-extraction), not with `baseline` (the reference was app
   metres 91.5 % against 95.2 % and 94.4 % for `baseline-rerun`; final depth 94.4 % against 97.2 %; groundwater
   and lab slightly better. Most of the gap is one page that came back without layers; the other records swing
   both ways within the spread. Item 10 stays as measured before: ship it.
-- Item 12 harms coordinates: the model took a printed datum ('Kartdatum …') for a field label and removed it
+- Item 12 harms coordinates: the model took a printed map-datum statement for a field label and removed it
   from `crs_raw`, so one document's holes lost their grid (coordinates unmatched on 6 holes instead of 1,
   4 new `CRS ambiguous`). Ship it only narrowed to the hole name, place and date fields, with `coords_raw`,
   `crs_raw` and `elevation_raw` copied verbatim, and measure that again.
