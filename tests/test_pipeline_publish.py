@@ -130,9 +130,21 @@ def test_continued_layers_keep_distinct_properties(field, first, second):
     from schema.borehole import SourceRef
     a, b = _log("BH1", None, None, [(0, 10)]), _log("BH1", None, None, [(10, 20)])
     a.layers[0] = a.layers[0].model_copy(update={field: first, "description_original": "SAND"})
-    b.layers[0] = b.layers[0].model_copy(update={field: second, "description_original": "SAND (continued)"})
+    b.layers[0] = b.layers[0].model_copy(update={field: second, "description_original": f"SAND, {second} (continued)"})
     layers = _layers([(a, SourceRef(file="r.pdf", page=1)), (b, SourceRef(file="r.pdf", page=2))], 20)
     assert [(l.top_m, l.bottom_m, getattr(l, field)) for l in layers] == [(0, 10, first), (10, 20, second)]
+
+
+@pytest.mark.parametrize("text", ["Clayey SAND, grey", "As above"])
+def test_one_text_over_a_sheet_break_is_one_layer_however_its_properties_were_read(text):
+    from pipeline.assemble import _layers
+    from schema.borehole import SourceRef
+    a, b = _log("BH1", None, None, [(0, 8)]), _log("BH1", None, None, [(8, 12)])
+    a.layers[0] = a.layers[0].model_copy(update={"description_original": "Clayey SAND, grey", "moisture": "M",
+                                                 "geologic_age": "Quaternary"})
+    b.layers[0] = b.layers[0].model_copy(update={"description_original": text, "moisture": "W", "geologic_age": None})
+    layers = _layers([(a, SourceRef(file="r.pdf", page=1)), (b, SourceRef(file="r.pdf", page=2))], 12)
+    assert [(l.top_m, l.bottom_m) for l in layers] == [(0, 12)]
 
 
 @pytest.mark.parametrize("second_interval", [(0, 10), (0, 15), (5, 10), (0, 5)])

@@ -261,17 +261,19 @@ def _sheet_join(prev: Layer, nxt: Layer) -> str | None:
     started there, at the foot of the previous sheet. None: separate units, or too unclear to join."""
     if _same_page(prev.source, nxt.source) or nxt.top_m < prev.top_m:
         return None
-    comparable = nxt.model_copy(update={"primary": prev.primary})
-    if not _same_properties(prev, comparable):
-        return None
     d = prev.bottom_m - nxt.top_m  # > 0: the sheets overlap; < 0: a stretch nobody describes
     if abs(d) > SHEET_JOIN_M:
         return None
     back = bool(SAME_AS_BEFORE.search(nxt.description_original))
+    same_text = _plain(prev.description_original) == _plain(nxt.description_original)
+    # The same text or a back-reference names one unit: properties read differently on each sheet (age, strength,
+    # secondary components) are no boundary. Under another text they keep the units apart.
+    if not (back or same_text) and not _same_properties(prev, nxt.model_copy(update={"primary": prev.primary})):
+        return None
     marked = back or bool(CONTINUED.search(nxt.description_original))
     if prev.primary != nxt.primary and not (back and nxt.primary == Lithology.unknown):
         return "extend" if marked and not back and d < -0.05 else None
-    if back or _plain(prev.description_original) == _plain(nxt.description_original):
+    if back or same_text:
         return "merge"
     if abs(d) <= 0.05:
         return "merge" if marked or nxt.bottom_m - nxt.top_m < 0.01 else None  # or a fragment without thickness
