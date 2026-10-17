@@ -78,3 +78,20 @@ def test_text_log_keeps_umlauts_and_wraps_long_lines(tmp_path, monkeypatch):
     assert len(pages) == 1
     assert "br\u00e4unlich" in pages[0].text and "\u00b1" in pages[0].text
     assert pages[0].text.count("Kies") == 40  # wrapped, not cut at the page edge
+
+
+def test_spreadsheet_rows_become_text_lines_per_sheet(tmp_path, monkeypatch):
+    import openpyxl
+
+    monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
+    book = openpyxl.Workbook()
+    book.active.title = "Layers"
+    book.active.append(["B 1", 0.5, 1.2, "Lehm, br\u00e4unlich", None, None])
+    book.active.append([])
+    book.create_sheet("Position").append(["E", 412000, "N", 5320000])
+    book.save(tmp_path / "data.xlsx")
+    (doc,) = ingest.discover(tmp_path)
+    assert doc.kind == "sheet"
+    text = ingest.render(doc, tmp_path)[0].text
+    assert "[Layers]\nB 1 | 0.5 | 1.2 | Lehm, br\u00e4unlich\n" in text  # trailing empty cells dropped
+    assert "[Position]\nE | 412000 | N | 5320000" in text

@@ -184,11 +184,11 @@ def test_zip_keeps_only_documents_and_skips_archive_metadata(client, monkeypatch
 def test_batch_skips_other_files_beside_its_documents(client, monkeypatch):
     monkeypatch.setattr("pipeline.__main__.run", lambda *a, **k: None)
     res = client.post("/api/upload", files=[("files", ("log.pdf", _pdf_bytes(1), "application/pdf")),
-                                            ("files", ("layers.xlsx", b"x", "application/octet-stream")),
+                                            ("files", ("site.shp", b"x", "application/octet-stream")),
                                             ("files", ("site.gpkg", b"x", "application/octet-stream"))])
     assert res.status_code == 200
     assert res.json()["files"] == ["log.pdf"]
-    assert res.json()["skipped"] == ["layers.xlsx", "site.gpkg"]
+    assert res.json()["skipped"] == ["site.shp", "site.gpkg"]
     assert [p.name for p in (config.UPLOADS_DIR / f"upload-{res.json()['job_id']}").iterdir()] == ["log.pdf"]
 
 

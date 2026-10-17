@@ -511,7 +511,7 @@ def correct(borehole_id: str, body: Correction, con: DB):
 async def upload_documents(files: list[UploadFile] = File(...)):
     """One batch of files, or zips of them, becomes one document group assembled in a single run, so
     records of one hole spread over several files are combined. Other files in the batch
-    (spreadsheets, GIS files) are skipped and reported, not a reason to reject the documents beside them."""
+    (e.g. GIS files) are skipped and reported, not a reason to reject the documents beside them."""
     batch, skipped = [], []
     for file in files:
         name = _safe_part((file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]) or "upload"
@@ -520,7 +520,7 @@ async def upload_documents(files: list[UploadFile] = File(...)):
         else:
             skipped.append(name)
     if not batch:
-        raise HTTPException(415, "no PDF, JPG, PNG, TIFF, DOCX, TXT or ZIP file in the upload")
+        raise HTTPException(415, "no PDF, JPG, PNG, TIFF, DOCX, TXT, XLSX or ZIP file in the upload")
     from pipeline.__main__ import _missing_credentials
     if msg := _missing_credentials():
         raise HTTPException(503, msg)
@@ -546,7 +546,7 @@ async def upload_documents(files: list[UploadFile] = File(...)):
                         out.write(chunk)
         docs = [ingest.SourceDoc(f"{folder}__{d.doc_id}", d.path, d.kind) for d in ingest.discover(upload_dir)]
         if not docs:
-            raise HTTPException(415, "the upload contains no PDF, JPG, PNG, TIFF, DOCX or TXT file")
+            raise HTTPException(415, "the upload contains no PDF, JPG, PNG, TIFF, DOCX, TXT or XLSX file")
         pages = await run_in_threadpool(_render_upload, docs, upload_dir)
         await run_in_threadpool(app.state.upload_queue.submit, uploads.UploadTask(
             job_id=job_id, folder=folder,
@@ -639,7 +639,7 @@ def _render_upload(docs: list[ingest.SourceDoc], upload_dir: Path) -> int:
     with _MUPDF:
         declared = 0
         for doc in docs:
-            if doc.kind == "docx":
+            if doc.kind in ("docx", "sheet"):  # laid out only when rendered; checked after that
                 continue
             src = upload_dir / doc.path
             try:

@@ -16,18 +16,19 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import docx
+import openpyxl
 import pymupdf
 
 from . import config
 
-SUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".docx", ".txt"}
+SUPPORTED = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".docx", ".txt", ".xlsx", ".xlsm"}
 
 
 @dataclass
 class SourceDoc:
     doc_id: str
     path: str  # relative to the dataset dir
-    kind: str  # pdf | image | docx | text
+    kind: str  # pdf | image | docx | text | sheet
 
 
 @dataclass
@@ -56,7 +57,8 @@ def discover(dataset_dir: Path = config.DATASET_DIR) -> list[SourceDoc]:
     for path in sorted(dataset_dir.rglob("*")):
         if path.is_file() and path.suffix.lower() in SUPPORTED and not _docx_export(path):
             rel = path.relative_to(dataset_dir)
-            kind = {".pdf": "pdf", ".docx": "docx", ".txt": "text"}.get(path.suffix.lower(), "image")
+            kind = {".pdf": "pdf", ".docx": "docx", ".txt": "text", ".xlsx": "sheet", ".xlsm": "sheet"}.get(
+                path.suffix.lower(), "image")
             doc_id = doc_id_for(rel)
             if doc_id in used:  # e.g. 'X.pdf' and 'X.jpg': never share pages, cache and records
                 doc_id = f"{doc_id}-{path.suffix.lower().lstrip('.')}"
@@ -114,6 +116,31 @@ def text_pdf(path: Path) -> pymupdf.Document:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = raw.decode("cp1252", errors="replace")
+    return _text_pages(text)
+
+
+def sheet_pdf(path: Path) -> pymupdf.Document:
+    """A spreadsheet (e.g. layer or coordinate data) as text pages: each sheet under its name, one row per line,
+    cells separated by ' | ', values as computed when the file was last saved."""
+    book = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        parts = []
+        for sheet in book.worksheets:
+            lines = []
+            for row in sheet.iter_rows(values_only=True):
+                cells = ["" if v is None else str(v) for v in row]
+                while cells and not cells[-1].strip():
+                    cells.pop()
+                if cells:
+                    lines.append(" | ".join(cells))
+            if lines:
+                parts.append(f"[{sheet.title}]\n" + "\n".join(lines))
+    finally:
+        book.close()
+    return _text_pages("\n\n".join(parts))
+
+
+def _text_pages(text: str) -> pymupdf.Document:
     story = pymupdf.Story(html='<pre style="font-family: monospace; font-size: 9pt; white-space: pre-wrap">'
                                f"{html.escape(text)}</pre>")
     page, buf = pymupdf.paper_rect("a4"), io.BytesIO()
@@ -159,13 +186,13 @@ def render(doc: SourceDoc, dataset_dir: Path = config.DATASET_DIR, force: bool =
         sources = [pymupdf.open(stream=blob, filetype=ext) for blob, ext in _docx_images(src)]
         pdf_pages = [(d[0], "") for d in sources]
     else:
-        d = text_pdf(src) if doc.kind == "text" else pymupdf.open(src)
-        pdf_pages = [(p, p.get_text() if doc.kind in ("pdf", "text") else "") for p in d]
+        d = text_pdf(src) if doc.kind == "text" else sheet_pdf(src) if doc.kind == "sheet" else pymupdf.open(src)
+        pdf_pages = [(p, p.get_text() if doc.kind in ("pdf", "text", "sheet") else "") for p in d]
 
     pages = []
     for i, (page, text) in enumerate(pdf_pages, start=1):
         full, thumb = out_dir / f"{i:04d}.jpg", out_dir / f"{i:04d}.thumb.jpg"
-        upscale = doc.kind in ("pdf", "text")  # raster sources gain nothing from upscaling
+        upscale = doc.kind in ("pdf", "text", "sheet")  # raster sources gain nothing from upscaling
         w, h = _save(page, config.EXTRACT_LONG_EDGE, full, upscale)
         _save(page, config.THUMB_LONG_EDGE, thumb, upscale)
         pages.append(

@@ -10,7 +10,7 @@ type Status = 'uploading' | UploadStatus['status']
 interface Batch {
   key: string
   files: string[]
-  /** Not a document (spreadsheets, GIS files): left out of the batch. */
+  /** Not a document (e.g. GIS files): left out of the batch. */
   skipped: string[]
   jobId: string | null
   status: Status
@@ -98,7 +98,7 @@ export function UploadQueue({ batches, onDismiss }: { batches: Batch[]; onDismis
             {b.skipped.map((f, i) => (
               <div key={`skipped-${i}`} className="upload-row upload-skipped">
                 <span className="upload-name" title={f}>{f}</span>
-                <span className="upload-state" title="Only PDF, image, DOCX and TXT files are read">Skipped: not a document</span>
+                <span className="upload-state" title="Only PDF, image, DOCX, TXT and XLSX files are read">Skipped: not a document</span>
               </div>
             ))}
             <div className="upload-row upload-summary">
