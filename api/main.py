@@ -67,10 +67,12 @@ DB = Annotated[sqlite3.Connection, Depends(db)]
 # otherwise), so it labels a group but does not form one.
 GROUP = "CASE WHEN instr(doc_id, '__') > 0 THEN substr(doc_id, 1, instr(doc_id, '__') - 1) ELSE doc_id END"
 
+SOURCE_FILE = "(SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file"
+
 LIGHT_COLUMNS = (
     f"id, name, project, {GROUP} AS grp, location_name, country, lat, lon, depth, elevation, investigation_type, "
-    "confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues, lithologies, strip, ground, "
-    + "(SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file"
+    f"confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues, lithologies, strip, ground, "
+    f"{SOURCE_FILE}"
 )
 
 STATUS_GROUPS = {
@@ -78,6 +80,7 @@ STATUS_GROUPS = {
     "pending": ("pending_review",),
     "rejected": ("rejected",),
 }
+RELEASED = f"review_status IN ({', '.join(repr(s) for s in STATUS_GROUPS['released'])})"
 
 
 def _fts_query(q: str) -> str:
@@ -97,9 +100,8 @@ def _group_facet(r: sqlite3.Row, projects: Counter) -> dict:
 
 
 def _feature(r: sqlite3.Row) -> dict:
-    props = {k: r[k] for k in r.keys() if k not in ("lat", "lon")}
-    props["strip"] = json.loads(r["strip"]) if r["strip"] else None
-    props["ground"] = json.loads(r["ground"]) if r["ground"] else None
+    props = {k: (json.loads(r[k]) if r[k] else None) if k in ("strip", "ground") else r[k]
+             for k in r.keys() if k not in ("lat", "lon")}
     return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]}, "properties": props}
 
 
@@ -245,11 +247,7 @@ def list_boreholes(
         return {"items": [{"id": r["id"], "strip": json.loads(r["strip"]) if r["strip"] else None} for r in rows]}
     if fields == "map":
         rows = con.execute(f"SELECT {MAP_COLUMNS} FROM boreholes WHERE {sql_where}", params).fetchall()
-        return {"type": "FeatureCollection", "total": len(rows), "features": [
-            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]},
-             "properties": {"id": r["id"], "name": r["name"], "location_name": r["location_name"], "depth": r["depth"],
-                            "review_status": r["review_status"], "score": r["score"], "loc_method": r["loc_method"]}}
-            for r in rows]}
+        return {"type": "FeatureCollection", "total": len(rows), "features": [_feature(r) for r in rows]}
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {sql_where}", params).fetchone()[0]
     rows = con.execute(f"SELECT {LIGHT_COLUMNS} FROM boreholes WHERE {sql_where} ORDER BY grp, name, id "
                        "LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
@@ -257,7 +255,7 @@ def list_boreholes(
         f"SELECT primary_code, COUNT(DISTINCT rid) n FROM layers WHERE rid IN (SELECT rid FROM boreholes WHERE {sql_where}) "
         "GROUP BY primary_code ORDER BY n DESC", params).fetchall()
     groups = con.execute(
-        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM(review_status IN ('approved', 'auto_approved')) released, "
+        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM({RELEASED}) released, "
         f"MIN(lon) west, MIN(lat) south, MAX(lon) east, MAX(lat) north FROM boreholes WHERE {sql_where} "
         "GROUP BY grp ORDER BY grp", params).fetchall()
     projects: dict[str, Counter] = {}
@@ -285,7 +283,7 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}", params).fetchone()[0]
     rows = con.execute(
         "SELECT id, name, project, location_name, country, score, confidence, loc_confidence, loc_method, "
-        "n_layers, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file, reasons "
+        f"n_layers, {SOURCE_FILE}, reasons "
         f"FROM boreholes WHERE {where} ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
         (*params, limit, offset),
     ).fetchall()
@@ -300,13 +298,12 @@ def crs_groups(con: DB):
     for all of them at once (a document-wide CRS correction)."""
     groups: dict[tuple[str, int], dict] = {}
     rows = con.execute(
-        "SELECT b.id, f.epsg, (SELECT path FROM documents d WHERE d.doc_id = b.doc_id) AS source_file "
-        "FROM findings f JOIN boreholes b ON b.rid = f.rid "
-        "WHERE f.code = 'crs_inferred' AND b.review_status = 'pending_review' ORDER BY b.id"
+        f"SELECT boreholes.id, f.epsg, {SOURCE_FILE} FROM findings f JOIN boreholes ON boreholes.rid = f.rid "
+        "WHERE f.code = 'crs_inferred' AND boreholes.review_status = 'pending_review' ORDER BY boreholes.id"
     )
     for r in rows:
         key = (store.document_group(r["id"]), r["epsg"])
-        g = groups.setdefault(key, {"group": key[0], "epsg": r["epsg"], "name": export._crs_name(r["epsg"]),
+        g = groups.setdefault(key, {"group": key[0], "epsg": r["epsg"], "name": export.crs_name(r["epsg"]),
                                     "count": 0, "borehole_id": r["id"], "source_file": r["source_file"]})
         g["count"] += 1
     # One CRS per document only: if a document has several inferred systems, a person looks at each hole.
@@ -793,7 +790,7 @@ def stats_detail(con: DB, filters: ListFilters):
                   "FROM boreholes WHERE rid IN ({scope}) AND depth IS NOT NULL GROUP BY bin"):
         depths[r["bin"]] = r["n"]
     group_rows = rows(
-        f"SELECT {GROUP} grp, COUNT(*) n, SUM(review_status IN ('approved', 'auto_approved')) released "
+        f"SELECT {GROUP} grp, COUNT(*) n, SUM({RELEASED}) released "
         "FROM boreholes WHERE rid IN ({scope}) GROUP BY grp ORDER BY n DESC")
     top_finding: dict[str, dict] = {}  # most frequent finding that is no mere note, per group
     for r in rows(f"SELECT {GROUP} grp, f.code, COUNT(DISTINCT f.rid) n FROM findings f "
@@ -834,6 +831,11 @@ def export_csv(status: Literal["all", "released"] = "released"):
                              headers={"Content-Disposition": "attachment; filename=boreholes.csv"})
 
 
+def _export_rows(con: sqlite3.Connection, status: str) -> sqlite3.Cursor:
+    where = "" if status == "all" else f"WHERE {RELEASED}"
+    return con.execute(f"SELECT data, {SOURCE_FILE} FROM boreholes {where} ORDER BY id")
+
+
 def _csv_rows(status: str) -> Iterator[str]:
     buf = io.StringIO()
     w = csv.writer(buf)
@@ -852,22 +854,16 @@ def _csv_rows(status: str) -> Iterator[str]:
         "GeologicAge", "Colour", "ReviewStatus", "ReviewedBy", "Score",
     ])
     yield flush()
-    where = "" if status == "all" else "WHERE review_status IN ('auto_approved', 'approved')"
     con = store.connect()
     try:
-        rows = con.execute(
-            f"SELECT data, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file "
-            f"FROM boreholes {where} ORDER BY id"
-        )
-        for row in rows:
+        for row in _export_rows(con, status):
             _csv_record(w, row)
             yield flush()
     finally:
         con.close()
 
 
-def _csv_record(w, row) -> None:
-    """The rows of one record (one per layer)."""
+def _csv_record(w, row: sqlite3.Row) -> None:
     bh = Borehole.model_validate_json(row["data"])
     loc = bh.location
     original_crs = f"EPSG:{loc.crs_epsg}" if loc.crs_epsg else loc.crs_proj or loc.crs_raw
@@ -890,12 +886,8 @@ def _csv_record(w, row) -> None:
 def export_xlsx(con: DB, status: Literal["all", "released"] = "released"):
     """Workbook in Herrenknecht's BoreholeDataFormat (metadata, log data, samples, core runs, SPT,
     groundwater, test results). Released records only by default, like the CSV."""
-    where = "" if status == "all" else "WHERE review_status IN ('auto_approved', 'approved')"
-    rows = con.execute(
-        f"SELECT data, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file "
-        f"FROM boreholes {where} ORDER BY id"
-    ).fetchall()
-    content = export.workbook([(Borehole.model_validate_json(r["data"]), r["source_file"]) for r in rows])
+    content = export.workbook([(Borehole.model_validate_json(r["data"]), r["source_file"])
+                               for r in _export_rows(con, status)])
     return StreamingResponse(
         iter([content]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=boreholes.xlsx"},
