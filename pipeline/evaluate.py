@@ -111,14 +111,19 @@ def _metres(layers: list[list]) -> float:
 
 def lithology_metres(reference: list[list], current: list[list]) -> float:
     """Metres of the reference log where the current log has the same primary lithology at the same depth.
-    Unlike the per-layer check, this does not drop layers a variant segmented differently."""
+    Unlike the per-layer check, this does not drop layers a variant segmented differently. Overlapping current
+    layers count each metre once."""
     same = 0.0
     for top, bottom, primary in reference:
         if top is None or bottom is None:
             continue
-        for c_top, c_bottom, c_primary in current:
-            if c_primary == primary and c_top is not None and c_bottom is not None:
-                same += max(0.0, min(bottom, c_bottom) - max(top, c_top))
+        hits = sorted((max(top, c_top), min(bottom, c_bottom)) for c_top, c_bottom, c_primary in current
+                      if c_primary == primary and c_top is not None and c_bottom is not None)
+        end = top
+        for start, stop in hits:
+            if stop > max(start, end):
+                same += stop - max(start, end)
+                end = stop
     return same
 
 
@@ -138,13 +143,24 @@ def compare_layers(reference: list[list], current: list[list], tol: float = DEPT
             "layers_matched": pairs, "lithology_same": same}
 
 
+def _same_lab(reference: list, current: list, tol: float) -> bool:
+    parameter, value, top = reference[:3]
+    if not (current[0] == parameter and abs(current[1] - value) <= max(1e-6, abs(value) * 1e-3)
+            and (top is None) == (current[2] is None) and (top is None or abs(current[2] - top) <= tol)):
+        return False
+    # Entries stored before qualifier, name and unit were kept have three fields and are compared without them.
+    if len(reference) == 3 or len(current) == 3:
+        return True
+    return reference[3] == current[3] and (parameter != "other" or reference[4:6] == current[4:6])
+
+
 def match_lab(reference: list[list], current: list[list], tol: float = DEPTH_TOLERANCE_M) -> int:
-    """Reference lab values found with the same parameter, value and sample depth, each current one once."""
+    """Reference lab values found with the same parameter, value, qualifier and sample depth, catch-all
+    values also with the same printed name and unit; each current one once."""
     remaining = list(current)
     matched = 0
-    for parameter, value, top in reference:
-        hit = next((c for c in remaining if c[0] == parameter and abs(c[1] - value) <= max(1e-6, abs(value) * 1e-3)
-                    and (top is None) == (c[2] is None) and (top is None or abs(c[2] - top) <= tol)), None)
+    for r in reference:
+        hit = next((c for c in remaining if _same_lab(r, c, tol)), None)
         if hit is not None:
             remaining.remove(hit)
             matched += 1
@@ -266,7 +282,7 @@ LEGEND = [
     "lith: same primary lithology on layers whose top and bottom both match; lith m: share of the reference "
     "log length with the same lithology at the same depth.",
     "depth: final depth within the tolerance; gw: groundwater levels found; lab: lab values with the same "
-    "parameter, value and sample depth.",
+    "parameter, value, qualifier and sample depth (catch-all values also the same printed name and unit).",
     "extra: records of the same documents that are not in the reference (often not yet reviewed).",
     "corr: compared records with reviewer corrections (with --corrected they match the reference by construction).",
 ]

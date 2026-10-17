@@ -352,7 +352,20 @@ def cmd_experiment(args) -> None:
             extractions.update(_walk(chain, classes, llm.cached_extraction)[0])
         con = experiment.fresh_db(name)
     else:
-        name = args.name
+        name, kept = args.name, {}
+        if args.reference_pages:
+            # Re-extract whole chains so continuation context stays within one prompt; the rest keeps the
+            # main cache's pages, which the reference records do not come from.
+            con = store.connect()
+            wanted = experiment.reference_pages(con, reference)
+            con.close()
+            path_of = {d.doc_id: d.path for d in docs}
+            chains = _chains(todo, classes)
+            rerun = [any((path_of[p.doc_id], p.page) in wanted for p in ch) for ch in chains]
+            todo = [p for ch, r in zip(chains, rerun) if r for p in ch]
+            for ch, r in zip(chains, rerun):
+                if not r:
+                    kept.update(_walk(ch, classes, llm.cached_extraction)[0])
         fingerprint = experiment.use_prompt(name)
         new = [p for p in todo if not llm.cache_path("extract", p).exists()]
         if new and not args.yes:
@@ -361,7 +374,7 @@ def cmd_experiment(args) -> None:
         if new:
             _require_credentials()
         con = experiment.fresh_db(name)
-        extractions = _extract(todo, classes, con)  # empty DB: no reviewer knowledge in the prompt
+        extractions = kept | _extract(todo, classes, con)  # empty DB: no reviewer knowledge in the prompt
     _store(con, docs, rendered, classes, extractions, labs)
     experiment.save_proxy(name, experiment.proxy(con, docs, rendered))
     con.close()
@@ -456,6 +469,8 @@ def main() -> None:
     p.add_argument("name", nargs="?")
     p.add_argument("--doc", action="append", help="documents to use instead of the reference documents")
     p.add_argument("--yes", action="store_true", help="confirm the extraction cost")
+    p.add_argument("--reference-pages", action="store_true",
+                   help="run: re-extract only the pages of reference records; other pages come from the main cache")
     p.add_argument("--against", metavar="ARM", help="compare: agreement with this arm instead of the reference")
     p.set_defaults(fn=cmd_experiment)
     args = parser.parse_args()

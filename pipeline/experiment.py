@@ -176,5 +176,13 @@ def compare_arms(reference_path: Path = evaluate.REFERENCE_PATH, against: str | 
     return "\n".join(lines + [""] + evaluate.LEGEND)
 
 
+def reference_pages(con: sqlite3.Connection, reference: dict[str, dict]) -> set[tuple[str, int]]:
+    """(file, page) of the log pages the reference records were read from, per the main database."""
+    ids = list(reference)
+    return {(r[0], r[1]) for i in range(0, len(ids), 500) for r in con.execute(
+        "SELECT DISTINCT s.file, s.page FROM record_sources s JOIN boreholes b ON b.rid = s.rid "
+        f"WHERE s.role = 'log' AND b.id IN ({','.join('?' * len(ids[i:i + 500]))})", ids[i:i + 500])}
+
+
 def reference_docs(reference: dict[str, dict]) -> set[str]:
     return {r["doc_id"] for r in reference.values()}
