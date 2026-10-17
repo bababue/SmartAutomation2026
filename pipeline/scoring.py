@@ -23,9 +23,10 @@ BLOCKING = ("no layers extracted", "log not extracted", "log not assembled", "CR
             "depths printed in feet", "missing sheets", "sheet header differs", "same printed coordinates as",
             "same hole assumed", "sources disagree on")
 
-# Findings that name files, holes and header texts of other documents: their own severity holds, whatever
-# those names contain ('Singapore' contains 'gap').
-QUOTING = ("combined with the record from", "possibly the same hole as", "sources differ on")
+# Findings that name files, holes, header texts of other documents or gazetteer places: their own severity
+# holds, whatever those names contain ('Singapore' contains 'gap').
+QUOTING = ("combined with the record from", "possibly the same hole as", "sources differ on", "place estimate ",
+           "place name ")
 
 
 def is_blocking(issue: str) -> bool:
@@ -217,6 +218,7 @@ FINDING_CODES: list[tuple[str, str]] = [
     ("position from a local grid", "position_from_grid"), ("position from place name only", "position_from_place"),
     ("printed coordinates could not be matched", "coords_unmatched"), ("coordinates ", "coords_far_from_place"),
     ("position ", "position_outlier"), ("no place to cross-check", "no_place_check"),
+    ("place estimate ", "place_disagrees"), ("place name ", "place_ambiguous"),
     ("not georeferenced", "not_georeferenced"), ("invalid WGS84", "invalid_position"), ("unreadable:", "unreadable"),
     ("boundary inferred", "boundary_inferred"), ("properties differ", "sheet_conflict"),
     ("core loss inferred", "core_loss_inferred"),

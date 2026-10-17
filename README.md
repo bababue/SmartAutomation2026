@@ -171,6 +171,19 @@ temp/HKBoreholeChallenge_Data_BFH2026/
 
 A different location works too: set `DATASET_DIR` (see Configuration).
 
+Optional, for the place check: an offline gazetteer (about 11 MB download, 30 MB index in `data/`):
+
+```bash
+.venv/bin/python -m pipeline.gazetteer download
+```
+
+It holds the GeoNames places with 1,000+ inhabitants and the state and province names (geonames.org,
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): credit GeoNames when you show results). The place a
+log names is looked up there and checks the printed coordinates. The extraction model's own place estimate is
+the fallback. A name that fits several places, or a gazetteer place far from the estimate, becomes a finding.
+A position from the place name alone is not moved, so earlier review decisions stay valid. Without the index,
+runs print a note and use the estimate as before.
+
 ### 5. Choose how the pipeline talks to Claude
 
 **Team setup.** The team runs Claude Haiku 5.5 via OpenRouter (Option C below): in a comparison on the
@@ -369,6 +382,7 @@ Environment variables, read from the shell or from `.env`:
 | `LLM_BACKEND` | `api` | `api` (Anthropic API), `claude-code` (local `claude -p`) or `openai` (OpenAI-compatible API) |
 | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | `http://localhost:11434/v1` / – | server and key for `LLM_BACKEND=openai` (e.g. OpenRouter) |
 | `OPENROUTER_ZDR` | `1` | OpenRouter only: route to providers with zero data retention; `0` for a model without one |
+| `GAZETTEER_PATH` | `data/gazetteer.sqlite` | offline GeoNames index for the place check (`python -m pipeline.gazetteer download`) |
 | `CLAUDE_CLI` | `claude` | path to the Claude Code CLI |
 | `CLAUDE_CONFIG_DIR` | CLI default | profile directory for another subscription (CLI backend) |
 | `CLAUDE_CLI_TOKEN_FILE` | – | token file for another subscription (CLI backend) |

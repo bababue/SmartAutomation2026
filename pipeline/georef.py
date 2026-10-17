@@ -24,6 +24,8 @@ from pyproj import Transformer
 
 from schema.borehole import GeorefMethod, Location
 
+from . import gazetteer
+
 # --- CRS knowledge -----------------------------------------------------------------
 
 # A CRS is an EPSG code, or 'AUTH:code' for a local grid that has none.
@@ -430,6 +432,61 @@ def georeference(
     place_lon: float | None,
     place_precision_km: float | None,
     place_name: str | None = None,
+) -> GeorefResult:
+    """The location text is looked up in the gazetteer. Its place replaces the model's estimate where it is the
+    only one (or the one of several namesakes the estimate lies at) and agrees with the estimate, or where the
+    printed coordinates fit it better; otherwise the estimate stays, with a finding. A name that fits several
+    places, or none in the stated country, keeps the estimate and says so."""
+    found = gazetteer.lookup(place_name, country)
+    estimate = (place_lat, place_lon) if place_lat is not None and place_lon is not None else None
+    if found.ambiguous and estimate:
+        near = [p for p in found.ambiguous if haversine_km(*estimate, p.lat, p.lon) <= 50.0]
+        if len(near) == 1:
+            found = gazetteer.Lookup(place=near[0])
+    if found.ambiguous:
+        result = _georeference(coords_raw, crs_raw, country, place_lat, place_lon, place_precision_km, place_name)
+        result.issues.insert(0, "place name fits several places: "
+                             + ", ".join(f"{p.name} ({p.country})" for p in found.ambiguous))
+        return result
+    if found.elsewhere and (not estimate or any(haversine_km(*estimate, e.lat, e.lon) <= 50.0 for e in found.elsewhere)):
+        # Small places are missing from the gazetteer: only an estimate at a namesake abroad is a finding.
+        result = _georeference(coords_raw, crs_raw, country, place_lat, place_lon, place_precision_km, place_name)
+        result.issues.insert(0, f"place name not in {country}, only in: "
+                             + ", ".join(f"{p.name} ({p.country})" for p in found.elsewhere))
+        return result
+    g = found.place
+    if g is None:
+        return _georeference(coords_raw, crs_raw, country, place_lat, place_lon, place_precision_km, place_name)
+    by_gazetteer = _georeference(coords_raw, crs_raw, country, g.lat, g.lon, g.precision_km, place_name)
+    if not estimate:
+        return by_gazetteer
+    # With an estimate, the gazetteer place only checks printed coordinates: a position from the place name
+    # alone stays where it was (moving it a few km would drop a reviewer's approval for nothing).
+    by_estimate = _georeference(coords_raw, crs_raw, country, place_lat, place_lon, place_precision_km, place_name)
+    stated = GeorefMethod.stated_coordinates
+    distance = haversine_km(*estimate, g.lat, g.lon)
+    if distance <= max(50.0, 2 * (place_precision_km or 10.0), 2 * g.precision_km):
+        return by_gazetteer if by_gazetteer.location.method == stated else by_estimate
+    # Far apart: a street or region can be named after another town. The printed coordinates decide.
+    if by_gazetteer.location.method == stated and by_estimate.location.method != stated:
+        by_gazetteer.issues.insert(0, f"place estimate {distance:.0f} km from {g.name}, {g.country} (gazetteer), "
+                                      "where the printed coordinates fit")
+        by_gazetteer.location.confidence = min(by_gazetteer.location.confidence or 0.0, 0.5)
+        return by_gazetteer
+    if by_estimate.location.method != stated:  # coordinates that fit the estimate settle it
+        by_estimate.issues.insert(0, f"place estimate {distance:.0f} km from {g.name}, {g.country} (gazetteer); "
+                                     "estimate kept")
+    return by_estimate
+
+
+def _georeference(
+    coords_raw: str | None,
+    crs_raw: str | None,
+    country: str | None,
+    place_lat: float | None,
+    place_lon: float | None,
+    place_precision_km: float | None,
+    place_name: str | None,
 ) -> GeorefResult:
     issues: list[str] = []
     place = (place_lat, place_lon) if place_lat is not None and place_lon is not None else None
