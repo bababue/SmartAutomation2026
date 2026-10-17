@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-from pyproj import Transformer
+from pyproj import CRS, Transformer
 
 from schema.borehole import GeorefMethod, Location
 
@@ -87,6 +87,14 @@ WESTING_GRIDS = {10250, 10160, 10254}
 @lru_cache(maxsize=None)
 def _to_wgs84(crs: Crs) -> Transformer:
     return Transformer.from_crs(crs, GEOGRAPHIC, always_xy=True)
+
+
+@lru_cache(maxsize=None)
+def _is_utm(crs: Crs) -> bool:
+    try:
+        return CRS.from_user_input(crs).utm_zone is not None
+    except Exception:
+        return False
 
 
 def _utm_epsgs(lat: float, lon: float, country: str | None) -> list[int]:
@@ -377,6 +385,10 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
                     continue
                 for crs in epsgs:
                     if crs in X_NORTHING_GRIDS and labelled and north_t.label != "x":
+                        continue
+                    # A UTM easting lies within some 1,000 km of 500,000 m. One far outside is a number split
+                    # in transcription ('389.9 40,000') or a swapped axis, which would still resolve to a point.
+                    if not 1000 <= abs(e) < 2_000_000 and _is_utm(crs):
                         continue
                     # Danish System 34/45 count y towards the west; logs print it with or without the sign.
                     for east in ([e, -e] if crs in WESTING_GRIDS and e > 0 else [e]):

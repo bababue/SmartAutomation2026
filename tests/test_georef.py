@@ -4,7 +4,7 @@ challenge data (no confidential coordinates in the repo)."""
 import pytest
 from pyproj import Transformer
 
-from pipeline.georef import georeference, haversine_km, parse_tokens
+from pipeline.georef import georeference, haversine_km, parse_tokens, resolve_with
 
 
 def fwd(epsg: int, lat: float, lon: float) -> tuple[float, float]:
@@ -246,3 +246,12 @@ def test_a_utm_zone_beside_norwegian_labels_is_no_coordinate():
     r = georeference(raw, "Kartdatum WGS 84, UTM Sone 32", "NO", 59.91, 10.75, 5.0)
     assert haversine_km(r.location.lat, r.location.lon, 59.9119, 10.7337) < 0.01
     assert r.location.confidence >= 0.9 and not r.issues
+
+
+def test_a_utm_easting_split_in_transcription_resolves_to_no_point():
+    # Brandenburg Gate in ETRS89 / UTM 33N, the easting split by a space as a model may copy it
+    raw = "N= 5.819.670,000 E= 389.9 40,000"
+    assert resolve_with(raw, 25833) is None  # neither 389.9 m nor the swapped axes
+    assert resolve_with("N= 5.819.670,000 E= 389.940,000", 25833) is not None
+    r = georeference(raw, "ETRS89 / UTM 33N", "DE", None, None, None)
+    assert r.location.lat is None
