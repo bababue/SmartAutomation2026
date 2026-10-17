@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { postReview } from '../api'
 import { STATUS_LABEL, fmtDateTime, loadReviewer, saveReviewer, scoreText } from '../review'
 import type { Detail, DetailUpdate, ReviewStatus } from '../types'
@@ -16,13 +16,15 @@ interface Props {
   detail: Detail
   onChange: (update: DetailUpdate) => void
   nav?: QueueNav | null
+  /** Extra chips shown before the score reasons. */
+  children?: ReactNode
 }
 
 const typing = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
 
 /** Release status, why it needs a human, and the decision controls. */
-export function ReviewBox({ detail, onChange, nav }: Props) {
+export function ReviewBox({ detail, onChange, nav, children }: Props) {
   const bh = detail.borehole
   const [reviewer, setReviewer] = useState(loadReviewer)
   const [comment, setComment] = useState('')
@@ -73,24 +75,35 @@ export function ReviewBox({ detail, onChange, nav }: Props) {
       <div className="review-head">
         <div className="review-score" title={`Release threshold ${scoreText(detail.threshold)}`}>
           <span className="review-score-n">{scoreText(bh.score)}</span>
-          <span className="review-score-of">/ 100</span>
+          <span className="review-score-of">/100</span>
         </div>
-        <div>
-          <p className="review-status">{STATUS_LABEL[status]}</p>
-          <p className="muted review-meta">
-            {decided
-              ? `by ${bh.reviewed_by ?? 'unknown'}, ${fmtDateTime(bh.reviewed_at)}`
-              : status === 'auto_approved'
-                ? `Score at or above ${scoreText(detail.threshold)} and no findings that need a person`
-                : `Below ${scoreText(detail.threshold)} or a finding that needs a person`}
-          </p>
+        <span className="review-status" title={decided
+          ? `by ${bh.reviewed_by ?? 'unknown'}, ${fmtDateTime(bh.reviewed_at)}`
+          : status === 'auto_approved'
+            ? `Score at or above ${scoreText(detail.threshold)} and no findings that need a person`
+            : `Below ${scoreText(detail.threshold)} or a finding that needs a person`}>
+          {STATUS_LABEL[status]}
+        </span>
+        <ul className="review-chips">
+          {children}
+          {bh.score_reasons.map((r) => <li key={r} className="chip-pill">{r}</li>)}
+        </ul>
+        <div className="review-buttons">
+          {decided && (
+            <button className="btn" disabled={busy} onClick={() => decide('pending_review')}>Reopen</button>
+          )}
+          {status !== 'rejected' && (
+            <button className="btn btn-reject" disabled={busy} onClick={() => decide('rejected')} title="Shortcut: R">
+              {nav ? 'Reject and next' : 'Reject'} <kbd>R</kbd>
+            </button>
+          )}
+          {status !== 'approved' && (
+            <button className="btn btn-approve" disabled={busy} onClick={() => decide('approved')} title="Shortcut: A">
+              {nav ? 'Approve and next' : 'Approve'} <kbd>A</kbd>
+            </button>
+          )}
         </div>
       </div>
-
-      {bh.score_reasons.length > 0 && (
-        <ul className="review-reasons">{bh.score_reasons.map((r) => <li key={r}>{r}</li>)}</ul>
-      )}
-      {bh.review_comment && <p className="review-comment">“{bh.review_comment}”</p>}
 
       <div className="review-form">
         <label>
@@ -101,21 +114,8 @@ export function ReviewBox({ detail, onChange, nav }: Props) {
           Comment (optional)
           <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="e.g. depths checked against page 2" />
         </label>
-        <div className="review-buttons">
-          {status !== 'approved' && (
-            <button className="btn btn-approve" disabled={busy} onClick={() => decide('approved')} title="Shortcut: A">
-              {nav ? 'Approve and next' : 'Approve'}
-            </button>
-          )}
-          {status !== 'rejected' && (
-            <button className="btn btn-reject" disabled={busy} onClick={() => decide('rejected')} title="Shortcut: R">
-              {nav ? 'Reject and next' : 'Reject'}
-            </button>
-          )}
-          {decided && (
-            <button className="btn" disabled={busy} onClick={() => decide('pending_review')}>Reopen</button>
-          )}
-        </div>
+        {decided && <span className="muted review-meta">by {bh.reviewed_by ?? 'unknown'}, {fmtDateTime(bh.reviewed_at)}</span>}
+        {bh.review_comment && <span className="review-comment">“{bh.review_comment}”</span>}
       </div>
       {error && <p className="error" role="alert">{error}</p>}
 
