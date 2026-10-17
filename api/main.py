@@ -6,12 +6,15 @@ import csv
 import io
 import json
 import re
+import shutil
 import sqlite3
+import threading
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,7 +24,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, export, scoring, store
+from pipeline import config, corrections, export, ingest, scoring, store
 from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
 app = FastAPI(title="Borehole Atlas API")
@@ -444,6 +447,69 @@ def correct(borehole_id: str, body: Correction, con: DB):
     return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
             "corrections": store.corrections_for(con, borehole_id), "blocking": _blocking(bh), "updated": updated,
             "content_hash": _content_hash(con, borehole_id)}
+
+
+# --- upload ------------------------------------------------------------------------------------------
+
+UPLOADS: dict[str, dict] = {}  # job_id -> {status: processing|done|error, boreholes: [...], error}
+
+
+@app.post("/api/upload")
+async def upload_document(file: UploadFile = File(...)):
+    # Only the final path component: a client-supplied name must never place the file outside upload_dir.
+    filename = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1] or "upload"
+    suffix = Path(filename).suffix.lower()
+    if suffix not in ingest.SUPPORTED:
+        raise HTTPException(415, f"unsupported file type {suffix or '(none)'}; use PDF, JPG, PNG, TIFF or DOCX")
+    job_id = uuid.uuid4().hex[:12]
+    doc_id = f"upload-{job_id}"
+    upload_dir = config.UPLOADS_DIR / doc_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dest = upload_dir / filename
+    size = 0
+    with dest.open("wb") as out:
+        while chunk := await file.read(1 << 20):
+            size += len(chunk)
+            if size > config.MAX_UPLOAD_BYTES:
+                out.close()
+                shutil.rmtree(upload_dir, ignore_errors=True)
+                raise HTTPException(413, f"file exceeds the {config.MAX_UPLOAD_BYTES // (1 << 20)} MB upload limit")
+            out.write(chunk)
+
+    kind = "pdf" if suffix == ".pdf" else "docx" if suffix == ".docx" else "image"
+    doc = ingest.SourceDoc(doc_id=doc_id, path=filename, kind=kind)
+    pages = ingest.render(doc, upload_dir)
+    if len(pages) > config.MAX_UPLOAD_PAGES:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        raise HTTPException(413, f"{len(pages)} pages exceeds the {config.MAX_UPLOAD_PAGES}-page upload limit")
+
+    UPLOADS[job_id] = {"status": "processing", "boreholes": [], "error": None}
+
+    def work():
+        from pipeline.__main__ import run
+        try:
+            run([doc], dataset_dir=upload_dir)
+            con = store.connect()
+            try:
+                rows = con.execute(
+                    "SELECT id, name, review_status FROM boreholes WHERE doc_id = ?", (doc_id,)
+                ).fetchall()
+            finally:
+                con.close()
+            UPLOADS[job_id] = {"status": "done", "boreholes": [dict(r) for r in rows], "error": None}
+        except Exception as exc:  # reported via /api/upload/{job_id}
+            UPLOADS[job_id] = {"status": "error", "boreholes": [], "error": f"{type(exc).__name__}: {exc}"}
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": job_id, "pages": len(pages)}
+
+
+@app.get("/api/upload/{job_id}")
+def upload_status(job_id: str):
+    job = UPLOADS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "upload job not found")
+    return job
 
 
 @app.get("/api/pages/{doc_id}/{page}")

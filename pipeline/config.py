@@ -15,6 +15,11 @@ DATASET_DIR = Path(os.getenv("DATASET_DIR", ROOT / "temp/HKBoreholeChallenge_Dat
 DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
 PAGES_DIR = DATA_DIR / "pages"  # rendered page images, served to the UI
 CACHE_DIR = DATA_DIR / "cache"  # LLM responses, keyed by input hash
+UPLOADS_DIR = DATA_DIR / "uploads"  # documents submitted through the web UI, one subfolder per upload
+# A page cap keeps a single web upload's API cost bounded without asking for confirmation. The byte
+# cap is checked first (while streaming to disk) so an oversized file is rejected before it is rendered.
+MAX_UPLOAD_PAGES = int(os.getenv("MAX_UPLOAD_PAGES", "40"))
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 # PDF exports of DOCX files (e.g. saved from Word), same relative path as in the dataset. DOCX logs are
 # often laid out from several image strips in table cells; only a rendered page shows them together.
 CONVERTED_DIR = DATA_DIR / "converted"

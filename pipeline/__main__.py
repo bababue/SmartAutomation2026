@@ -37,10 +37,10 @@ def _select(args) -> list[ingest.SourceDoc]:
     return docs
 
 
-def _ingest(docs, con) -> dict[str, list[ingest.PageImage]]:
+def _ingest(docs, con, dataset_dir: Path = config.DATASET_DIR) -> dict[str, list[ingest.PageImage]]:
     rendered = {}
     for d in docs:
-        pages = ingest.render(d)
+        pages = ingest.render(d, dataset_dir)
         rendered[d.doc_id] = pages
         existing = {r["page"]: r for r in store.page_rows(con, d.doc_id)}
         store.save_document(
@@ -153,20 +153,20 @@ def cmd_estimate(args) -> None:
         print(f"measured {stage}: {pages} pages, ${usd:.2f} (${usd / pages:.4f} per page)")
 
 
-def cmd_run(args) -> None:
-    if not args.doc and not args.all:
-        sys.exit("choose documents with --doc NAME (repeatable) or --all")
-    _require_credentials()
+def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = True,
+        dataset_dir: Path = config.DATASET_DIR) -> None:
+    """Ingest, classify, extract and store the given documents (costs API calls)."""
+    if msg := _missing_credentials():
+        raise RuntimeError(msg)
     con = store.connect()
-    docs = _select(args)
     print(f"Ingest {len(docs)} documents (LLM backend: {config.LLM_BACKEND})")
-    rendered = _ingest(docs, con)
-    if args.max_pages:  # treat the first N pages as the whole document for this run
-        rendered = {doc_id: ps[: args.max_pages] for doc_id, ps in rendered.items()}
+    rendered = _ingest(docs, con, dataset_dir)
+    if max_pages:  # treat the first N pages as the whole document for this run
+        rendered = {doc_id: ps[:max_pages] for doc_id, ps in rendered.items()}
     pages = [p for ps in rendered.values() for p in ps]
     est = len(pages) * COST_CLASSIFY + len(pages) * 0.4 * COST_EXTRACT
-    if est > 5 and not args.yes:
-        sys.exit(f"{len(pages)} pages, estimated ≈ ${est:.0f}. Re-run with --yes to proceed.")
+    if est > 5 and not yes:
+        raise RuntimeError(f"{len(pages)} pages, estimated ≈ ${est:.0f}. Re-run with --yes to proceed.")
 
     print(f"Classify {len(pages)} pages")
     classes = _parallel(llm.classify_page, pages, "classify")
@@ -187,10 +187,25 @@ def cmd_run(args) -> None:
     _store(con, docs, rendered, classes, extractions, labs)
 
 
+def cmd_run(args) -> None:
+    if not args.doc and not args.all:
+        sys.exit("choose documents with --doc NAME (repeatable) or --all")
+    try:
+        run(_select(args), args.max_pages, args.yes)
+    except RuntimeError as exc:
+        sys.exit(str(exc))
+
+
 def _require_credentials() -> None:
+    if msg := _missing_credentials():
+        sys.exit(msg)
+
+
+def _missing_credentials() -> str | None:
     if config.LLM_BACKEND == "api" and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
-        sys.exit("No Anthropic credentials: put ANTHROPIC_API_KEY=... into .env (git-ignored), "
-                 "or set LLM_BACKEND=claude-code to use the local Claude Code login.")
+        return ("No Anthropic credentials: put ANTHROPIC_API_KEY=... into .env (git-ignored), "
+                "or set LLM_BACKEND=claude-code to use the local Claude Code login.")
+    return None
 
 
 def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool = False) -> None:

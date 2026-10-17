@@ -44,7 +44,7 @@ def init(name: str) -> Path:
     if path.exists():
         raise SystemExit(f"{path} exists")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(llm.EXTRACT_SYSTEM)
+    path.write_text(llm.EXTRACT_SYSTEM, encoding="utf-8")
     return path
 
 
@@ -54,7 +54,7 @@ def use_prompt(name: str) -> str:
     path = arm_dir(name) / "prompt.md"
     if not path.exists():
         raise SystemExit(f"no prompt for {name}: run `python -m pipeline experiment init {name}` and edit {path}")
-    prompt = path.read_text()
+    prompt = path.read_text(encoding="utf-8")
     fingerprint = hashlib.sha256(prompt.encode()).hexdigest()[:12]
     config.CACHE_DIR = arm_dir(name) / "cache"
     config.PROMPT_VERSION = f"exp-{fingerprint}"

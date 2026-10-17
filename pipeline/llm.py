@@ -379,7 +379,8 @@ def _call_claude_code(model: str, system: str, image: Path, text: str, out: type
     last_error = ""
     for _ in range(2):
         run_cmd = cmd if not last_error else cmd[:2] + [cmd[2] + f"\n\nA previous answer failed validation:\n{last_error}"] + cmd[3:]
-        proc = subprocess.run(run_cmd, capture_output=True, text=True, timeout=900, cwd=config.ROOT, env=_cli_env())
+        proc = subprocess.run(run_cmd, capture_output=True, text=True, encoding="utf-8", timeout=900,
+                              cwd=config.ROOT, env=_cli_env())
         try:
             result = json.loads(proc.stdout)
         except json.JSONDecodeError:
