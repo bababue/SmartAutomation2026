@@ -97,7 +97,7 @@ def test_swapped_analytes_with_equal_values_do_not_match():
         bh = Borehole(borehole_id="DOC1:BH1", borehole_name="BH1", lab_results=[
             LabResult(parameter=LabParameter.other, parameter_raw=name, value=1.0, value_raw=raw, qualifier=q, top_m=2.0)
             for name, raw, q in results])
-        return store.extracted_summary(bh)["lab"]
+        return evaluate.extracted_summary(bh)["lab"]
 
     reference = lab(("Analyte A", "<1 mg/kg", "<"), ("Analyte B", "<1 mg/kg", "<"))
     assert evaluate.match_lab(reference, lab(("Analyte A", "<1 mg/kg", "<"), ("Analyte B", "<1 mg/kg", "<"))) == 2
@@ -154,7 +154,7 @@ def test_corrected_record_still_shows_the_model_error(tmp_path, monkeypatch):
                   layers=[Layer(top_m=0, bottom_m=2, description_original="Sand", primary="sand", source=src),
                           Layer(top_m=2, bottom_m=5, description_original="Silt", primary="clay", source=src)],
                   location=Location(lat=LAT, lon=LON, method=GeorefMethod.stated_coordinates, confidence=1))
-    store.save_borehole(con, bh, extracted=store.extracted_summary(bh))  # as the pipeline stores it
+    store.save_borehole(con, bh, extracted=evaluate.extracted_summary(bh))  # as the pipeline stores it
 
     r = TestClient(app).post("/api/boreholes/DOC1:BH1/corrections", json={
         "reviewer": "Anna", "kind": "layer", "payload": {"orig_top": 2, "orig_bottom": 5, "primary": "silt"}})
@@ -206,10 +206,10 @@ def test_missing_record_counts_against_depth_groundwater_and_lab():
 def test_lab_evaluation_distinguishes_range_upper_bounds():
     bh = Borehole(borehole_id="r:BH1", borehole_name="BH1", lab_results=[
         LabResult(parameter="ucs", value=5, value_upper=10, qualifier="range", top_m=2)])
-    reference = store.extracted_summary(bh)["lab"]
+    reference = evaluate.extracted_summary(bh)["lab"]
     assert evaluate.match_lab(reference, reference) == 1
     bh.lab_results[0].value_upper = 20
-    assert evaluate.match_lab(reference, store.extracted_summary(bh)["lab"]) == 0
+    assert evaluate.match_lab(reference, evaluate.extracted_summary(bh)["lab"]) == 0
 
 
 def test_release_audit_counts_corrected_and_rejected_releases_as_wrong(tmp_path):

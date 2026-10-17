@@ -359,7 +359,7 @@ def _write_group(con, records, doc_ids: list[str], dry_run: bool) -> list:
             corrections.apply(bh, fixes[bh.borehole_id])
         records = dedupe(records, protected, {bh.borehole_id: bh for bh in judged})
         # The model's output for `eval`: after merging duplicates, which moves lab values, before reviewer input.
-        extracted = {bh.borehole_id: store.extracted_summary(bh) for bh in records}
+        extracted = {bh.borehole_id: evaluate.extracted_summary(bh) for bh in records}
         knowledge.apply_all(con, records)
         unstack_place_positions(records, protected)
         for bh in records:  # reviewer fixes survive re-extraction, and win over learned knowledge

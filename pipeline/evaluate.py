@@ -26,6 +26,7 @@ from pathlib import Path
 from schema.borehole import Borehole, ReviewStatus
 
 from . import config, store
+from .assemble import _lab_name
 from .georef import haversine_km
 
 REFERENCE_PATH = config.DATA_DIR / "eval" / "reference.json"
@@ -33,9 +34,22 @@ AUDIT_PATH = config.DATA_DIR / "eval" / "audit.json"
 DEPTH_TOLERANCE_M = 0.1
 
 
+def extracted_summary(bh: Borehole) -> dict:
+    """What the model produced, kept before reviewer corrections are applied, in the form `eval` compares.
+    `key` (the natural key) matches the same hole when a variant names it differently. A lab value is
+    [parameter, value, top_m, qualifier, name, unit, value_upper]; name and unit tell chemistry rows apart."""
+    loc = bh.location
+    return {"key": store.natural_key(bh),
+            "layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
+            "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg, "depth_m": bh.depth_m,
+            "groundwater": sorted(gw.depth_m for gw in bh.groundwater if gw.depth_m is not None),
+            "lab": [[r.parameter.value, r.value, r.top_m, r.qualifier, *_lab_name(r), r.value_upper]
+                    for r in bh.lab_results]}
+
+
 def entry(bh: Borehole) -> dict:
     """The parts of a record the evaluation compares (final values)."""
-    return {"doc_id": bh.borehole_id.split(":", 1)[0], **store.extracted_summary(bh)}
+    return {"doc_id": store.doc_of(bh.borehole_id), **extracted_summary(bh)}
 
 
 def _records(con: sqlite3.Connection, where: str = "", params: tuple = ()) -> dict[str, Borehole]:

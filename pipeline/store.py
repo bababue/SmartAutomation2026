@@ -224,20 +224,6 @@ def content_hash(bh: Borehole) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def extracted_summary(bh: Borehole) -> dict:
-    """What the model produced, kept before reviewer corrections are applied, in the form `eval` compares.
-    `key` (the natural key) matches the same hole when a variant names it differently. A lab value is
-    [parameter, value, top_m, qualifier, name, unit, value_upper]; name and unit tell chemistry rows apart."""
-    from .assemble import _lab_name
-    loc = bh.location
-    return {"key": natural_key(bh),
-            "layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
-            "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg, "depth_m": bh.depth_m,
-            "groundwater": sorted(gw.depth_m for gw in bh.groundwater if gw.depth_m is not None),
-            "lab": [[r.parameter.value, r.value, r.top_m, r.qualifier, *_lab_name(r), r.value_upper]
-                    for r in bh.lab_results]}
-
-
 def _delete(con: sqlite3.Connection, borehole_id: str) -> dict | None:
     row = con.execute("SELECT rid, content_hash, data, extracted, uid, review_revision FROM boreholes WHERE id = ?",
                       (borehole_id,)).fetchone()
@@ -262,7 +248,7 @@ def delete_document_boreholes(con: sqlite3.Connection, doc_id: str) -> dict[str,
 def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, previous: dict | None = None,
                   extracted: dict | None = None) -> None:
     """Insert or replace a record. `previous` is the earlier row if it was already deleted. `extracted` is the
-    uncorrected model output (see `extracted_summary`); without it the previous row's is kept."""
+    uncorrected model output (see `evaluate.extracted_summary`); without it the previous row's is kept."""
     digest = content_hash(bh)
     previous = _delete(con, bh.borehole_id) or previous
     extracted_json = as_json(extracted) if extracted is not None else (previous or {}).get("extracted")
@@ -393,8 +379,8 @@ def _write_lab_values(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
                      for i, r in enumerate(bh.lab_results)])
 
 
-def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str | None = None, uid: str | None = None,
-            version_id: int | None = None, review_revision: int = 0) -> None:
+def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str | None, uid: str, version_id: int,
+            review_revision: int) -> None:
     loc = bh.location
     doc_id = doc_of(bh.borehole_id)
     lithologies = sorted({layer.primary.value for layer in bh.layers})
