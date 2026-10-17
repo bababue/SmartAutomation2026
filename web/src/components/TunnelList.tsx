@@ -27,7 +27,6 @@ export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onCreate,
     ...[...byProject].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
       .map(([key, items]) => ({ key, name: key, tunnels: items })),
   ]
-
   function toggle(group: string) {
     setExpanded((current) => {
       const next = new Set(current)
@@ -47,7 +46,7 @@ export function TunnelList({ tunnels, boreholes, selectedId, onSelect, onCreate,
     </div>
     {tunnels.length ? <ul className="tunnel-results">
       {groups.map((group) => {
-        const open = group.tunnels.some((tunnel) => tunnel.id === selectedId) || expanded.has(group.key)
+        const open = expanded.has(group.key)
         return <li key={group.key} className="result-group">
           <div className="group-head">
             <button className="group-toggle" onClick={() => toggle(group.key)} aria-expanded={open}>

@@ -23,7 +23,6 @@ export function ReviewList({ items, groups, total, loading, audit, selectedId, o
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const byGroup = new Map<string, QueueItem[]>()
   for (const item of items) byGroup.set(item.grp, [...(byGroup.get(item.grp) ?? []), item])
-
   function toggle(group: string) {
     setExpanded((current) => {
       const next = new Set(current)
@@ -53,7 +52,7 @@ export function ReviewList({ items, groups, total, loading, audit, selectedId, o
           {groups.map((group) => {
             const entries = byGroup.get(group.group) ?? []
             const share = group.count ? Math.round(100 * group.released / group.count) : 0
-            const open = entries.some((item) => item.id === selectedId) || expanded.has(group.group)
+            const open = expanded.has(group.group)
             return <li key={group.group} className="result-group">
               <div className="group-head">
                 <button className="group-toggle" onClick={() => toggle(group.group)} aria-expanded={open}>
@@ -64,6 +63,7 @@ export function ReviewList({ items, groups, total, loading, audit, selectedId, o
                 </button>
               </div>
               {open && <ul className="group-items">
+                {!entries.length && <li className="group-empty">No {audit ? 'sampled' : 'waiting'} boreholes in this group.</li>}
                 {entries.map((it) => <li key={it.id}>
                   <button className={`review-item${it.id === selectedId ? ' result-selected' : ''}`} onClick={() => onSelect(it.id)}
                     aria-current={it.id === selectedId}>

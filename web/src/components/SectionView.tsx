@@ -14,7 +14,6 @@ interface Props {
   selectedId: string | null
   onSelect: (id: string) => void
   onRemove: (id: string) => void
-  onClear: () => void
 }
 
 /** Half-width of the band around a joined rock head, as a share of the distance to the nearest hole. */
@@ -121,14 +120,13 @@ function useBoxZoom({ plotWidth, svgWidth, onZoom, onPick, onDragStart }: {
 }
 
 /** Boreholes along a route, with lithology inferred between adjacent logs. */
-export function SectionView({ features, route, selectedId, onSelect, onRemove, onClear }: Props) {
+export function SectionView({ features, route, selectedId, onSelect, onRemove }: Props) {
   const section = useRef<HTMLElement>(null)
   const box = useRef<HTMLDivElement>(null)
   const tooltip = useRef<HTMLDivElement>(null)
   const helpDialog = useRef<HTMLDialogElement>(null)
   const [width, setWidth] = useState(900)
   const [viewport, setViewport] = useState<Viewport | null>(null)
-  const [correlate, setCorrelate] = useState(true)
   useEffect(() => {
     const el = box.current
     if (!el) return
@@ -228,11 +226,11 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     })
   const rockJoins = joins((g) => g.rock_head_m)
   const waterJoins = joins((g) => g.groundwater_m)
-  const boundaryJoins = correlate ? boundaries.flatMap((list, j) => list
+  const boundaryJoins = boundaries.flatMap((list, j) => list
     // The rock head is drawn already where both holes reach rock at this boundary.
     .filter((b) => !(b.below === 'rock' && ordered[j].properties.ground?.rock_head_m === b.leftDepth
       && ordered[j + 1].properties.ground?.rock_head_m === b.rightDepth))
-    .map((b, k) => ({ key: `${j}-${k}`, j, b, ...joinPath(j, b.leftDepth, b.rightDepth) }))) : []
+    .map((b, k) => ({ key: `${j}-${k}`, j, b, ...joinPath(j, b.leftDepth, b.rightDepth) })))
 
   const ticks: number[] = []
   for (let v = Math.ceil(low / step) * step; v <= high; v += step) ticks.push(v)
@@ -312,13 +310,8 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
   return (
     <section ref={section} className="section" aria-label="Section view">
       <header className="section-head">
-        <h2>{route.name || 'Tunnel route'}</h2>
-        <button className="btn btn-small" onClick={() => helpDialog.current?.showModal()}>More info</button>
-        <label className="section-correlate">
-          <input type="checkbox" checked={correlate} disabled={ordered.length < 2} onChange={(e) => setCorrelate(e.target.checked)} /> Correlate layers
-        </label>
-        <button className="btn" onClick={() => setViewport(null)} disabled={!active}>Reset zoom</button>
-        <button className="btn" onClick={onClear} disabled={!ordered.length}>Clear boreholes</button>
+        <button className="btn btn-small" onClick={() => helpDialog.current?.showModal()}>Usage guide</button>
+        <button className="btn section-reset" onClick={() => setViewport(null)} disabled={!active}>Reset zoom</button>
       </header>
       <dialog ref={helpDialog} className="section-help-dialog" aria-labelledby="section-help-title">
         <div className="section-help-head">
@@ -330,7 +323,8 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
           : ordered.length ? 'The vertical axis shows depth below ground because at least one borehole has no ground level.'
             : 'The vertical axis shows depth below ground until boreholes with ground levels are selected.'}</p>
         <p>Patterned columns are borehole measurements. The coloured areas between them are estimates; lighter areas span more than {MAX_JOIN_GAP_M} m and are less certain.</p>
-        <p>Dashed lines show estimated rock head, blue markers show groundwater, and the solid blue line shows the planned tunnel axis. The shaded band shows its diameter when set. Dotted lines show correlated layer boundaries when enabled.</p>
+        <p>Dashed lines show estimated rock head, blue markers show groundwater, and the solid blue line shows the planned tunnel axis. The shaded band shows its diameter when set.</p>
+        <p>Dotted lines connect matching layer boundaries in adjacent boreholes up to {MAX_JOIN_GAP_M} m apart. The match uses broad material groups in depth order and omits ambiguous boundaries. These lines are estimates.</p>
         <p>Drag a rectangle over the profile to zoom. Use Reset zoom to return to the full view. Edit the route, borehole selection, and tunnel profile in the tunnel details on the right.</p>
         {route.tunnelMode === 'elevation' && !byElevation && route.startElevationM != null &&
           <p className="section-help-warning">A tunnel axis specified by elevation needs a ground level on every selected borehole.</p>}

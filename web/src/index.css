@@ -317,6 +317,7 @@ button, input, select { font: inherit; color: inherit; }
   font: inherit; font-size: 12px; color: var(--water); cursor: pointer; }
 .group-show:hover { border-color: var(--water); }
 .group-items { list-style: none; margin: 0; padding: 0; }
+.group-empty { padding: 10px 16px; color: var(--graphite); font-size: 13px; }
 
 .legend {
   position: absolute; left: 12px; bottom: 36px;
@@ -613,7 +614,6 @@ button, input, select { font: inherit; color: inherit; }
 .ground-menu { display: grid; gap: 8px; }
 .ground-field { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
 .ground-field input { width: 56px; }
-.section-correlate { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 .section-tunnel-band { fill: var(--water); fill-opacity: 0.2; stroke: none; pointer-events: none; }
 .section-tunnel-axis { fill: none; stroke: var(--water); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; pointer-events: visibleStroke; }
 .section-tunnel-point { fill: var(--water); }
@@ -672,7 +672,7 @@ button, input, select { font: inherit; color: inherit; }
   /* The tray fills the small map: lifted controls would sit on the plot. */
   .map-wrap-section .maplibregl-ctrl-bottom-left, .map-wrap-section .maplibregl-ctrl-bottom-right { bottom: 0; }
   .topbar-end { margin-left: auto; }
-  .stats { display: none; }
+  .stats { font-size: 12px; }
   .map-wrap { grid-row: 2; }
   .sidebar { grid-row: 3; border-right: 0; }
   .legend { display: none; }
@@ -694,7 +694,8 @@ button, input, select { font: inherit; color: inherit; }
 
 .model-notes { margin-top: 6px; font-size: 13px; color: var(--graphite); }
 .model-notes summary { cursor: pointer; }
-.section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; scroll-margin-top: 8px; }
+.section-head { display: flex; align-items: center; justify-content: flex-start; gap: 8px; scroll-margin-top: 8px; }
+.section-reset { margin-left: auto; }
 
 .table-scroll { overflow-x: auto; }
 .review-buttons { flex-wrap: wrap; }

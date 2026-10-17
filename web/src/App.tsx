@@ -381,6 +381,15 @@ export default function App() {
           <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx,.txt,.xlsx,.xlsm,.zip" multiple
             className="visually-hidden" onChange={onFileChosen} aria-label="Upload borehole logs" />
           <UploadQueue batches={batches} usage={usage} onCancel={cancel} onDismiss={dismiss} />
+          {stats && <p className="stats">
+            <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}/{stats.boreholes.toLocaleString('en')}</strong>{' '}
+            (Released/Total) ·{' '}
+            {stats.boreholes > stats.located ? <button className="link-button muted" onClick={() => {
+              setRouteActive(false); setSelectedId(null); setListOpen(true); setAuditOnly(false)
+              setReviewFilters({ finding: null, position: 'none' }); setView('review')
+            }}>{(stats.boreholes - stats.located).toLocaleString('en')} without position</button>
+              : <span>0 without position</span>}
+          </p>}
           <AppMenu inStats={view === 'stats'} uploading={uploading} dark={dark} view3d={view3d}
             onToggleStats={() => setView(view === 'stats' ? 'map' : 'stats')}
             onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} onToggleView3d={() => setView3d(!view3d)} />
@@ -414,13 +423,6 @@ export default function App() {
             review={{ filters: reviewFilters, onChange: setReviewFilters, findings: queueFindings }} />
         )}
         {error && <p className="error" role="alert">{error}</p>}
-        {stats && <div className="result-head review-summary">
-          <span><strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> of{' '}
-            <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes released</span>
-          {stats.boreholes > stats.located && <button className="link-button muted" onClick={() => {
-            setSelectedId(null); setAuditOnly(false); setReviewFilters({ finding: null, position: 'none' })
-          }}>{(stats.boreholes - stats.located).toLocaleString('en')} without position</button>}
-        </div>}
         <ReviewList items={queue} groups={queueGroups} total={queueTotal} loading={queueLoadedKey !== queueKey} audit={auditOnly}
           selectedId={selectedId} onSelect={setSelectedId}
           crsGroups={!auditOnly && reviewFilters.position === 'crs_inferred' ? crsGroups : []} onChanged={() => setRefresh((n) => n + 1)} />
@@ -460,7 +462,6 @@ export default function App() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             onRemove={toggleRouteHole}
-            onClear={() => setRouteHoleIds([])}
           />
         ) : inTunnel && (
           <section className="section" aria-label="Tunnel profile">
@@ -490,6 +491,7 @@ export default function App() {
         onStartDrawing={() => { setRouteDraft([]); setRouteError(null) }}
         onUndo={() => setRouteDraft((draft) => draft ? draft.slice(0, -1) : null)} onFinishDrawing={finishRoute}
         onCancelDrawing={() => setRouteDraft(null)} onSelectNearby={() => setRouteHoleIds(nearby.map((candidate) => candidate.id))}
+        onClearBoreholes={() => setRouteHoleIds([])}
         onToggleHole={toggleRouteHole}
         onDelete={() => { setTunnels((items) => items.filter((item) => item.id !== activeTunnelId)); setActiveTunnelId(null); setRouteDraft(null) }}
         onClose={() => { setActiveTunnelId(null); setRouteDraft(null) }} />}
