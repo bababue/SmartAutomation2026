@@ -216,3 +216,37 @@ def test_share_package_without_git(con, tmp_path, monkeypatch):
     out = tmp_path / "pkg"
     cmd_share(argparse.Namespace(out=str(out), no_pages=True, with_cache=False))
     assert "commit unknown" in (out / "README.md").read_text()
+
+
+def test_a_new_blocking_finding_stops_a_review_screen_opened_before_it(con):
+    store.save_borehole(con, record())
+    seen = con.execute("SELECT content_hash, review_revision FROM boreholes").fetchone()
+    store.save_borehole(con, record())  # an identical rebuild leaves open review screens valid
+    assert con.execute("SELECT review_revision FROM boreholes").fetchone()[0] == seen["review_revision"]
+    flagged = record()
+    flagged.issues += ["gap 4.5–5.0 m between layers"]  # same content hash, new blocking finding
+    store.save_borehole(con, flagged)
+    with pytest.raises(store.StaleReview):
+        store.record_review(con, "rep:BH01", ReviewStatus.approved, "Ana", None,
+                            expected_hash=seen["content_hash"], expected_revision=seen["review_revision"])
+    assert store.load_borehole(con, "rep:BH01").review_status != ReviewStatus.approved
+
+
+def test_a_hole_of_another_document_with_the_same_name_keeps_its_uid_and_corrections(con):
+    a, b = record(bid="folder__a:BH01", name="BH-01"), record(bid="folder__b:BH01", name="BH-01")
+    store.save_borehole(con, a)
+    store.save_borehole(con, b)  # the group's natural key now points to b's hole
+    uid_b = con.execute("SELECT uid FROM boreholes WHERE id = 'folder__b:BH01'").fetchone()[0]
+    store.add_correction(con, "borehole", b.borehole_id, "position", {"lat": 47.99, "lon": 7.85}, "Ana", None)
+    con.commit()
+
+    renamed = record(bid="folder__a:BH1", name="BH 1")  # a's hole under another id, b's document not rerun
+    assert store.uid_for(con, renamed) != uid_b
+    assert store.corrections_for(con, renamed.borehole_id, store.uid_for(con, renamed)) == []
+
+    # Both documents rewritten, the renamed hole saved first while b's old record is already deleted.
+    previous = {**store.delete_document_boreholes(con, "folder__a"), **store.delete_document_boreholes(con, "folder__b")}
+    store.save_borehole(con, renamed, commit=False)
+    store.save_borehole(con, b, previous=previous[b.borehole_id])
+    uids = dict(con.execute("SELECT id, uid FROM boreholes").fetchall())
+    assert uids["folder__b:BH01"] == uid_b and uids["folder__a:BH1"] != uid_b
