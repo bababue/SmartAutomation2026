@@ -1,6 +1,6 @@
 import { encodeRange } from './url'
-import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, LayerStrips, MapPoint,
-  QueuePage, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob, UploadStatus } from './types'
+import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, LayerStrips, LlmUsage,
+  MapPoint, QueuePage, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob, UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -93,6 +93,14 @@ export function postUpload(files: File[]) {
   files.forEach((f) => body.append('files', f))
   return request<UploadJob>('/api/uploads', { method: 'POST', body })
 }
+
+/** files: paths as the upload reported them; none cancels the whole batch. */
+export const cancelUpload = (jobId: string, files?: string[]) =>
+  request<UploadStatus>(`/api/uploads/${enc(jobId)}/cancel`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: files ?? null }),
+  })
+
+export const fetchLlmUsage = () => request<LlmUsage>('/api/llm/usage?limit=1')
 
 export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/uploads/${enc(jobId)}`)
 

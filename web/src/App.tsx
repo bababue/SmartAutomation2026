@@ -339,7 +339,8 @@ export default function App() {
   }
 
   const onUploaded = useCallback(() => setRefresh((n) => n + 1), [])
-  const { batches, dismiss, active: uploading, dragging, fileInput, onFileChosen, dropTarget } = useUpload(onUploaded, setSelectedId)
+  const { batches, usage, cancel, dismiss, active: uploading, dragging, fileInput, onFileChosen, dropTarget } =
+    useUpload(onUploaded, setSelectedId)
 
   return (
     <div
@@ -371,7 +372,7 @@ export default function App() {
         <div className="topbar-side topbar-end">
           <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx,.txt,.xlsx,.xlsm,.zip" multiple
             className="visually-hidden" onChange={onFileChosen} aria-label="Upload borehole logs" />
-          <UploadQueue batches={batches} onDismiss={dismiss} />
+          <UploadQueue batches={batches} usage={usage} onCancel={cancel} onDismiss={dismiss} />
           {stats && (
             <p className="stats">
               <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> of{' '}

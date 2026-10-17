@@ -19,7 +19,8 @@ def db_path(tmp_path, monkeypatch):
 
 def task(name):
     return uploads.UploadTask(job_id=name, folder=f"upload-{name}",
-                              docs=[uploads.UploadDoc(doc_id=f"upload-{name}__invented", path="invented.pdf", kind="pdf")])
+                              docs=[uploads.UploadDoc(doc_id=f"upload-{name}__invented", path="invented.pdf", kind="pdf",
+                                                  sha256=name)])
 
 
 def wait_result(path, name):

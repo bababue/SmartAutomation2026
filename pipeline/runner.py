@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import urllib.parse
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -191,54 +192,86 @@ def _truncate(rendered, max_pages: int | None):
 
 
 def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = True,
-        dataset_dir: Path | None = None, progress: Progress | None = None) -> None:
-    """Ingest, classify, extract and store the given documents (costs API calls)."""
+        dataset_dir: Path | None = None, progress: Progress | None = None,
+        guard: llm.CallGuard | None = None, job_id: str | None = None) -> None:
+    """Ingest, classify, extract and store the given documents (costs API calls). guard: cancels documents
+    and limits the calls; every call is recorded in llm_calls (with job_id, for an upload). A document cancelled
+    before the store step leaves nothing behind; all of them cancelled raises llm.Cancelled."""
     _check_max_pages(max_pages)
     if msg := missing_credentials():
         raise RuntimeError(msg)
-    con = store.connect()
+    guard = guard or llm.CallGuard()
+    con, calls, calls_lock = store.connect(), store.connect(), threading.Lock()
+
+    def record(call: dict) -> None:
+        with calls_lock:  # one connection for the worker threads
+            store.record_llm_call(calls, {**call, "job_id": job_id})
+
+    guard.record = record
     try:
-        print(f"Ingest {len(docs)} documents (LLM backend: {config.LLM_BACKEND})")
-        rendered, truncated = _truncate(_ingest(docs, con, dataset_dir), max_pages)
-        pages = [p for ps in rendered.values() for p in ps]
-        est = len(pages) * (page_cost(COST_CLASSIFY, config.CLASSIFY_MODEL)
-                            + 0.4 * page_cost(COST_EXTRACT, config.EXTRACT_MODEL))
-        if est > 5 and not yes:
-            raise RuntimeError(f"{len(pages)} pages, estimated ≈ ${est:.2f}. Re-run with --yes to proceed.")
-
-        print(f"Classify {len(pages)} pages")
-        if progress:
-            progress("classify", 0, len(pages))
-        classes = _parallel(llm.classify_page, pages, "classify", progress)
-        for (doc_id, page_no), c in classes.items():
-            con.execute(
-                "UPDATE pages SET kind = ?, language = ?, logs = ? WHERE doc_id = ? AND page = ?",
-                (c.kind.value, c.language, store.as_json([log.model_dump() for log in c.logs]), doc_id, page_no),
-            )
-        con.commit()
-
-        todo = extract_todo(rendered, classes)
-        print(f"Extract {len(todo)} log/coordinate pages")
-        if progress:
-            progress("extract", 0, len(todo))
-        extractions, _ = _extract(todo, classes, con, progress=progress)
-        lab_pages = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"]
-        if lab_pages:
-            print(f"Extract {len(lab_pages)} lab result pages")
-        labs = _parallel(llm.extract_lab_results, lab_pages, "lab results", progress)
-        targets = list(coordcheck.targets(todo, extractions))
-        print(f"Read the printed coordinates of {len(targets)} holes a second time")
-        if progress:
-            progress("coordinates", 0, 0)
-        coords = coordcheck.readings(targets, llm.read_coordinates)
-        if progress:
-            progress("store", 0, 0)
-        published = _store(con, docs, rendered, classes, extractions, labs, incomplete_docs=truncated, coords=coords)
-        if set(rendered) != published:
-            raise RuntimeError("Some documents were incomplete; their previous records were preserved")
+        with llm.guarded((d.doc_id for d in docs), guard):
+            _run(con, docs, max_pages, yes, dataset_dir, progress, guard)
     finally:
         con.close()
+        calls.close()
 
+
+def _check(docs, guard: llm.CallGuard) -> None:
+    if guard.exhausted:
+        raise llm.CallLimitReached(f"stopped after {guard.calls} model calls, the limit for this run")
+    if all(guard.cancelled(d.doc_id) for d in docs):
+        raise llm.Cancelled("cancelled")
+
+
+def _run(con, docs, max_pages, yes, dataset_dir, progress, guard: llm.CallGuard) -> None:
+    print(f"Ingest {len(docs)} documents (LLM backend: {config.LLM_BACKEND})")
+    rendered, truncated = _truncate(_ingest(docs, con, dataset_dir), max_pages)
+    pages = [p for ps in rendered.values() for p in ps]
+    est = len(pages) * (page_cost(COST_CLASSIFY, config.CLASSIFY_MODEL)
+                        + 0.4 * page_cost(COST_EXTRACT, config.EXTRACT_MODEL))
+    if est > 5 and not yes:
+        raise RuntimeError(f"{len(pages)} pages, estimated ≈ ${est:.2f}. Re-run with --yes to proceed.")
+
+    print(f"Classify {len(pages)} pages")
+    if progress:
+        progress("classify", 0, len(pages))
+    classes = _parallel(llm.classify_page, pages, "classify", progress)
+    for (doc_id, page_no), c in classes.items():
+        con.execute(
+            "UPDATE pages SET kind = ?, language = ?, logs = ? WHERE doc_id = ? AND page = ?",
+            (c.kind.value, c.language, store.as_json([log.model_dump() for log in c.logs]), doc_id, page_no),
+        )
+    con.commit()
+    _check(docs, guard)
+
+    todo = extract_todo(rendered, classes)
+    print(f"Extract {len(todo)} log/coordinate pages")
+    if progress:
+        progress("extract", 0, len(todo))
+    extractions, _ = _extract(todo, classes, con, progress=progress)
+    lab_pages = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"]
+    if lab_pages:
+        print(f"Extract {len(lab_pages)} lab result pages")
+    labs = _parallel(llm.extract_lab_results, lab_pages, "lab results", progress)
+    _check(docs, guard)
+    targets = list(coordcheck.targets(todo, extractions))
+    print(f"Read the printed coordinates of {len(targets)} holes a second time")
+    if progress:
+        progress("coordinates", 0, 0)
+    coords = coordcheck.readings(targets, llm.read_coordinates)
+    _check(docs, guard)
+    dropped = [d.doc_id for d in docs if guard.cancelled(d.doc_id)]
+    guard.dropped = set(dropped)  # a cancellation from here on comes too late
+    if dropped:
+        print(f"  {len(dropped)} documents cancelled, nothing stored for them")
+        store.delete_documents(con, dropped)
+        docs = [d for d in docs if d.doc_id not in dropped]
+        rendered = {doc_id: ps for doc_id, ps in rendered.items() if doc_id not in dropped}
+    if progress:
+        progress("store", 0, 0)
+    published = _store(con, docs, rendered, classes, extractions, labs, incomplete_docs=truncated, coords=coords)
+    if set(rendered) != published:
+        raise RuntimeError("Some documents were incomplete; their previous records were preserved")
 
 def rebuild(docs, max_pages: int | None = None, dry_run: bool = False) -> None:
     """Assemble, apply knowledge and corrections, and store, from the cache only (no API calls)."""

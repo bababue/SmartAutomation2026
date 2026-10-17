@@ -62,6 +62,14 @@ CREATE INDEX IF NOT EXISTS knowledge_scope ON knowledge (scope_type, scope_value
 CREATE TABLE IF NOT EXISTS upload_jobs (
     id TEXT PRIMARY KEY, task TEXT NOT NULL, status TEXT NOT NULL, result TEXT, error TEXT, created_at TEXT NOT NULL
 );
+-- Every model call a run made (cache hits make none): what went where, as sizes, never the content.
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY, at TEXT NOT NULL, job_id TEXT, doc_id TEXT, page INTEGER, stage TEXT, model TEXT,
+    endpoint TEXT, image_bytes INTEGER, text_chars INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+    cost_usd REAL, seconds REAL, outcome TEXT
+);
+CREATE INDEX IF NOT EXISTS llm_calls_at ON llm_calls (at);
+CREATE INDEX IF NOT EXISTS llm_calls_job ON llm_calls (job_id);
 """
 
 # Version 3: queryable projections (layers, lab values, findings, sources), stable borehole uids with
@@ -214,6 +222,29 @@ def save_document(con: sqlite3.Connection, doc_id: str, path: str, kind: str, pa
         pages,
     )
     con.commit()
+
+
+def delete_documents(con: sqlite3.Connection, doc_ids: list[str]) -> None:
+    """A document that was registered but never processed (a cancelled upload); it has no records."""
+    for doc_id in doc_ids:
+        con.execute("DELETE FROM pages WHERE doc_id = ?", (doc_id,))
+        con.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+    con.commit()
+
+
+LLM_CALL_FIELDS = ("at", "job_id", "doc_id", "page", "stage", "model", "endpoint", "image_bytes", "text_chars",
+                   "input_tokens", "output_tokens", "cost_usd", "seconds", "outcome")
+
+
+def record_llm_call(con: sqlite3.Connection, call: dict) -> None:
+    con.execute(f"INSERT INTO llm_calls ({', '.join(LLM_CALL_FIELDS)}) VALUES ({', '.join('?' * len(LLM_CALL_FIELDS))})",
+                [call.get(f) for f in LLM_CALL_FIELDS])
+    con.commit()
+
+
+def llm_calls_today(con: sqlite3.Connection) -> int:
+    today = datetime.now(timezone.utc).date().isoformat()
+    return con.execute("SELECT COUNT(*) FROM llm_calls WHERE at >= ?", (today,)).fetchone()[0]
 
 
 def content_hash(bh: Borehole) -> str:

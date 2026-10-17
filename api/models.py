@@ -209,8 +209,15 @@ class StatsDetail(BaseModel):
     audit: Audit | None
 
 
+class DuplicateFile(BaseModel):
+    file: str
+    of: str
+    at: str | None
+
+
 class UploadJob(BaseModel):
     job_id: str
     pages: int
     files: list[str]
     skipped: list[str]
+    duplicates: list[DuplicateFile]

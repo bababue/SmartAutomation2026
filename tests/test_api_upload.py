@@ -3,6 +3,7 @@
 import io
 import time
 import zipfile
+from datetime import datetime, timezone
 
 import pymupdf
 import pytest
@@ -76,7 +77,7 @@ def test_strips_directory_components_from_the_filename(client, monkeypatch):
 def test_accepts_file_within_the_page_cap(client, monkeypatch):
     calls = []
 
-    def fake_run(docs, max_pages=None, yes=True, dataset_dir=config.DATASET_DIR, progress=None):
+    def fake_run(docs, **kwargs):
         calls.append(docs)
 
     monkeypatch.setattr("pipeline.runner.run", fake_run)
@@ -236,3 +237,88 @@ def test_status_reports_the_running_stage(client, monkeypatch):
     finally:
         release.set()
     assert _wait(client, job_id)["progress"] is None
+
+
+def test_a_file_sent_again_is_reported_not_processed_twice(client, monkeypatch):
+    monkeypatch.setattr("pipeline.runner.run", lambda *a, **k: None)
+    log, other = _pdf_bytes(1), _pdf_bytes(1)  # each call makes a PDF with its own id
+    first = client.post("/api/uploads", files={"files": ("log.pdf", log, "application/pdf")})
+    assert first.status_code == 200
+    again = client.post("/api/uploads", files={"files": ("renamed.pdf", log, "application/pdf")})
+    assert again.status_code == 409 and "already uploaded: renamed.pdf (as log.pdf" in again.json()["detail"]
+    mixed = client.post("/api/uploads", files=[("files", ("a-new.pdf", other, "application/pdf")),
+                                              ("files", ("b-copy.pdf", other, "application/pdf")),
+                                              ("files", ("log.pdf", log, "application/pdf"))])
+    assert mixed.status_code == 200
+    assert mixed.json()["files"] == ["a-new.pdf"]
+    dups = {d["file"]: (d["of"], d["at"] is None) for d in mixed.json()["duplicates"]}
+    assert dups == {"b-copy.pdf": ("a-new.pdf", True), "log.pdf": ("log.pdf", False)}
+    folder = config.UPLOADS_DIR / f"upload-{mixed.json()['job_id']}"
+    assert [p.name for p in folder.iterdir()] == ["a-new.pdf"]
+
+
+def _blocking_run(monkeypatch):
+    """A fake run that holds the queue's single worker until released, and keeps the guard it was given."""
+    import threading
+
+    started, release, seen = threading.Event(), threading.Event(), {}
+
+    def fake_run(docs, guard=None, **kwargs):
+        seen["docs"], seen["guard"] = [d.doc_id for d in docs], guard
+        started.set()
+        assert release.wait(3)
+        if all(guard.cancelled(d.doc_id) for d in docs):
+            from pipeline import llm
+            raise llm.Cancelled("cancelled")
+        guard.dropped = {d.doc_id for d in docs if guard.cancelled(d.doc_id)}  # as run() does before storing
+
+    monkeypatch.setattr("pipeline.runner.run", fake_run)
+    return started, release, seen
+
+
+def test_cancel_a_queued_batch_and_one_document_of_a_running_one(client, monkeypatch):
+    started, release, seen = _blocking_run(monkeypatch)
+    running = client.post("/api/uploads", files=[("files", ("a.pdf", _pdf_bytes(1), "application/pdf")),
+                                                ("files", ("b.pdf", _pdf_bytes(1), "application/pdf"))]).json()
+    assert started.wait(3)
+    waiting = client.post("/api/uploads", files={"files": ("c.pdf", _pdf_bytes(1), "application/pdf")}).json()
+    try:
+        cancelled = client.post(f"/api/uploads/{waiting['job_id']}/cancel", json={})
+        assert cancelled.json()["status"] == "cancelled"
+        assert not (config.UPLOADS_DIR / f"upload-{waiting['job_id']}").exists()
+        partial = client.post(f"/api/uploads/{running['job_id']}/cancel", json={"files": ["b.pdf"]})
+        assert partial.json()["status"] == "processing" and partial.json()["cancelled"] == ["b.pdf"]
+        a, b = seen["docs"]
+        assert not seen["guard"].cancelled(a) and seen["guard"].cancelled(b)  # no more model calls for b
+        assert client.post(f"/api/uploads/{running['job_id']}/cancel", json={"files": ["x.pdf"]}).status_code == 422
+    finally:
+        release.set()
+    result = _wait(client, running["job_id"])
+    assert result["status"] == "done" and result["cancelled"] == ["b.pdf"]
+    assert client.post(f"/api/uploads/{running['job_id']}/cancel", json={}).status_code == 409
+
+
+def test_cancelling_a_whole_running_batch_stores_nothing(client, monkeypatch):
+    started, release, _ = _blocking_run(monkeypatch)
+    job = client.post("/api/uploads", files={"files": ("a.pdf", _pdf_bytes(1), "application/pdf")}).json()
+    assert started.wait(3)
+    client.post(f"/api/uploads/{job['job_id']}/cancel", json={})
+    release.set()
+    assert _wait(client, job["job_id"])["status"] == "cancelled"
+    assert not (config.UPLOADS_DIR / f"upload-{job['job_id']}").exists()
+
+
+def test_daily_call_limit_refuses_an_upload_and_usage_lists_the_calls(client, monkeypatch):
+    monkeypatch.setattr("pipeline.runner.run", lambda *a, **k: None)
+    monkeypatch.setattr(config, "MAX_DAILY_CALLS", 2)
+    con = store.connect()
+    store.record_llm_call(con, {"at": datetime.now(timezone.utc).isoformat(), "doc_id": "d", "page": 1,
+                                "stage": "classify", "model": "m", "endpoint": "api.example", "image_bytes": 10,
+                                "text_chars": 5, "outcome": "ok"})
+    con.close()
+    res = client.post("/api/uploads", files={"files": ("log.pdf", _pdf_bytes(2), "application/pdf")})
+    assert res.status_code == 429 and "daily limit of 2 model calls" in res.json()["detail"]
+    assert not any(config.UPLOADS_DIR.iterdir())
+    usage = client.get("/api/llm/usage").json()
+    assert usage["today"] == 1 and usage["daily_limit"] == 2
+    assert usage["recent"][0]["endpoint"] == "api.example" and usage["recent"][0]["image_bytes"] == 10

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import math
@@ -31,8 +32,8 @@ import pymupdf
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, evaluate, export, ingest, scoring, store, uploads
-from schema.borehole import Borehole, LabParameter, Lithology, ReviewStatus
+from pipeline import config, corrections, evaluate, export, ingest, llm, scoring, store, uploads
+from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
 from . import models, similar
 
@@ -555,8 +556,9 @@ def get_borehole(borehole_id: str, con: DB) -> models.Detail:
 async def upload_documents(files: list[UploadFile] = File(...)) -> models.UploadJob:
     """One batch of files, or zips of them, becomes one document group assembled in a single run, so
     records of one hole spread over several files are combined. Other files in the batch
-    (e.g. GIS files) are skipped and reported, not a reason to reject the documents beside them."""
-    batch, skipped = [], []
+    (e.g. GIS files) are skipped and reported, not a reason to reject the documents beside them. So is a file
+    sent before, in this batch or an earlier upload: a second copy would add a second group of the same holes."""
+    batch, skipped, duplicates = [], [], []
     for file in files:
         name = _safe_part((file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]) or "upload"
         if Path(name).suffix.lower() in ingest.SUPPORTED | {".zip"}:
@@ -588,13 +590,20 @@ async def upload_documents(files: list[UploadFile] = File(...)) -> models.Upload
                         budget.received(len(chunk))
                         budget.stored(len(chunk))
                         out.write(chunk)
-        docs = [ingest.SourceDoc(f"{folder}__{d.doc_id}", d.path, d.kind) for d in ingest.discover(upload_dir)]
-        if not docs:
+        found = ingest.discover(upload_dir)
+        if not found:
             raise HTTPException(415, "the upload contains no PDF, JPG, PNG, TIFF, DOCX, TXT or XLSX file")
+        digests = await run_in_threadpool(_new_files, found, upload_dir, duplicates)
+        if not digests:
+            first = duplicates[0]
+            raise HTTPException(409, f"already uploaded: {first['file']}" + (
+                f" (as {first['of']} on {first['at'][:16].replace('T', ' ')} UTC)" if first["at"] else ""))
+        docs = [ingest.SourceDoc(f"{folder}__{d.doc_id}", d.path, d.kind) for d in found if d.path in digests]
         pages = await run_in_threadpool(_render_upload, docs, upload_dir)
+        await run_in_threadpool(_check_daily_calls, pages)
         await run_in_threadpool(app.state.upload_queue.submit, uploads.UploadTask(
             job_id=job_id, folder=folder,
-            docs=[uploads.UploadDoc(doc_id=d.doc_id, path=d.path, kind=d.kind) for d in docs]))
+            docs=[uploads.UploadDoc(doc_id=d.doc_id, path=d.path, kind=d.kind, sha256=digests[d.path]) for d in docs]))
     except Exception as exc:
         shutil.rmtree(upload_dir, ignore_errors=True)
         for d in docs:
@@ -604,7 +613,42 @@ async def upload_documents(files: list[UploadFile] = File(...)) -> models.Upload
         if isinstance(exc, uploads.QueueFull):
             raise HTTPException(503, "the upload queue is full; try again after a document finishes processing") from exc
         raise
-    return models.UploadJob(job_id=job_id, pages=pages, files=[Path(d.path).as_posix() for d in docs], skipped=skipped)
+    return models.UploadJob(job_id=job_id, pages=pages, files=[Path(d.path).as_posix() for d in docs], skipped=skipped,
+                            duplicates=duplicates)
+
+
+def _new_files(found: list[ingest.SourceDoc], upload_dir: Path, duplicates: list[dict]) -> dict[str, str]:
+    """path -> sha256 of the documents not sent before. A copy is removed and reported in `duplicates`: the file,
+    the earlier one it repeats and that one's upload time (None within this batch)."""
+    con = store.connect()
+    try:
+        known = uploads.uploaded_files(con)
+    finally:
+        con.close()
+    digests: dict[str, str] = {}
+    for d in found:
+        src = upload_dir / d.path
+        digest = hashlib.sha256(src.read_bytes()).hexdigest()
+        earlier = next((p for p, x in digests.items() if x == digest), None)
+        if earlier or digest in known:
+            of, at = (earlier, None) if earlier else known[digest]
+            duplicates.append({"file": Path(d.path).as_posix(), "of": Path(of).as_posix(), "at": at})
+            src.unlink()
+        else:
+            digests[d.path] = digest
+    return digests
+
+
+def _check_daily_calls(pages: int) -> None:
+    """Every page takes at least one model call."""
+    con = store.connect()
+    try:
+        today = store.llm_calls_today(con)
+    finally:
+        con.close()
+    if today + pages > config.MAX_DAILY_CALLS:
+        raise HTTPException(429, f"the daily limit of {config.MAX_DAILY_CALLS} model calls would be passed "
+                                 f"({today} made today, this upload needs at least {pages}); try again tomorrow")
 
 
 class _ByteBudget:
@@ -718,6 +762,39 @@ def upload_status(job_id: str, con: DB) -> uploads.UploadResult:
     if job.status == "processing":
         job.progress = app.state.upload_queue.progress.get(job_id)
     return job
+
+
+class CancelBody(BaseModel):
+    files: list[str] | None = None  # paths as the upload reported them; none: the whole batch
+
+
+@app.post("/api/uploads/{job_id}/cancel")
+def cancel_upload(job_id: str, body: CancelBody, con: DB) -> uploads.UploadResult:
+    """Stops a queued or running batch, or takes some of its documents out. Calls already running finish; no new
+    ones start for them, and nothing is stored for them."""
+    row = con.execute("SELECT task FROM upload_jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "upload job not found")
+    doc_ids = None
+    if body.files is not None:
+        by_path = {Path(d["path"]).as_posix(): d["doc_id"] for d in json.loads(row["task"])["docs"]}
+        if unknown := [f for f in body.files if f not in by_path]:
+            raise HTTPException(422, f"not in this upload: {', '.join(unknown)}")
+        doc_ids = [by_path[f] for f in body.files]
+    try:
+        app.state.upload_queue.cancel(job_id, doc_ids)
+    except uploads.NotCancellable as exc:
+        raise HTTPException(409, str(exc)) from None
+    return upload_status(job_id, con)
+
+
+@app.get("/api/llm/usage")
+def llm_usage(con: DB, limit: int = Query(50, ge=1, le=500)):
+    """Model calls today against the limits, and the latest calls: where they went and what they carried."""
+    recent = con.execute(f"SELECT {', '.join(store.LLM_CALL_FIELDS)} FROM llm_calls ORDER BY id DESC LIMIT ?",
+                         (limit,)).fetchall()
+    return {"today": store.llm_calls_today(con), "daily_limit": config.MAX_DAILY_CALLS,
+            "upload_limit": config.MAX_UPLOAD_CALLS, "endpoint": llm.endpoint(), "recent": [dict(r) for r in recent]}
 
 
 @app.get("/api/pages/{doc_id}/{page}")

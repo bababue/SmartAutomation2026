@@ -86,3 +86,31 @@ def test_rebuild_keeps_pages_of_the_previous_model_and_a_run_replaces_them(tmp_p
     monkeypatch.setattr(llm, "_produce", lambda *a, **k: answer("other"))
     assert llm.classify_page(page).kind.value == "other"  # run: the configured model extracts anew
     assert json.loads(llm.cache_path("classify", page).read_text())["model"] == "new-model"
+
+
+def test_guard_limits_and_records_calls_but_not_cache_hits(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
+    first, second = (PageImage(doc_id="d", page=n, image="", thumb="", text="", width=1, height=1) for n in (1, 2))
+    calls = []
+
+    def produce():
+        calls.append(1)
+        return PageClassification(kind="other", logs=[], language=None, has_coordinates=False, crs_text=None)
+
+    produce.sent = {"image_bytes": 1234, "text_chars": 56}
+    rows = []
+    guard = llm.CallGuard(max_calls=1, record=rows.append)
+    with llm.guarded(["d"], guard):
+        llm._cached("classify", first, lambda m, e: "k", "m", "e", PageClassification, produce)
+        llm._cached("classify", first, lambda m, e: "k", "m", "e", PageClassification, produce)  # cached
+        with pytest.raises(llm.CallLimitReached):
+            llm._cached("classify", second, lambda m, e: "k", "m", "e", PageClassification, produce)
+    assert len(calls) == 1 and guard.exhausted
+    (row,) = rows
+    assert (row["doc_id"], row["page"], row["stage"], row["outcome"]) == ("d", 1, "classify", "ok")
+    assert (row["image_bytes"], row["text_chars"]) == (1234, 56)
+
+    stopped = llm.CallGuard(cancelled=lambda doc_id: doc_id == "d")
+    with llm.guarded(["d"], stopped), pytest.raises(llm.Cancelled):
+        llm._cached("classify", second, lambda m, e: "k2", "m", "e", PageClassification, produce)
+    assert len(calls) == 1  # no call for a cancelled document

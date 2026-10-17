@@ -42,7 +42,7 @@ from schema.borehole import (
 )
 
 from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLab, XLabRow, XLog
-from . import corrections, store
+from . import corrections, injection, store
 from .georef import candidates, crs_from_hint, georeference, haversine_km, is_precise
 from .knowledge import printed_pair
 from .scoring import SOURCE_CONFLICTS, STRUCTURAL, counts_against, finding_severity, score
@@ -1079,6 +1079,7 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
         flag_position_outliers([bh for bh, _, _ in records])
         flag_shared_coordinates([bh for bh, _, _ in records])
         for bh, unreadable, page_texts in records:
+            bh.issues += injection.findings(page_texts)
             score(bh, page_texts, unreadable)
             boreholes.append(bh)
     return dedupe(boreholes) if deduplicate else boreholes

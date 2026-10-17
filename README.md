@@ -166,8 +166,10 @@ interrupted runs resume, repeated runs are free, and a page is read again only w
 version or the model changes. Runs above about $5 ask for `--yes`.
 
 Web uploads take several files or a ZIP as one batch (up to `MAX_UPLOAD_PAGES` pages): one document group,
-processed in one run, so a hole spread over several files is combined. The queue lives in SQLite and survives
-a restart; run one API process per database.
+processed in one run, so a hole spread over several files is combined. A file sent before (same SHA-256) is left
+out and reported. A queued or running batch, or single documents of it, can be cancelled: no new model calls
+start for them and nothing is stored for them. The queue lives in SQLite and survives a restart; run one API
+process per database.
 
 `pipeline share --out <dir>` packs a consistent copy of the database and page images for a teammate. The
 package is confidential: pass it on locally (AirDrop, USB, `scp`), never through a cloud service.
@@ -223,6 +225,7 @@ One SQLite file; the schema version is in `PRAGMA user_version`.
 | `review_events`, `record_versions` | every decision, and the exact content it was about |
 | `corrections`, `knowledge` | human input, applied again on every run |
 | `documents`, `pages`, `upload_jobs` | inputs and the web upload queue |
+| `llm_calls` | every model call a run made: what went where, as sizes |
 
 Measured with 50,000 synthetic holes (1 GB): map points 0.8 s / 1.5 MB gzipped, a list page 0.3 s, "clay between
 10 and 20 m" 0.2 s, "UCS ≥ 80 MPa" 0.1 s, a review-queue page 6 ms; the CSV export streams from the first row.
@@ -257,6 +260,7 @@ Environment variables, from the shell or `.env`:
 | `AUTO_APPROVE_THRESHOLD` | `0.9` | release score for automatic release |
 | `MAX_UPLOAD_PAGES` | `100` | pages per upload batch |
 | `MAX_UPLOAD_JOBS` / `MAX_UPLOAD_WORKERS` | `8` / `1` | web upload queue |
+| `MAX_UPLOAD_CALLS` / `MAX_DAILY_CALLS` | `400` / `2000` | model calls per upload batch / per UTC day (command-line runs count towards the day, but are not stopped) |
 | `DATASET_DIR` | `temp/HKBoreholeChallenge_Data_BFH2026/BoreholeData` | input documents |
 | `DATA_DIR` / `DB_PATH` | `data` / `data/boreholes.sqlite` | pages, cache, database |
 | `GAZETTEER_PATH` | `data/gazetteer.sqlite` | offline GeoNames index |
@@ -317,6 +321,11 @@ The brief asks for data security at every step:
 - Place names are looked up in an offline gazetteer before anything else.
 - Source files, pages, cache and database stay local, in git-ignored folders, and are deleted after the event.
 - Not in the prototype: user accounts. Run it on a trusted network.
+- Every model call of a run is recorded in `llm_calls` (document, page, stage, model, endpoint, image size and
+  text length sent, tokens, cost, outcome), never its content; `GET /api/llm/usage` shows the day against the limits.
+- Documents are untrusted input. The model has no tools and its answer must pass the schema; text that addresses
+  the model ("ignore the previous instructions", chat markup, in English or German) is a blocking finding
+  (`possible prompt injection`), so that document's records go to a person. Text inside page images is not scanned.
 
 The challenge dataset contains confidential data from real projects. It is used only for this challenge, is not
 shared outside the event and is deleted afterwards. Nothing from it is committed: tests, fixtures and docs use
