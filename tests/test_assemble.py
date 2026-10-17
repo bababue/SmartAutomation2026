@@ -297,3 +297,20 @@ def test_a_coordinate_table_with_or_without_header_logs_gives_the_same_position(
                      PageResult("t", "t.pdf", 2, "borehole_log", PageExtraction(logs=[sheet], coordinate_rows=[]))])
     assert bh.location.method != GeorefMethod.geocoded_place and bh.location.confidence >= 0.9
     assert haversine_km(bh.location.lat, bh.location.lon, lat, lon) < 0.005
+
+
+@pytest.mark.parametrize("notes, blocked", [
+    ("Depths converted from feet to metres.", True),
+    ("Tiefen von Fuß in Meter umgerechnet", True),
+    ("depths 0-12' converted", True),
+    ("soft clay, left bank; FTIR sample at the foot of the slope", False),
+    ("coordinates 48°12'30\" N", False),
+])
+def test_a_conversion_from_feet_stated_only_in_the_notes_goes_to_a_person(notes, blocked):
+    page = _page(1, "E 412000 N 5320000", 300.0, [(0, 2), (2, 6)])
+    page.extraction.logs[0].depth_unit_raw = "m"
+    page.extraction.logs[0].notes = notes
+    [bh] = assemble([page])
+    feet = [i for i in bh.issues if i.startswith("depths printed in feet")]
+    assert bool(feet) == blocked
+    assert all(finding_severity(i) == "blocking" for i in feet)

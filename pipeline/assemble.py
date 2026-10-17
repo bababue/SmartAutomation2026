@@ -618,11 +618,17 @@ def _unique_groundwater(observations) -> list[GroundwaterObservation]:
 
 
 FEET = re.compile(r"\b(?:ft|feet|foot)\b|^\s*'\s*$", re.I)
+# The model reports a conversion from feet in its notes and may give the unit as "m" afterwards. In free text
+# "foot"/"Fuß" also means the foot of a slope, and an apostrophe after a number also marks arc minutes.
+NOTES_FEET = re.compile(r"(?:\b|(?<=\d))(?:ft|feet)\b|(?:\d\s*|\b(?:from|in|von|aus)\s+)(?:foot|fu(?:ß|ss))\b"
+                        r"|(?<![°\d.,])\d+(?:[.,]\d+)?\s?'(?!\s*\d|')", re.I)
 
 
 def unit_findings(xs: list[XLog]) -> list[str]:
     """The model converts feet to metres itself; a person checks that conversion once."""
     units = {x.depth_unit_raw.strip() for x in xs if x.depth_unit_raw and FEET.search(x.depth_unit_raw)}
+    if not units and any(x.notes and NOTES_FEET.search(x.notes) for x in xs):
+        units = {"stated in the notes"}
     return [f"depths printed in feet ({', '.join(sorted(units))}); check the conversion to metres"] if units else []
 
 
