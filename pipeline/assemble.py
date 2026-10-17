@@ -1360,7 +1360,7 @@ def plausible(parameter: LabParameter, value: float) -> bool:
 
 def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[int, int, int]:
     """Attach the rows of lab sheets to the holes of the same document: by hole name (also with a test
-    suffix such as 'QX 16 - FHT'), else by a sample name that is a hole name or that only one hole has,
+    suffix such as 'BH 16 - FHT'), else by a sample name that is a hole name or that only one hole has,
     else to the only hole of the document. Returns (linked, unmatched, implausible)."""
     by_name: dict[HoleKey, Borehole] = {}
     for bh in records:
@@ -1381,7 +1381,7 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
             fits = [b for (k, n), b in by_name.items() if n == number and deep_enough(b, depth)]
             bh = fits[0] if len(fits) == 1 else None
         if bh is None:
-            # 'QX10CONTAMLAND', 'QX16FHT': a known hole followed by a word. A single letter ('QX11A') is
+            # 'BH10CONTAM', 'BH16FHT': a known hole followed by a word. A single letter ('BH11A') is
             # another hole (a re-drill) and does not match.
             prefixes = [(n, b) for (k, n), b in by_name.items() if n[-1:].isdigit() and number.startswith(n)
                         and len(number) - len(n) >= 2 and number[len(n)].isalpha() and (kind is None or k in (kind, None))]
