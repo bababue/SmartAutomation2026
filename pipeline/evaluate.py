@@ -13,8 +13,10 @@ run changes them and they drop back to review.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import statistics
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,11 +45,13 @@ def current_entries(con: sqlite3.Connection, corrected: bool = False) -> tuple[d
     entries and how many records had no stored model output (saved before it was kept; final values used)."""
     entries, fallback = {}, 0
     for r in con.execute("SELECT id, doc_id, data, extracted FROM boreholes"):
+        bh = Borehole.model_validate_json(r["data"])
         if not corrected and r["extracted"]:
             entries[r["id"]] = {"doc_id": r["doc_id"], **json.loads(r["extracted"])}
         else:
-            entries[r["id"]] = entry(Borehole.model_validate_json(r["data"]))
+            entries[r["id"]] = entry(bh)
             fallback += not corrected
+        entries[r["id"]]["pages"] = sorted({s.page for s in bh.sources if s.page is not None})
     return entries, fallback
 
 
@@ -211,19 +215,51 @@ def _by_key(current: dict[str, dict]) -> dict[str, str]:
     return {key: bids[0] for key, bids in seen.items() if len(bids) == 1}
 
 
+# Assembly appends the page to holes of one name that it splits ('BH1-p27', 'BH1-p27-2').
+_PAGE_SUFFIX = re.compile(r"-p(\d+)(?:-\d+)?$")
+
+
+def _name(borehole_id: str) -> str:
+    return re.sub(r"[^0-9A-Z]", "", _PAGE_SUFFIX.sub("", borehole_id.split(":", 1)[-1]).upper())
+
+
+def same_name(a: str, b: str) -> bool:
+    """Equal, or one extends the other ('HA1' / 'HA1 HL-7254'); 'BH1' does not extend to 'BH10'."""
+    short, long = sorted((_name(a), _name(b)), key=len)
+    if not short or not long.startswith(short):
+        return False
+    return len(long) == len(short) or not (short[-1].isdigit() and long[len(short)].isdigit())
+
+
+def _by_name(reference: list[str], current: dict[str, dict]) -> dict[str, str]:
+    """Reference ids to the one current record of the same document group with the same name (see same_name),
+    on the page a page-named reference id gives, where neither side has a second candidate."""
+    def fits(bid: str, cid: str) -> bool:
+        page = _PAGE_SUFFIX.search(bid.split(":", 1)[-1])
+        return (store.document_group(cid) == store.document_group(bid) and same_name(bid, cid)
+                and (page is None or int(page.group(1)) in current[cid].get("pages", [])))
+    found = {bid: [c for c in current if fits(bid, c)] for bid in reference}
+    claimed = Counter(c for cands in found.values() for c in cands)
+    return {bid: cands[0] for bid, cands in found.items() if len(cands) == 1 and claimed[cands[0]] == 1}
+
+
 def compare(reference: dict[str, dict], current: dict[str, dict],
             corrected: set[str] = frozenset()) -> dict[str, Score]:
     """Scores per document; only documents in the reference are compared. A reference record is matched by
-    id, else by natural key (a variant may name the hole differently)."""
+    id, else by natural key (a variant may name the hole differently), else by name within its document group."""
     scores: dict[str, Score] = {}
     by_key = _by_key(current)
+    first = {bid: bid if bid in current else by_key.get(ref.get("key")) for bid, ref in reference.items()}
+    taken = set(first.values())
+    by_name = _by_name([bid for bid, m in first.items() if m is None],
+                       {c: e for c, e in current.items() if c not in taken})
     used: set[str] = set()
     for bid, ref in reference.items():
         s = scores.setdefault(ref["doc_id"], Score())
         s.boreholes += 1
         s.boundaries += len(_boundaries(ref["layers"]))
         s.metres += _metres(ref["layers"])
-        match = bid if bid in current else by_key.get(ref.get("key"))
+        match = first[bid] or by_name.get(bid)
         if match is None or match in used:
             s.missing.append(bid)
             s.no_position += ref.get("lat") is not None

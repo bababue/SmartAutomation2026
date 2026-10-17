@@ -72,6 +72,16 @@ def test_ambiguous_natural_key_is_not_matched():
     assert evaluate.compare(reference, twins)["DOC1"].missing == ["DOC1:BH1"]
 
 
+def test_page_named_reference_is_matched_by_its_full_printed_name_on_that_page_only_if_unique():
+    reference = {"DOC1__A:TP4-p12": {**ref(), "key": "nk:DOC1|test_pit|TP4P12"}}
+    full = {**ref(), "key": "nk:DOC1|test_pit|TP4NORTH", "pages": [12]}
+    assert evaluate.compare(reference, {"DOC1__A:TP4NORTH": full})["DOC1"].missing == []
+    assert evaluate.compare(reference, {"DOC1__A:TP4NORTH": {**full, "pages": [13]}})["DOC1"].missing == ["DOC1__A:TP4-p12"]
+    two = {"DOC1__A:TP4NORTH": full, "DOC1__A:TP4-SOUTH": {**full, "key": "nk:DOC1|test_pit|TP4SOUTH"}}
+    assert evaluate.compare(reference, two)["DOC1"].missing == ["DOC1__A:TP4-p12"]  # two candidates: no match
+    assert evaluate.same_name("DOC1:BH-1", "DOC1:bh 1 (north)") and not evaluate.same_name("DOC1:BH1", "DOC1:BH10")
+
+
 def test_final_depth_groundwater_and_lab_values():
     reference = {"DOC1:BH1": {**ref(), "depth_m": 9.0, "groundwater": [2.4], "lab": [["ucs", 42.0, 6.0], ["water_content", 18.0, None]]}}
     current = {"DOC1:BH1": {**ref(), "depth_m": 9.05, "groundwater": [2.4, 3.1], "lab": [["ucs", 42.0, 6.0], ["water_content", 18.0, 2.0]]}}
