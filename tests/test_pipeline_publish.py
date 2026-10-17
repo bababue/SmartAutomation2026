@@ -137,6 +137,21 @@ def test_two_reviewed_copies_of_a_hole_both_stay():
     assert dedupe([a, b], {"a:BH1": {"uid", 7}, "b:BH1": {"uid", 7, "b:BH1"}}) == [b]
 
 
+def test_a_document_correction_does_not_join_two_independently_reviewed_copies(con):
+    from pipeline.assemble import dedupe
+    a, b = record(bid="folder__a:BH1", name="BH1"), record(bid="folder__b:BH1", name="BH1")
+    for bh, status in ((a, ReviewStatus.approved), (b, ReviewStatus.rejected)):
+        store.save_borehole(con, bh.model_copy(deep=True))
+        store.record_review(con, bh.borehole_id, status, "Ana", None)
+    store.add_correction(con, "document", "folder", "crs", {"epsg": 25832}, "Ana", None)
+    con.commit()
+    uids = {bh.borehole_id: store.uid_for(con, bh) for bh in (a, b)}
+    fixes = {bh.borehole_id: store.corrections_for(con, bh.borehole_id, uids[bh.borehole_id]) for bh in (a, b)}
+    assert all(fixes.values())
+    protected = runner._protected(con, [a, b], uids, fixes)
+    assert len(dedupe([a, b], protected)) == 2
+
+
 def test_dedupe_prefers_the_better_position():
     from pipeline.assemble import dedupe
     a, b = record(bid="a:BH1"), record(bid="b:BH1")

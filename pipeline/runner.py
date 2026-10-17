@@ -370,20 +370,20 @@ def _publishable_docs(con, rendered, classes, extractions, incomplete_docs: set[
 
 def _protected(con, records, uids: dict[str, str | None], fixes: dict[str, list]) -> dict[str, set]:
     """Identities a reviewer stands behind, per record that has corrections or a human decision: deduplication
-    must not merge them away. The record's own id counts when the decision or a correction names it."""
+    must not merge them away. The record's own id counts when the decision or a correction names it. Document
+    corrections apply to every hole of the group, so they identify none."""
     human = {s.value for s in store.HUMAN}
     protected = {}
     for bh in records:
         uid = uids[bh.borehole_id]
+        own = [f for f in fixes[bh.borehole_id] if f["scope"] == "borehole"]
         status = con.execute("SELECT review_status FROM boreholes WHERE id = ? OR uid = ?",
                              (bh.borehole_id, uid)).fetchone()
-        if not (fixes[bh.borehole_id] or status and status[0] in human):
+        if not (own or status and status[0] in human):
             continue
         decided_here = con.execute("SELECT review_status FROM boreholes WHERE id = ?", (bh.borehole_id,)).fetchone()
-        reviewed_as = (decided_here and decided_here[0] in human) or any(
-            f["target"] == bh.borehole_id for f in fixes[bh.borehole_id])
-        protected[bh.borehole_id] = {uid} | {f["id"] for f in fixes[bh.borehole_id]} | (
-            {bh.borehole_id} if reviewed_as else set())
+        reviewed_as = (decided_here and decided_here[0] in human) or any(f["target"] == bh.borehole_id for f in own)
+        protected[bh.borehole_id] = {uid} | {f["id"] for f in own} | ({bh.borehole_id} if reviewed_as else set())
     return protected
 
 
