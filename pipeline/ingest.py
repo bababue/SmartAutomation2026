@@ -111,9 +111,9 @@ def converted_pdf(doc: SourceDoc, dataset_dir: Path | None = None) -> Path | Non
     if doc.kind != "docx":
         return None
     dataset_dir = dataset_dir or config.DATASET_DIR
-    pdf = converted_dir(dataset_dir) / Path(doc.path).with_suffix(".pdf")
-    if not pdf.exists():
-        _convert(dataset_dir / doc.path, pdf.parent)
+    src, pdf = dataset_dir / doc.path, converted_dir(dataset_dir) / Path(doc.path).with_suffix(".pdf")
+    if not pdf.exists() or pdf.stat().st_mtime < src.stat().st_mtime:
+        _convert(src, pdf.parent)
     return pdf if pdf.exists() else None
 
 
