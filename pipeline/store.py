@@ -286,11 +286,15 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
     uid = (previous or {}).get("uid") or _resolve_uid(con, bh) or uuid.uuid4().hex
     if con.execute("SELECT 1 FROM boreholes WHERE uid = ? AND id != ?", (uid, bh.borehole_id)).fetchone():
         uid = uuid.uuid4().hex  # another current record is that hole: never share an identity
+    decision = None
     if previous and previous.get("data"):
         old = Borehole.model_validate_json(previous["data"])
         decision = (old, content_hash(old))
-    else:  # stored under another id before: the decision follows the uid, as corrections do
-        decision = _logged_decision(con, uid)
+    if not decision or decision[0].review_status not in HUMAN:
+        # The review log holds the decision: a row reopened because its data changed still had one, and the
+        # next save must reopen it again rather than score it as never reviewed. Stored under another id
+        # before, the decision follows the uid, as corrections do.
+        decision = _logged_decision(con, uid) or decision
     if decision and _blocking(decision[0]) != _blocking(bh):
         revision += 1  # the content hash leaves findings out: this stops a review screen opened before them
     if decision and decision[0].review_status in HUMAN:
