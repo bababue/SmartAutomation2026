@@ -21,6 +21,11 @@
   --high: #2f7d4f;
   --medium: #b7791f;
   --low: #b33a3a;
+  --high-strong: #276b43;  /* hover on the approve button */
+  --on-accent: #ffffff;    /* text on accent and status fills */
+  --shadow: #1d2528;
+  --highlight: #c2410c;    /* outline on the source page, which stays a light scan in both themes */
+  --page: #ffffff;         /* behind the source page image in both themes */
   --font: 'IBM Plex Sans Condensed', 'Arial Narrow', sans-serif;
   --sidebar: 340px;
   --top: 56px;
@@ -48,6 +53,9 @@
   --high: #5cb37f;
   --medium: #d49b3e;
   --low: #e06a6a;
+  --high-strong: #4a9c6c;
+  --on-accent: #13181a;
+  --shadow: #000000;
   color-scheme: dark;
 }
 
@@ -67,7 +75,6 @@ button, input, select { font: inherit; color: inherit; }
 .muted { color: var(--graphite); }
 .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-/* Layout ------------------------------------------------------------------ */
 .app {
   display: grid;
   grid-template-columns: var(--sidebar) 1fr;
@@ -109,7 +116,7 @@ button, input, select { font: inherit; color: inherit; }
 .stats strong { color: var(--ink); font-weight: 600; }
 .upload-queue {
   position: absolute; z-index: 20; top: calc(100% + 4px); right: 20px; width: 340px; max-height: 60vh; overflow-y: auto;
-  border: 1px solid var(--grid); border-radius: 8px; background: var(--panel); box-shadow: 0 10px 28px -12px rgba(29, 37, 40, 0.5);
+  border: 1px solid var(--grid); border-radius: 8px; background: var(--panel); box-shadow: 0 10px 28px -12px color-mix(in srgb, var(--shadow) 50%, transparent);
 }
 .upload-batch + .upload-batch { border-top: 1px solid var(--grid); }
 .upload-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 13px; }
@@ -144,12 +151,12 @@ button, input, select { font: inherit; color: inherit; }
 }
 .map-wrap { position: relative; min-height: 0; }
 .map { width: 100%; height: 100%; } /* maplibre sets position: relative on the container */
-.route-open { position: absolute; top: 16px; left: 16px; z-index: 4; box-shadow: 0 3px 14px rgba(29, 37, 40, 0.18); }
+.route-open { position: absolute; top: 16px; left: 16px; z-index: 4; box-shadow: 0 3px 14px color-mix(in srgb, var(--shadow) 18%, transparent); }
 .route-panel {
   position: absolute; top: 16px; left: 16px; z-index: 4; width: min(340px, calc(100% - 32px));
   max-height: calc(100% - 32px); display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--grid); border-radius: 5px;
-  box-shadow: 0 8px 28px rgba(29, 37, 40, 0.2);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--shadow) 20%, transparent);
 }
 .map-wrap-section .route-panel { max-height: max(180px, calc(100% - 340px)); }
 .route-panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--grid); }
@@ -170,7 +177,6 @@ button, input, select { font: inherit; color: inherit; }
 .route-profile { border-top: 1px solid var(--grid); padding-top: 11px; }
 .route-delete { margin-top: 14px; padding: 0; border: 0; background: none; color: var(--low); cursor: pointer; font-size: 13px; }
 
-/* Filters ----------------------------------------------------------------- */
 .filters { position: relative; padding: 12px 16px; border-bottom: 1px solid var(--grid); }
 .filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .pill {
@@ -185,7 +191,7 @@ button, input, select { font: inherit; color: inherit; }
 .pill-reset:hover { text-decoration: underline; }
 .filter-menu {
   position: absolute; z-index: 10; left: 16px; right: 16px; display: grid; gap: 10px; padding: 10px;
-  border: 1px solid var(--grid); border-radius: 4px; background: var(--panel); box-shadow: 0 8px 24px -12px rgba(29, 37, 40, 0.45);
+  border: 1px solid var(--grid); border-radius: 4px; background: var(--panel); box-shadow: 0 8px 24px -12px color-mix(in srgb, var(--shadow) 45%, transparent);
 }
 .menu-options { margin: 0; padding: 0; list-style: none; }
 .menu-option { width: 100%; padding: 6px 8px 6px 26px; border: 0; border-radius: 3px; background: none; text-align: left; font-size: 14px; cursor: pointer; position: relative; }
@@ -196,7 +202,7 @@ button, input, select { font: inherit; color: inherit; }
 .range-rows { width: 100%; border-collapse: collapse; font-size: 13px; }
 .range-rows thead th { padding: 0 4px 2px; color: var(--graphite); font-weight: 400; text-align: left; }
 .range-rows tbody th { padding: 3px 6px 3px 0; font-weight: 500; text-align: left; white-space: nowrap; }
-.range-rows tbody th svg { vertical-align: -1px; border: 1px solid rgba(29, 37, 40, 0.25); }
+.range-rows tbody th svg { vertical-align: -1px; border: 1px solid color-mix(in srgb, var(--ink) 25%, transparent); }
 .range-rows td { padding: 3px 2px; }
 .range-rows td:last-child { width: 1%; }
 .range-rows input { height: 28px; width: 100%; min-width: 0; border: 1px solid var(--grid); border-radius: 3px; padding: 0 6px; background: var(--panel); }
@@ -206,7 +212,7 @@ button, input, select { font: inherit; color: inherit; }
   padding: 2px 8px 2px 4px; border: 1px solid var(--grid); border-radius: 2px; background: var(--panel);
   font-size: 13px; cursor: pointer;
 }
-.chip svg { border: 1px solid rgba(29, 37, 40, 0.25); }
+.chip svg { border: 1px solid color-mix(in srgb, var(--ink) 25%, transparent); }
 .chip-n { color: var(--graphite); }
 .chip-on { border-color: var(--water); background: var(--water-soft); }
 
@@ -222,11 +228,11 @@ button, input, select { font: inherit; color: inherit; }
 .edge-tab span { writing-mode: vertical-rl; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
 .list-toggle {
   position: fixed; z-index: 6; left: calc(var(--sidebar) - 1px); top: calc(var(--top) + (100vh - var(--top)) / 2);
-  border-left: 0; border-radius: 0 4px 4px 0; box-shadow: 2px 0 6px -2px rgba(29, 37, 40, 0.25);
+  border-left: 0; border-radius: 0 4px 4px 0; box-shadow: 2px 0 6px -2px color-mix(in srgb, var(--shadow) 25%, transparent);
 }
 .source-toggle {
   position: absolute; z-index: 2; right: 0; top: 50%;
-  border-right: 0; border-radius: 4px 0 0 4px; box-shadow: -2px 0 6px -2px rgba(29, 37, 40, 0.25);
+  border-right: 0; border-radius: 4px 0 0 4px; box-shadow: -2px 0 6px -2px color-mix(in srgb, var(--shadow) 25%, transparent);
 }
 .sheet-resizer {
   position: fixed; z-index: 6; top: var(--top); bottom: 0; right: calc(var(--sheet) - 4px); width: 8px;
@@ -241,7 +247,6 @@ button, input, select { font: inherit; color: inherit; }
 .empty { padding: 24px 16px; }
 .empty p { margin: 0 0 4px; }
 
-/* Result list: each entry carries a miniature core tray ------------------- */
 .results { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
 .result {
   width: 100%;
@@ -260,7 +265,7 @@ button, input, select { font: inherit; color: inherit; }
 .result-name { font-weight: 600; font-size: 16px; }
 .result-depth { color: var(--graphite); font-size: 14px; }
 .result-place { grid-column: 1 / -1; color: var(--graphite); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.core-strip { grid-column: 1 / -1; display: block; margin-top: 5px; border: 1px solid rgba(29, 37, 40, 0.45); border-radius: 1px; }
+.core-strip { grid-column: 1 / -1; display: block; margin-top: 5px; border: 1px solid color-mix(in srgb, var(--ink) 45%, transparent); border-radius: 1px; }
 .core-strip-empty { height: 14px; background: repeating-linear-gradient(45deg, var(--flag-bg) 0 4px, var(--panel) 4px 8px); }
 .result-file { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .result-flags { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 4px; }
@@ -271,7 +276,6 @@ button, input, select { font: inherit; color: inherit; }
 .flag-pending_review { background: var(--pending-soft); color: var(--warn-ink); }
 .flag-rejected { background: var(--rejected-soft); color: var(--low); }
 
-/* Result groups: one project (or document) per heading ------------------- */
 .group-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding-right: 12px;
   background: var(--paper); border-bottom: 1px solid var(--grid); }
 .group-toggle { flex: 1; min-width: 0; display: grid; grid-template-columns: 12px 1fr; gap: 0 6px; align-items: center;
@@ -288,7 +292,6 @@ button, input, select { font: inherit; color: inherit; }
 .group-show:hover { border-color: var(--water); }
 .group-items { list-style: none; margin: 0; padding: 0; }
 
-/* Map legend -------------------------------------------------------------- */
 .legend {
   position: absolute; left: 12px; bottom: 36px;
   display: flex; flex-wrap: wrap; gap: 12px; max-width: calc(100% - 24px); padding: 6px 10px;
@@ -297,13 +300,12 @@ button, input, select { font: inherit; color: inherit; }
 }
 .legend-beside-sheet { max-width: calc(100% - var(--sheet) - 24px); }  /* the detail sheet covers the map's right part */
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
-.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--panel); box-shadow: 0 0 0 1px color-mix(in srgb, var(--shadow) 12%, transparent); }
 .dot-high { background: var(--high); }
 .dot-medium { background: var(--medium); }
 .dot-low { background: var(--low); }
 .dot-ring { background: var(--panel); border: 2.5px solid var(--medium); box-shadow: none; }
 
-/* Detail sheet ------------------------------------------------------------ */
 .detail {
   position: fixed;
   top: var(--top);
@@ -314,7 +316,7 @@ button, input, select { font: inherit; color: inherit; }
   flex-direction: column;
   background: var(--paper);
   border-left: 1px solid var(--grid);
-  box-shadow: -18px 0 40px -28px rgba(29, 37, 40, 0.45);
+  box-shadow: -18px 0 40px -28px color-mix(in srgb, var(--shadow) 45%, transparent);
   animation: slide-in 220ms ease-out;
   z-index: 5;
 }
@@ -408,7 +410,7 @@ button, input, select { font: inherit; color: inherit; }
 .layers-edit td:nth-child(3) { min-width: 200px; width: 100%; }
 .layers .row-active td { background: var(--pending-soft); }
 .layers .row-active td:first-child { box-shadow: inset 3px 0 0 var(--medium); }
-.swatch { vertical-align: -2px; margin-right: 6px; border: 1px solid rgba(29, 37, 40, 0.4); }
+.swatch { vertical-align: -2px; margin-right: 6px; border: 1px solid color-mix(in srgb, var(--ink) 40%, transparent); }
 .original { display: block; color: var(--graphite); font-size: 13px; margin-top: 2px; }
 .tests { margin: 0; padding-left: 0; list-style: none; font-size: 14px; }
 .tests li { padding: 3px 0; border-bottom: 1px solid var(--rule-soft); }
@@ -439,17 +441,16 @@ button, input, select { font: inherit; color: inherit; }
 .page-tab { padding: 5px 10px; border: 1px solid var(--grid); border-radius: 3px; background: var(--panel); cursor: pointer; font-size: 13px; letter-spacing: 0; text-transform: none; font-weight: 500; }
 .page-tab-on { border-color: var(--ink); background: var(--ink); color: var(--panel); }
 .source-link { position: relative; display: block; }
-.source-highlight { position: absolute; border: 2px solid #c2410c; background: rgba(194, 65, 12, 0.12); border-radius: 2px; pointer-events: none; }
+.source-highlight { position: absolute; border: 2px solid var(--highlight); background: color-mix(in srgb, var(--highlight) 12%, transparent); border-radius: 2px; pointer-events: none; }
 .source-hint { font-size: 12px; margin: 8px 0 0; }
-.source-link img { display: block; width: 100%; border: 1px solid var(--grid); background: #fff; cursor: zoom-in; }
+.source-link img { display: block; width: 100%; border: 1px solid var(--grid); background: var(--page); cursor: zoom-in; }
 
-/* App menu ---------------------------------------------------------------- */
 .app-menu { position: relative; }
 .menu-button { display: inline-grid; place-items: center; width: 36px; height: 36px; }
 .menu-button svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 .app-menu-list {
   position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; min-width: 250px; padding: 6px 0;
-  border: 1px solid var(--grid); border-radius: 8px; background: var(--panel); box-shadow: 0 10px 28px -12px rgba(29, 37, 40, 0.5);
+  border: 1px solid var(--grid); border-radius: 8px; background: var(--panel); box-shadow: 0 10px 28px -12px color-mix(in srgb, var(--shadow) 50%, transparent);
 }
 .app-menu-item {
   display: flex; align-items: center; gap: 14px; width: 100%; height: 40px; padding: 0 16px;
@@ -469,7 +470,6 @@ button, input, select { font: inherit; color: inherit; }
 .switch-on { background: var(--water); }
 .switch-on::after { transform: translateX(14px); }
 
-/* Review queue: covers the map while open -------------------------------- */
 .queue { position: absolute; inset: 0; overflow: auto; background: var(--panel); padding: 22px 28px 40px; z-index: 2; }
 .queue-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 1100px; margin-bottom: 4px; }
 .queue-head h2 { margin: 0; font-size: 24px; }
@@ -484,11 +484,10 @@ button, input, select { font: inherit; color: inherit; }
 .queue-score {
   display: inline-block; min-width: 38px; padding: 2px 0; text-align: center; font-weight: 700; border-radius: 2px;
   background: color-mix(in srgb, var(--low) calc((1 - var(--s)) * 100%), var(--medium));
-  color: #fff;
+  color: var(--on-accent);
 }
 .queue-reasons { margin: 0; padding-left: 16px; color: var(--graphite); }
 
-/* Review status bar under the detail head ------------------------------- */
 .review { padding: 12px 22px; border-bottom: 1px solid var(--grid); background: var(--panel); }
 .review-auto_approved, .review-approved { background: var(--approved-soft); }
 .review-pending_review { background: var(--pending-soft); }
@@ -524,22 +523,20 @@ button, input, select { font: inherit; color: inherit; }
 .review-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
 .review-buttons .btn { white-space: nowrap; height: 40px; padding: 0 18px; font-weight: 600; }
 .review-buttons .btn-decide { padding: 0; }
-.btn-approve { background: var(--high); border-color: var(--high); color: #fff; }
-.btn-approve:hover { background: #276b43; border-color: #276b43; }
+.btn-approve { background: var(--high); border-color: var(--high); color: var(--on-accent); }
+.btn-approve:hover { background: var(--high-strong); border-color: var(--high-strong); }
 .btn-reject { color: var(--low); border-color: var(--low); }
 .btn:disabled { opacity: 0.6; cursor: progress; }
 .review-log { margin-top: 8px; font-size: 13px; color: var(--graphite); }
 .review-log ul { margin: 6px 0 0; padding-left: 18px; }
 
-/* Review navigation ------------------------------------------------------- */
 .queue-nav { display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; font-size: 13px; white-space: nowrap; }
 .btn-icon:disabled { opacity: 0.4; cursor: default; }
 
-/* Section view: a tray under the map ------------------------------------- */
 .section {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
   background: color-mix(in srgb, var(--panel) 97%, transparent); border-top: 1px solid var(--grid);
-  box-shadow: 0 -14px 30px -24px rgba(29, 37, 40, 0.5);
+  box-shadow: 0 -14px 30px -24px color-mix(in srgb, var(--shadow) 50%, transparent);
   padding: 10px 18px 6px;
 }
 .section-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
@@ -592,10 +589,9 @@ button, input, select { font: inherit; color: inherit; }
   bottom: min(var(--tray, 0px), calc(100% - 120px));
 }
 
-/* Map popups ---------------------------------------------------------------- */
 .map-tooltip .maplibregl-popup-content, .map-picker .maplibregl-popup-content {
   background: var(--panel); color: var(--ink);
-  font-family: var(--font); padding: 7px 10px; border-radius: 3px; box-shadow: 0 4px 14px rgba(29, 37, 40, 0.18);
+  font-family: var(--font); padding: 7px 10px; border-radius: 3px; box-shadow: 0 4px 14px color-mix(in srgb, var(--shadow) 18%, transparent);
 }
 :root[data-theme="dark"] :is(.maplibregl-ctrl-group, .maplibregl-ctrl-attrib, .maplibregl-ctrl-scale) {
   background: var(--panel); color: var(--ink); border-color: var(--graphite);
@@ -616,7 +612,6 @@ button, input, select { font: inherit; color: inherit; }
 .picker-item:hover { background: var(--water-soft); }
 .picker-meta { font-weight: 400; color: var(--graphite); font-size: 12px; }
 
-/* Smaller screens --------------------------------------------------------- */
 /* The source page stays next to the data at every width above phones: reviewing means comparing. */
 @media (max-width: 1500px) {
   .detail-body {
@@ -657,7 +652,6 @@ button, input, select { font: inherit; color: inherit; }
   .record { grid-template-columns: 1fr; }
 }
 
-/* Reviewer corrections ---------------------------------------------------- */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .btn-small { height: 26px; padding: 0 8px; font-size: 13px; }
 
@@ -679,10 +673,9 @@ button, input, select { font: inherit; color: inherit; }
 
 .load-more { margin: 10px 16px 16px; width: calc(100% - 32px); }
 
-/* Editing in place ---------------------------------------------------------- */
 .btn-ghost { border-color: transparent; background: none; color: var(--graphite); letter-spacing: 0; text-transform: none; }
 .btn-ghost:hover { border-color: var(--grid); background: var(--panel); color: var(--ink); }
-.btn-primary { background: var(--water); border-color: var(--water); color: #fff; letter-spacing: 0; text-transform: none; }
+.btn-primary { background: var(--water); border-color: var(--water); color: var(--on-accent); letter-spacing: 0; text-transform: none; }
 .btn-primary:hover { background: color-mix(in srgb, var(--water) 85%, var(--ink)); border-color: color-mix(in srgb, var(--water) 85%, var(--ink)); }
 .card-editing { border-color: var(--water); box-shadow: 0 0 0 3px var(--water-soft); }
 .field {
@@ -725,7 +718,6 @@ select.field { padding: 0 4px; }
 .notes-input { min-height: 110px; }
 .card .tests, .card .notes { margin: 0; }
 
-/* Statistics view -------------------------------------------------------- */
 .stats-view { position: absolute; inset: 0; overflow: auto; background: var(--paper); padding: 22px 28px 40px; z-index: 2; }
 .stats-head { max-width: 1240px; }
 .stats-head h2 { margin: 0; font-size: 24px; }

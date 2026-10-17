@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { exportUrl } from '../api'
 
 interface Props {
   inReview: boolean
@@ -114,11 +115,11 @@ export function AppMenu({ inReview, inStats, uploading, dark, columns3d, onToggl
             {sub === 'export' && (
               <div className="menu-flyout" id="menu-export">
                 <div className="app-menu-list" role="menu" aria-label="Export released records">
-                  <a role="menuitem" className="app-menu-item" href="/api/export.xlsx" onClick={close}
+                  <a role="menuitem" className="app-menu-item" href={exportUrl('xlsx')} onClick={close}
                     title="Released records in Herrenknecht's BoreholeDataFormat">
                     <Icon d={ICON.table} /><span className="menu-text">Excel</span>
                   </a>
-                  <a role="menuitem" className="app-menu-item" href="/api/export.csv" onClick={close}
+                  <a role="menuitem" className="app-menu-item" href={exportUrl('csv')} onClick={close}
                     title="Released records, one row per layer">
                     <Icon d={ICON.file} /><span className="menu-text">CSV</span>
                   </a>

@@ -7,7 +7,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { fetchLayerStrips } from '../api'
 import { tooltipContent } from '../boreholeTooltip'
 import { LITHOLOGY, lithStyle, patternId } from '../lithology'
-import { STATUS_COLOR as STATUS_COLORS, STATUS_LABEL } from '../review'
+import { STATUS_LABEL } from '../review'
 import type { BoreholeSummary, FeatureCollection, ReviewStatus } from '../types'
 import type { RoutePoint, TunnelRoute } from '../tunnelRoute'
 
@@ -18,14 +18,13 @@ setWorkerUrl(workerUrl)
 // Public vector basemap without API key. Tile requests reveal the viewed area, nothing else.
 const STYLE = { light: 'https://tiles.openfreemap.org/styles/liberty', dark: 'https://tiles.openfreemap.org/styles/dark' }
 
-const ACCENT = '#0E6F8E'
-// Point colour = release status (see review.ts); a ring instead of a dot = approximate position.
-const STATUS_COLOR: ExpressionSpecification = [
-  'match', ['get', 'review_status'],
-  ['auto_approved', 'approved'], '#2F7D4F',
-  'rejected', '#B33A3A',
-  '#B7791F',
-]
+// MapLibre paints on a canvas, so the theme colours are read from the CSS variables when the layers are added.
+const cssColor = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+
+function statusColors(): Record<ReviewStatus, string> {
+  const released = cssColor('--high')
+  return { auto_approved: released, approved: released, pending_review: cssColor('--medium'), rejected: cssColor('--low') }
+}
 
 interface Props {
   data: FeatureCollection
@@ -168,6 +167,7 @@ const NO_OFFSET: Offset = [0, 0]
 function updateColumns(m: MapLibre, data: FeatureCollection, strips: Map<string, BoreholeSummary['strip']>, spread: ColumnSpread) {
   const columns: Column[] = []
   if (spread.show && m.getZoom() >= COLUMN_MIN_ZOOM) {
+    const statusColor = statusColors()
     const bounds = m.getBounds()
     const offsets = columnOffsets(data)
     for (const feature of data.features) {
@@ -187,7 +187,7 @@ function updateColumns(m: MapLibre, data: FeatureCollection, strips: Map<string,
       }
       const strip = strips.get(feature.properties.id)
       if (!strip?.length) {
-        addSection(0, depth, STATUS_COLORS[feature.properties.review_status])
+        addSection(0, depth, statusColor[feature.properties.review_status])
       } else {
         let covered = 0
         for (const [rawTop, rawBottom, lithology] of [...strip].sort((a, b) => a[0] - b[0])) {
@@ -201,7 +201,7 @@ function updateColumns(m: MapLibre, data: FeatureCollection, strips: Map<string,
         if (covered < depth) addSection(covered, depth, lithStyle('unknown').fill, 'unknown')
         sections.push({
           ...feature.properties, base_m: depth,
-          height_m: depth + 0.5, color: STATUS_COLORS[feature.properties.review_status],
+          height_m: depth + 0.5, color: statusColor[feature.properties.review_status],
         })
       }
       const to = offsets.get(feature.properties.id) ?? NO_OFFSET
@@ -585,9 +585,13 @@ function loadPatterns() {
 
 /** The borehole sources and layers on top of the basemap; a style switch drops them, so they are added again. */
 function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>>,
-  state: { data: FeatureCollection; route: TunnelRoute | null; routeDraft: RoutePoint[] | null; dark: boolean; columns3d: boolean }) {
+  state: { data: FeatureCollection; route: TunnelRoute | null; routeDraft: RoutePoint[] | null; columns3d: boolean }) {
   if (m.getSource('boreholes')) return
-  const ink = state.dark ? '#E2E7E5' : '#1D2528', paper = state.dark ? '#1B2225' : '#FFFFFF'
+  const accent = cssColor('--water'), ink = cssColor('--ink'), panel = cssColor('--panel')
+  const status = statusColors()
+  // Point colour = release status; a ring instead of a dot = approximate position.
+  const statusColor: ExpressionSpecification = ['match', ['get', 'review_status'],
+    ['auto_approved', 'approved'], status.approved, 'rejected', status.rejected, status.pending_review]
   for (const [key, image] of images) m.addImage(patternId(key), image, { pixelRatio: 2 })
   m.addSource('boreholes', { type: 'geojson', data: state.data, cluster: true, clusterRadius: 42, clusterMaxZoom: CLUSTER_MAX_ZOOM })
   m.addSource('depth-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
@@ -597,14 +601,14 @@ function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>
   m.addSource('tunnel-draft', { type: 'geojson', data: sectionLine(state.routeDraft ?? []) })
   m.addSource('tunnel-vertices', { type: 'geojson', data: routeVertices(state.routeDraft ?? []) })
   m.addLayer({ id: 'tunnel-corridor', type: 'line', source: 'tunnel-route', layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': ACCENT, 'line-opacity': 0.18, 'line-width': 1 } })
-  m.addLayer({ id: 'tunnel-line', type: 'line', source: 'tunnel-route', paint: { 'line-color': ACCENT, 'line-width': 3 } })
-  m.addLayer({ id: 'tunnel-draft-line', type: 'line', source: 'tunnel-draft', paint: { 'line-color': ACCENT, 'line-width': 3, 'line-dasharray': [2, 2] } })
+    paint: { 'line-color': accent, 'line-opacity': 0.18, 'line-width': 1 } })
+  m.addLayer({ id: 'tunnel-line', type: 'line', source: 'tunnel-route', paint: { 'line-color': accent, 'line-width': 3 } })
+  m.addLayer({ id: 'tunnel-draft-line', type: 'line', source: 'tunnel-draft', paint: { 'line-color': accent, 'line-width': 3, 'line-dasharray': [2, 2] } })
   m.addLayer({ id: 'tunnel-draft-vertices', type: 'circle', source: 'tunnel-vertices',
-    paint: { 'circle-color': ACCENT, 'circle-radius': 5, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 2 } })
+    paint: { 'circle-color': accent, 'circle-radius': 5, 'circle-stroke-color': panel, 'circle-stroke-width': 2 } })
   updateRouteOverlay(m, state)
-  m.addLayer({ id: 'uncertainty-fill', type: 'fill', source: 'uncertainty', paint: { 'fill-color': ACCENT, 'fill-opacity': 0.08 } })
-  m.addLayer({ id: 'uncertainty-line', type: 'line', source: 'uncertainty', paint: { 'line-color': ACCENT, 'line-width': 1.2, 'line-dasharray': [3, 2] } })
+  m.addLayer({ id: 'uncertainty-fill', type: 'fill', source: 'uncertainty', paint: { 'fill-color': accent, 'fill-opacity': 0.08 } })
+  m.addLayer({ id: 'uncertainty-line', type: 'line', source: 'uncertainty', paint: { 'line-color': accent, 'line-width': 1.2, 'line-dasharray': [3, 2] } })
   m.addLayer({
     id: 'column-leaders', type: 'line', source: 'column-leaders', minzoom: COLUMN_MIN_ZOOM, filter: ['==', ['geometry-type'], 'LineString'],
     layout: { 'line-cap': 'round' },
@@ -613,7 +617,7 @@ function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>
   // The true spot of the fanned-out holes: a target, so it never reads as a borehole point.
   m.addLayer({
     id: 'column-spots', type: 'circle', source: 'column-leaders', minzoom: COLUMN_MIN_ZOOM, filter: ['==', ['geometry-type'], 'Point'],
-    paint: { 'circle-color': paper, 'circle-radius': 8, 'circle-stroke-color': ink, 'circle-stroke-width': 2.5, 'circle-pitch-alignment': 'map' },
+    paint: { 'circle-color': panel, 'circle-radius': 8, 'circle-stroke-color': ink, 'circle-stroke-width': 2.5, 'circle-pitch-alignment': 'map' },
   })
   m.addLayer({
     id: 'column-spot-dots', type: 'circle', source: 'column-leaders', minzoom: COLUMN_MIN_ZOOM, filter: ['==', ['geometry-type'], 'Point'],
@@ -634,38 +638,38 @@ function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>
   m.addLayer({
     id: 'clusters', type: 'circle', source: 'boreholes', filter: ['has', 'point_count'],
     paint: {
-      'circle-color': ACCENT,
+      'circle-color': accent,
       'circle-opacity': 0.88,
       'circle-radius': ['step', ['get', 'point_count'], 13, 10, 17, 50, 22, 200, 28],
-      'circle-stroke-color': '#F6F7F4',
+      'circle-stroke-color': cssColor('--paper'),
       'circle-stroke-width': 2,
     },
   })
   m.addLayer({
     id: 'cluster-count', type: 'symbol', source: 'boreholes', filter: ['has', 'point_count'],
     layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['Noto Sans Regular'], 'text-size': 12 },
-    paint: { 'text-color': '#FFFFFF' },
+    paint: { 'text-color': cssColor('--on-accent') },
   })
   m.addLayer({
     id: 'points', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM,
     filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'loc_method'], 'geocoded_place']],
-    paint: { 'circle-color': STATUS_COLOR, 'circle-radius': 6, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5 },
+    paint: { 'circle-color': statusColor, 'circle-radius': 6, 'circle-stroke-color': panel, 'circle-stroke-width': 1.5 },
   })
   m.addLayer({
     id: 'points-no-depth', type: 'circle', source: 'boreholes', minzoom: COLUMN_MIN_ZOOM,
     filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'loc_method'], 'geocoded_place'],
       ['!', ['>', ['coalesce', ['get', 'depth'], 0], 0]]],
-    paint: { 'circle-color': STATUS_COLOR, 'circle-radius': 6, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5 },
+    paint: { 'circle-color': statusColor, 'circle-radius': 6, 'circle-stroke-color': panel, 'circle-stroke-width': 1.5 },
   })
   m.addLayer({
     id: 'points-approx', type: 'circle', source: 'boreholes',
     filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'loc_method'], 'geocoded_place']],
-    paint: { 'circle-color': '#FFFFFF', 'circle-stroke-color': STATUS_COLOR, 'circle-stroke-width': 2.5 },
+    paint: { 'circle-color': panel, 'circle-stroke-color': statusColor, 'circle-stroke-width': 2.5 },
   })
   m.addLayer({
     // Below column zoom only: at column zoom the centred 3D column marks the selection.
     id: 'selected', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM, filter: ['==', ['get', 'id'], ''],
-    paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 11, 'circle-stroke-color': ACCENT, 'circle-stroke-width': 3 },
+    paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 11, 'circle-stroke-color': accent, 'circle-stroke-width': 3 },
   })
   showColumns(m, state.columns3d)
 }

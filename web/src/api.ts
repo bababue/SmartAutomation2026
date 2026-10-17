@@ -99,3 +99,6 @@ export function postUpload(files: File[]) {
 }
 
 export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/upload/${enc(jobId)}`)
+
+/** Download link for the released records. */
+export const exportUrl = (format: 'xlsx' | 'csv') => `/api/export.${format}`
