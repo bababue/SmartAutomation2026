@@ -13,6 +13,22 @@ export interface TunnelRoute {
   diameterM: number | null
 }
 
+export interface SavedTunnel {
+  id: string
+  name: string
+  route: TunnelRoute | null
+  holeIds: string[]
+}
+
+export function tunnelProject(tunnel: SavedTunnel, features: Map<string, Feature>): string | null {
+  const counts = new Map<string, number>()
+  for (const id of new Set(tunnel.holeIds)) {
+    const project = features.get(id)?.properties.project?.trim()
+    if (project) counts.set(project, (counts.get(project) ?? 0) + 1)
+  }
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], undefined, { numeric: true }))[0]?.[0] ?? null
+}
+
 interface RoutePosition {
   chainageM: number
   offsetM: number
@@ -24,6 +40,7 @@ export interface RouteCandidate extends RoutePosition {
 }
 
 const STORAGE_KEY = 'borehole-atlas.tunnel-route'
+const TUNNELS_KEY = 'borehole-atlas.tunnels'
 const RAD = Math.PI / 180
 /** Metres per degree, for the flat approximation used over the short distances of a site or a route. */
 export const M_PER_DEG_LAT = 111_132
@@ -117,20 +134,41 @@ export function routeFromGeoJson(text: string, fallbackName: string): TunnelRout
   }
 }
 
-export function loadTunnelRoute(): TunnelRoute | null {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (!saved) return null
-    const value = JSON.parse(saved) as TunnelRoute
-    const coordinates = validateRouteCoordinates(value.coordinates)
-    if (typeof value.name !== 'string' || !Number.isFinite(value.corridorM)) return null
-    return { ...value, coordinates, corridorM: Math.max(1, Math.min(5000, value.corridorM)) }
-  } catch { return null }
+function validRoute(value: unknown): TunnelRoute | null {
+  if (!value || typeof value !== 'object') return null
+  const route = value as TunnelRoute
+  const coordinates = validateRouteCoordinates(route.coordinates)
+  if (typeof route.name !== 'string' || !Number.isFinite(route.corridorM) ||
+      !['depth', 'elevation'].includes(route.tunnelMode)) return null
+  return { ...route, coordinates, corridorM: Math.max(1, Math.min(5000, route.corridorM)) }
 }
 
-export function saveTunnelRoute(route: TunnelRoute | null) {
+export function loadTunnels(): SavedTunnel[] {
   try {
-    if (route) localStorage.setItem(STORAGE_KEY, JSON.stringify(route))
-    else localStorage.removeItem(STORAGE_KEY)
+    const saved = localStorage.getItem(TUNNELS_KEY)
+    if (saved) {
+      const entries: unknown = JSON.parse(saved)
+      if (!Array.isArray(entries)) return []
+      return entries.flatMap((entry): SavedTunnel[] => {
+        try {
+          if (!entry || typeof entry.id !== 'string' || typeof entry.name !== 'string') return []
+          const route = entry.route == null ? null : validRoute(entry.route)
+          if (entry.route != null && !route) return []
+          return [{ id: entry.id, name: entry.name, route,
+            holeIds: Array.isArray(entry.holeIds) ? entry.holeIds.filter((id: unknown): id is string => typeof id === 'string') : [] }]
+        } catch { return [] }
+      })
+    }
+    const previous = localStorage.getItem(STORAGE_KEY)
+    if (!previous) return []
+    const route = validRoute(JSON.parse(previous))
+    return route ? [{ id: crypto.randomUUID(), name: route.name, route, holeIds: [] }] : []
+  } catch { return [] }
+}
+
+export function saveTunnels(tunnels: SavedTunnel[]) {
+  try {
+    localStorage.setItem(TUNNELS_KEY, JSON.stringify(tunnels))
+    localStorage.removeItem(STORAGE_KEY)
   } catch { /* storage can be unavailable in private browsing */ }
 }

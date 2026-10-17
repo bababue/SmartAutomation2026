@@ -71,7 +71,8 @@ function updateRouteOverlay(m: MapLibre, state: { route: TunnelRoute | null; rou
 function fitRoute(m: MapLibre, coordinates: RoutePoint[]) {
   if (coordinates.length < 2) return
   const bounds = coordinates.reduce((box, point) => box.extend(point), new LngLatBounds(coordinates[0], coordinates[0]))
-  m.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 450 })
+  const right = Math.min(uncovered(m).right, m.getContainer().clientWidth * 0.55)
+  m.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 60 + right }, maxZoom: 15, duration: 450 })
 }
 
 function pickerList(items: MapPoint[], onPick: (id: string) => void) {
