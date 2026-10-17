@@ -3,8 +3,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from api import main
 from api.main import app
+from api.routes import boreholes
 from pipeline import config, store
 from pipeline.scoring import score
 from schema.borehole import Borehole, GeorefMethod, LabResult, Layer, Location, SourceRef
@@ -89,7 +89,7 @@ def test_layer_strips_are_limited_to_the_visible_bbox(client):
 
 
 def test_layer_strips_are_capped(client, monkeypatch):
-    monkeypatch.setattr(main, "STRIPS_LIMIT", 1)
+    monkeypatch.setattr(boreholes, "STRIPS_LIMIT", 1)
     assert len(client.get("/api/boreholes/strips?bbox=-180,-90,180,90").json()["items"]) == 1
 
 

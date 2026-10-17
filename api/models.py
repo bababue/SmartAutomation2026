@@ -97,14 +97,7 @@ class QueueItem(BaseModel):
 class QueuePage(BaseModel):
     items: list[QueueItem]
     total: int
-    groups: list["QueueGroup"]
-
-
-class QueueGroup(BaseModel):
-    group: str
-    project: str | None
-    count: int
-    released: int
+    groups: list[GroupFacet]
 
 
 class QueueFinding(BaseModel):
