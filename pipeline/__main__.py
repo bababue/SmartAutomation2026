@@ -26,8 +26,15 @@ from .assemble import LOG_KINDS, PageResult, assemble, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
 
-# Rough per-page API cost in USD (Opus 5.5 list price). `estimate` also shows the cost measured on cached pages.
+# Rough per-page API cost in USD at the Opus 5.5 list price; `estimate` also shows the cost measured on cached pages.
 COST_CLASSIFY, COST_EXTRACT = 0.008, 0.15
+
+
+def _page_cost(opus_cost: float, model: str) -> float:
+    """Scaled by the model's list price; models outside PRICES (other providers) are estimated at the Opus price."""
+    opus = llm.PRICES["claude-opus-5-5"]
+    price = llm.PRICES.get(model.removeprefix("anthropic/").replace(".", "-"), opus)
+    return opus_cost * price[1] / opus[1]
 
 
 def _select(args) -> list[ingest.SourceDoc]:
@@ -149,7 +156,9 @@ def cmd_estimate(args) -> None:
     rendered = _ingest(_select(args), con)
     n = sum(len(p) for p in rendered.values())
     print(f"{len(rendered)} documents, {n} pages")
-    print(f"classification ≈ ${n * COST_CLASSIFY:.0f}; extraction of ~40% log pages ≈ ${n * 0.4 * COST_EXTRACT:.0f}")
+    print(f"classification with {config.CLASSIFY_MODEL} ≈ ${n * _page_cost(COST_CLASSIFY, config.CLASSIFY_MODEL):.2f}; "
+          f"extraction of ~40% log pages with {config.EXTRACT_MODEL} ≈ "
+          f"${n * 0.4 * _page_cost(COST_EXTRACT, config.EXTRACT_MODEL):.2f}")
     for stage, (pages, usd) in llm.measured_costs().items():
         print(f"measured {stage}: {pages} pages, ${usd:.2f} (${usd / pages:.4f} per page)")
 
@@ -165,9 +174,10 @@ def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = 
     if max_pages:  # treat the first N pages as the whole document for this run
         rendered = {doc_id: ps[:max_pages] for doc_id, ps in rendered.items()}
     pages = [p for ps in rendered.values() for p in ps]
-    est = len(pages) * COST_CLASSIFY + len(pages) * 0.4 * COST_EXTRACT
+    est = len(pages) * (_page_cost(COST_CLASSIFY, config.CLASSIFY_MODEL)
+                        + 0.4 * _page_cost(COST_EXTRACT, config.EXTRACT_MODEL))
     if est > 5 and not yes:
-        raise RuntimeError(f"{len(pages)} pages, estimated ≈ ${est:.0f}. Re-run with --yes to proceed.")
+        raise RuntimeError(f"{len(pages)} pages, estimated ≈ ${est:.2f}. Re-run with --yes to proceed.")
 
     print(f"Classify {len(pages)} pages")
     classes = _parallel(llm.classify_page, pages, "classify")
@@ -374,7 +384,7 @@ def cmd_experiment(args) -> None:
         new = [p for p in todo if not llm.cache_path("extract", p).exists()]
         if new and not args.yes:
             sys.exit(f"{len(new)} of {len(todo)} pages to extract with prompt {name} ({fingerprint}), "
-                     f"≈ ${len(new) * COST_EXTRACT:.0f} on the API or subscription quota. Re-run with --yes.")
+                     f"≈ ${len(new) * _page_cost(COST_EXTRACT, config.EXTRACT_MODEL):.2f} on the API or subscription quota. Re-run with --yes.")
         if new:
             _require_credentials()
         con = experiment.fresh_db(name)
