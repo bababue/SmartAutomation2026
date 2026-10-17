@@ -184,3 +184,19 @@ def test_lab_projection_migration_preserves_reviews(con):
         assert store.load_borehole(migrated, bh.borehole_id).review_status == ReviewStatus.approved
     finally:
         migrated.close()
+
+
+def test_demo_data_refuses_the_real_database(con):
+    from fixtures import demo_data
+    store.save_borehole(con, record())
+    with pytest.raises(SystemExit, match="DB_PATH=data/demo.sqlite"):
+        demo_data.main()
+    assert con.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 1
+
+
+def test_reset_keeps_review_decisions(con):
+    store.save_borehole(con, record())
+    store.record_review(con, "rep:BH01", ReviewStatus.rejected, "Ana", None)
+    store.reset(con)
+    assert con.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 0
+    assert con.execute("SELECT decision FROM review_events").fetchone()[0] == "rejected"

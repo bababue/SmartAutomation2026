@@ -198,7 +198,8 @@ def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
 
 
 def reset(con: sqlite3.Connection) -> None:
-    for table in ("boreholes", "boreholes_rtree", "boreholes_fts", "review_events", "layers", "lab_values",
+    """Remove all records; the review log stays, it holds human decisions."""
+    for table in ("boreholes", "boreholes_rtree", "boreholes_fts", "layers", "lab_values",
                   "findings", "record_sources", "borehole_aliases", "record_versions"):
         con.execute(f"DELETE FROM {table}")
     con.commit()
