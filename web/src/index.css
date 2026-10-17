@@ -66,6 +66,19 @@ button, input, select { font: inherit; color: inherit; }
 .stats { margin: 0 0 0 auto; color: var(--graphite); white-space: nowrap; }
 .stats strong { color: var(--ink); font-weight: 600; }
 .upload-note { margin: 0; color: var(--graphite); font-size: 13px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drop-overlay {
+  position: fixed;
+  inset: 12px;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--water);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--water-soft) 88%, transparent);
+  color: var(--water);
+  font-size: 20px;
+  pointer-events: none;
+}
 
 .sidebar {
   display: flex;

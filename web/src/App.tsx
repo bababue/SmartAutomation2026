@@ -6,6 +6,7 @@ import { MapView } from './components/MapView'
 import { ResultList } from './components/ResultList'
 import { ReviewQueue } from './components/ReviewQueue'
 import { SectionView, orderAlongLine } from './components/SectionView'
+import { STATUS_LABEL } from './review'
 import type { QueueNav } from './components/ReviewBox'
 import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats, StatusFilter } from './types'
 import { readUrl, writeUrl, type View } from './url'
@@ -31,8 +32,10 @@ export default function App() {
   const [refresh, setRefresh] = useState(0) // bump after a review decision
   const [sectionIds, setSectionIds] = useState<string[]>(initial.sectionIds)
   const [blockingOnly, setBlockingOnly] = useState(initial.blockingOnly)
-  const [uploadJobId, setUploadJobId] = useState<string | null>(null)
+  const [uploadJob, setUploadJob] = useState<{ id: string; label: string } | null>(null)
+  const [uploading, setUploading] = useState(false) // from the first byte sent until the job is done or failed
   const [uploadNote, setUploadNote] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -179,41 +182,67 @@ export default function App() {
     [sectionFeatures],
   )
 
+  const startUpload = useCallback((file: File) => {
+    setUploading(true)
+    setUploadNote(`Uploading ${file.name}…`)
+    postUpload(file)
+      .then((res) => {
+        const label = `${res.pages} page${res.pages === 1 ? '' : 's'} of ${file.name}`
+        setUploadJob({ id: res.job_id, label })
+        setUploadNote(`Processing ${label}…`)
+      })
+      .catch((err) => { setUploading(false); setUploadNote(`Could not upload ${file.name}: ${err.message}`) })
+  }, [])
+
   const onFileChosen = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     e.target.value = '' // allow re-choosing the same file later
-    if (!file) return
-    setUploadNote(`Uploading ${file.name}…`)
-    postUpload(file)
-      .then((res) => { setUploadJobId(res.job_id); setUploadNote(`Processing ${res.pages} page${res.pages === 1 ? '' : 's'} of ${file.name}…`) })
-      .catch((err) => setUploadNote(`Could not upload ${file.name}: ${err.message}`))
-  }, [])
+    if (file) startUpload(file)
+  }, [startUpload])
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    const file = e.dataTransfer.files[0]
+    if (file && !uploading) startUpload(file)
+  }, [startUpload, uploading])
 
   // Poll until the document is classified, extracted and stored (or fails).
   useEffect(() => {
-    if (!uploadJobId) return
+    if (!uploadJob) return
+    const started = Date.now()
+    const finish = (note: string) => { clearInterval(t); setUploadJob(null); setUploading(false); setUploadNote(note) }
     const t = setInterval(() => {
-      fetchUploadStatus(uploadJobId).then((status) => {
-        if (status.status === 'processing') return
-        clearInterval(t)
-        setUploadJobId(null)
-        if (status.status === 'error') {
-          setUploadNote(`Upload failed: ${status.error}`)
+      fetchUploadStatus(uploadJob.id).then((status) => {
+        if (status.status === 'processing') {
+          setUploadNote(`Processing ${uploadJob.label}… ${Math.round((Date.now() - started) / 1000)} s`)
+        } else if (status.status === 'error') {
+          finish(`Upload failed: ${status.error}`)
         } else if (status.boreholes.length === 0) {
-          setUploadNote('Processed, but no borehole was recognised in the document.')
+          finish('Processed, but no borehole was recognised in the document.')
         } else {
           const [first] = status.boreholes
-          setUploadNote(`Added ${status.boreholes.map((b) => b.name).join(', ')}`)
+          finish(`Added ${status.boreholes.map((b) => `${b.name} (${STATUS_LABEL[b.review_status].toLowerCase()})`).join(', ')}`)
           setSelectedId(first.id)
           setRefresh((n) => n + 1) // reload the map, list and queue
         }
-      }).catch(() => { clearInterval(t); setUploadJobId(null); setUploadNote('Lost track of the upload.') })
+      }).catch(() => finish('Lost track of the upload.'))
     }, 1500)
     return () => clearInterval(t)
-  }, [uploadJobId])
+  }, [uploadJob])
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }}
+      onDragLeave={(e) => { if (!e.relatedTarget) setDragging(false) }}
+      onDrop={onDrop}
+    >
+      {dragging && (
+        <div className="drop-overlay" aria-hidden="true">
+          {uploading ? 'An upload is still being processed' : 'Drop a borehole log to add it (PDF, image or DOCX)'}
+        </div>
+      )}
       <svg width={0} height={0} style={{ position: 'absolute' }} aria-hidden="true"><LithologyPatterns /></svg>
 
       <header className="topbar">
@@ -234,12 +263,13 @@ export default function App() {
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
-        <button className="btn" onClick={() => fileInput.current?.click()} disabled={!!uploadJobId}>
-          {uploadJobId ? 'Processing…' : 'Upload document'}
+        <button className="btn" onClick={() => fileInput.current?.click()} disabled={uploading}
+          title="Or drop a file anywhere on the page">
+          {uploading ? 'Processing…' : 'Upload document'}
         </button>
         <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx" className="visually-hidden"
           onChange={onFileChosen} aria-label="Upload a borehole log" />
-        {uploadNote && <p className="upload-note" role="status">{uploadNote}</p>}
+        {uploadNote && <p className="upload-note" role="status" title={uploadNote}>{uploadNote}</p>}
         {stats && (
           <p className="stats">
             <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes,{' '}

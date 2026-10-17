@@ -4,7 +4,12 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    throw new Error(`${res.status} ${res.statusText}${body ? `: ${body.slice(0, 200)}` : ''}`)
+    let detail = body.slice(0, 200)
+    try {
+      const parsed = JSON.parse(body)
+      if (typeof parsed.detail === 'string') detail = parsed.detail // FastAPI's HTTPException message
+    } catch { /* not JSON: keep the raw text */ }
+    throw new Error(`${res.status} ${res.statusText}${detail ? `: ${detail}` : ''}`)
   }
   return res.json() as Promise<T>
 }
