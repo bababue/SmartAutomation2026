@@ -9,12 +9,31 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export function fetchBoreholes(f: Filters, signal?: AbortSignal): Promise<FeatureCollection> {
+function filterParams(f: Filters): URLSearchParams {
   const params = new URLSearchParams()
   if (f.q.trim()) params.set('q', f.q.trim())
   f.lithology.forEach((l) => params.append('lithology', l))
+  if (f.lithology.length && f.depthFrom != null) params.set('depth_from', String(f.depthFrom))
+  if (f.lithology.length && f.depthTo != null) params.set('depth_to', String(f.depthTo))
+  if (f.lab) params.set('lab', f.lab)
+  if (f.lab && f.labMin != null) params.set('lab_min', String(f.labMin))
   if (f.minPosition != null) params.set('min_position', String(f.minPosition))
   if (f.status !== 'all') params.set('status', f.status)
+  return params
+}
+
+/** One page of summaries for the list, with the total and lithology counts of all matches. */
+export function fetchBoreholes(f: Filters, offset = 0, limit = 200, signal?: AbortSignal): Promise<FeatureCollection> {
+  const params = filterParams(f)
+  params.set('limit', String(limit))
+  params.set('offset', String(offset))
+  return request(`/api/boreholes?${params}`, { signal })
+}
+
+/** Every match as a slim point for the map (no strips or ground models). */
+export function fetchMapPoints(f: Filters, signal?: AbortSignal): Promise<FeatureCollection> {
+  const params = filterParams(f)
+  params.set('fields', 'map')
   return request(`/api/boreholes?${params}`, { signal })
 }
 
@@ -22,7 +41,12 @@ const enc = (id: string) => encodeURIComponent(id)
 
 export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>(`/api/boreholes/${enc(id)}/detail`, { signal })
 export const fetchStats = () => request<Stats>('/api/stats')
-export const fetchQueue = (signal?: AbortSignal) => request<QueueItem[]>('/api/review-queue', { signal })
+export async function fetchQueue(signal?: AbortSignal, limit = 200): Promise<{ items: QueueItem[]; total: number }> {
+  const res = await fetch(`/api/review-queue?limit=${limit}`, { signal })
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  const items = (await res.json()) as QueueItem[]
+  return { items, total: Number(res.headers.get('X-Total-Count') ?? items.length) }
+}
 export const fetchCrsGroups = (signal?: AbortSignal) => request<CrsGroup[]>('/api/review-queue/crs-groups', { signal })
 
 export const fetchKnowledge = (boreholeId?: string) =>
@@ -49,10 +73,10 @@ export function postCorrection(id: string, kind: CorrectionKind, payload: Record
 }
 
 export function postReview(id: string, decision: ReviewStatus, reviewer: string, comment: string | null,
-  contentHash: string | null = null) {
+  contentHash: string | null = null, reviewRevision: number | null = null) {
   return request<DetailUpdate>(`/api/boreholes/${enc(id)}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision, reviewer, comment, content_hash: contentHash }),
+    body: JSON.stringify({ decision, reviewer, comment, content_hash: contentHash, review_revision: reviewRevision }),
   })
 }

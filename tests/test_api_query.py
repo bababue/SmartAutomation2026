@@ -58,7 +58,7 @@ def test_bbox_across_the_antimeridian_and_on_its_edge(client):
 
 def test_map_points_are_slim_and_lists_are_paged(client):
     m = client.get("/api/boreholes?fields=map").json()
-    assert m["total"] == 3 and set(m["features"][0]["properties"]) == {"id", "name", "review_status", "score", "loc_method"}
+    assert m["total"] == 3 and set(m["features"][0]["properties"]) == {"id", "name", "location_name", "review_status", "score", "loc_method"}
     page = client.get("/api/boreholes?limit=2&offset=0").json()
     assert page["total"] == 3 and len(page["features"]) == 2
     assert dict(map(tuple, page["facets"]["lithologies"]))["clay"] == 2

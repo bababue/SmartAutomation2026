@@ -206,6 +206,9 @@ export interface Feature {
 export interface FeatureCollection {
   type: 'FeatureCollection'
   features: Feature[]
+  /** All matches (the features may be one page of them). */
+  total?: number
+  facets?: { lithologies: [string, number][] }
 }
 
 export type CorrectionKind = 'crs' | 'position' | 'layer' | 'layer_add' | 'field' | 'groundwater'
@@ -230,11 +233,15 @@ export interface Detail {
   blocking: string[]
   /** Version of the content shown; a decision on an outdated version is refused. */
   content_hash: string | null
+  /** Review state the reviewer saw; a decision on an outdated state is refused. */
+  review_revision?: number
+  uid?: string
+  version_id?: number
   threshold: number
 }
 
 /** What a review decision or a correction changes in the open record. */
-export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log'> & Partial<Pick<Detail, 'corrections' | 'blocking' | 'content_hash'>>
+export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log'> & Partial<Pick<Detail, 'corrections' | 'blocking' | 'content_hash' | 'review_revision'>>
 
 export interface Stats {
   boreholes: number
@@ -253,6 +260,12 @@ export type StatusFilter = 'all' | 'released' | 'pending' | 'rejected'
 export interface Filters {
   q: string
   lithology: Lithology[]
+  /** Depth range (m) the chosen lithologies must occur in. */
+  depthFrom: number | null
+  depthTo: number | null
+  /** Lab parameter and minimum value, e.g. UCS ≥ 80 MPa. */
+  lab: string | null
+  labMin: number | null
   minPosition: number | null
   status: StatusFilter
 }

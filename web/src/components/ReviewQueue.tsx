@@ -6,6 +6,8 @@ import type { CrsGroup, QueueItem } from '../types'
 
 interface Props {
   items: QueueItem[]
+  /** All waiting records (the items are the weakest of them). */
+  total?: number
   loading: boolean
   selectedId: string | null
   threshold: number
@@ -68,7 +70,7 @@ function CrsConfirmations({ refreshKey, onChanged }: { refreshKey: unknown; onCh
 }
 
 /** Everything that was not released automatically, weakest first. */
-export function ReviewQueue({ items, loading, selectedId, threshold, onSelect, onChanged }: Props) {
+export function ReviewQueue({ items, total, loading, selectedId, threshold, onSelect, onChanged }: Props) {
   return (
     <div className="queue">
       <header className="queue-head">
@@ -79,6 +81,9 @@ export function ReviewQueue({ items, loading, selectedId, threshold, onSelect, o
         </p>
       </header>
       <CrsConfirmations refreshKey={items} onChanged={onChanged} />
+      {total != null && total > items.length && (
+        <p className="muted">Showing the {items.length} weakest of {total.toLocaleString('en')} waiting records; approving them brings up the next.</p>
+      )}
       {!loading && !items.length ? (
         <p className="empty">Nothing waits for review. New extractions appear here when they are not released automatically.</p>
       ) : (

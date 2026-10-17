@@ -415,3 +415,6 @@ tr:hover .btn-edit, .btn-edit:focus-visible { opacity: 1; }
 .knowledge textarea { width: 100%; border: 1px solid var(--grid); border-radius: 3px; font: inherit; padding: 4px 6px; }
 .knowledge select, .knowledge input { height: 30px; border: 1px solid var(--grid); border-radius: 3px; font: inherit; padding: 0 6px; }
 .remember { display: grid; gap: 4px; }
+
+.filter-depth input, .filter-lab input { height: 30px; border: 1px solid var(--grid); border-radius: 3px; padding: 0 8px; width: 100%; }
+.load-more { margin: 10px 16px 16px; width: calc(100% - 32px); }

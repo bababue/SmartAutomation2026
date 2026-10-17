@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchBoreholes, fetchDetail, fetchQueue, fetchStats } from './api'
+import { fetchBoreholes, fetchDetail, fetchMapPoints, fetchQueue, fetchStats } from './api'
 import { LithologyPatterns, lithStyle, patternId } from './lithology'
 import { DetailPanel } from './components/DetailPanel'
 import { MapView } from './components/MapView'
@@ -7,17 +7,23 @@ import { ResultList } from './components/ResultList'
 import { ReviewQueue } from './components/ReviewQueue'
 import { SectionView, orderAlongLine } from './components/SectionView'
 import type { QueueNav } from './components/ReviewBox'
-import type { Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, Stats, StatusFilter } from './types'
+import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats, StatusFilter } from './types'
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
 type View = 'map' | 'review'
 
 export default function App() {
   const [view, setView] = useState<View>('map')
-  const [filters, setFilters] = useState<Filters>({ q: '', lithology: [], minPosition: null, status: 'all' })
+  const [filters, setFilters] = useState<Filters>({
+    q: '', lithology: [], depthFrom: null, depthTo: null, lab: null, labMin: null, minPosition: null, status: 'all',
+  })
   const [query, setQuery] = useState('')
-  const [data, setData] = useState<FeatureCollection>(EMPTY)
+  const [data, setData] = useState<FeatureCollection>(EMPTY)  // list: loaded pages of summaries
+  const [points, setPoints] = useState<FeatureCollection>(EMPTY)  // map: every match, slim
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [known, setKnown] = useState<Map<string, Feature>>(new Map())  // full features seen, for the section
   const [queue, setQueue] = useState<QueueItem[]>([])
+  const [queueTotal, setQueueTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
@@ -31,19 +37,34 @@ export default function App() {
     return () => clearTimeout(t)
   }, [query])
 
-  useEffect(() => {
-    const ctrl = new AbortController()
-    setLoading(true)
-    fetchBoreholes(filters, ctrl.signal)
-      .then((fc) => { setData(fc); setError(null) })
-      .catch((e) => e.name !== 'AbortError' && setError(`Could not load boreholes (${e.message}). Is the API running on port 8000?`))
-      .finally(() => !ctrl.signal.aborted && setLoading(false))
-    return () => ctrl.abort()
-  }, [filters, refresh])
+  // Full features of every loaded page, so the section view keeps holes from earlier pages.
+  const remember = useCallback((features: Feature[]) => setKnown((k) => {
+    const next = new Map(k)
+    features.forEach((f) => next.set(f.properties.id, f))
+    return next
+  }), [])
 
   useEffect(() => {
     const ctrl = new AbortController()
-    fetchQueue(ctrl.signal).then(setQueue).catch(() => undefined)
+    setLoading(true)
+    Promise.all([fetchBoreholes(filters, 0, 200, ctrl.signal), fetchMapPoints(filters, ctrl.signal)])
+      .then(([page, map]) => { setData(page); remember(page.features); setPoints(map); setError(null) })
+      .catch((e) => e.name !== 'AbortError' && setError(`Could not load boreholes (${e.message}). Is the API running on port 8000?`))
+      .finally(() => !ctrl.signal.aborted && setLoading(false))
+    return () => ctrl.abort()
+  }, [filters, refresh, remember])
+
+  const loadMore = useCallback(() => {
+    setLoadingMore(true)
+    fetchBoreholes(filters, data.features.length, 200)
+      .then((page) => { setData((d) => ({ ...page, features: [...d.features, ...page.features] })); remember(page.features) })
+      .catch((e) => setError(`Could not load more boreholes (${e.message}).`))
+      .finally(() => setLoadingMore(false))
+  }, [filters, data.features.length, remember])
+
+  useEffect(() => {
+    const ctrl = new AbortController()
+    fetchQueue(ctrl.signal).then(({ items, total }) => { setQueue(items); setQueueTotal(total) }).catch(() => undefined)
     fetchStats().then(setStats).catch(() => undefined)
     return () => ctrl.abort()
   }, [refresh])
@@ -58,9 +79,9 @@ export default function App() {
     return () => ctrl.abort()
   }, [selectedId])
 
+  // Counts over all matches, from the server (the list may be one page).
   const lithologies = useMemo(() => {
-    const counts = new Map<string, number>()
-    data.features.forEach((f) => (f.properties.lithologies ?? '').split(',').filter(Boolean).forEach((l) => counts.set(l, (counts.get(l) ?? 0) + 1)))
+    const counts = new Map<string, number>(data.facets?.lithologies ?? [])
     filters.lithology.forEach((l) => counts.set(l, counts.get(l) ?? 0))
     return [...counts.entries()].sort((a, b) => b[1] - a[1])
   }, [data, filters.lithology])
@@ -113,8 +134,8 @@ export default function App() {
     [],
   )
   const sectionFeatures = useMemo(
-    () => sectionIds.map((id) => data.features.find((f) => f.properties.id === id)).filter((f): f is NonNullable<typeof f> => !!f),
-    [sectionIds, data],
+    () => sectionIds.map((id) => known.get(id)).filter((f): f is NonNullable<typeof f> => !!f),
+    [sectionIds, known],
   )
   const sectionLine = useMemo(
     () => orderAlongLine(sectionFeatures).map((f) => f.geometry.coordinates),
@@ -186,9 +207,43 @@ export default function App() {
               ))}
             </div>
           )}
+          {filters.lithology.length > 0 && (
+            <div className="filter-row filter-depth">
+              <label>
+                Between (m)
+                <input inputMode="decimal" placeholder="0" value={filters.depthFrom ?? ''}
+                  onChange={(e) => setFilters((f) => ({ ...f, depthFrom: e.target.value === '' ? null : Number(e.target.value.replace(',', '.')) }))} />
+              </label>
+              <label>
+                and (m)
+                <input inputMode="decimal" placeholder="any" value={filters.depthTo ?? ''}
+                  onChange={(e) => setFilters((f) => ({ ...f, depthTo: e.target.value === '' ? null : Number(e.target.value.replace(',', '.')) }))} />
+              </label>
+            </div>
+          )}
+          <div className="filter-row filter-lab">
+            <label>
+              Lab value
+              <select value={filters.lab ?? ''} onChange={(e) => setFilters((f) => ({ ...f, lab: e.target.value || null }))}>
+                <option value="">Any</option>
+                <option value="ucs">UCS (MPa)</option>
+                <option value="cai">CAI</option>
+                <option value="tensile_strength">Tensile strength (MPa)</option>
+                <option value="point_load_index">Point load Is50 (MPa)</option>
+                <option value="water_content">Water content (%)</option>
+              </select>
+            </label>
+            {filters.lab && (
+              <label>
+                at least
+                <input inputMode="decimal" placeholder="e.g. 80" value={filters.labMin ?? ''}
+                  onChange={(e) => setFilters((f) => ({ ...f, labMin: e.target.value === '' ? null : Number(e.target.value.replace(',', '.')) }))} />
+              </label>
+            )}
+          </div>
         </div>
         <div className="result-head">
-          <span>{loading ? 'Loading…' : `${data.features.length.toLocaleString('en')} shown`}</span>
+          <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
           <span className="export-links">
             Export released:{' '}
             <a href="/api/export.xlsx" className="link" title="Released records in Herrenknecht's BoreholeDataFormat">Excel</a>
@@ -198,10 +253,15 @@ export default function App() {
         </div>
         {error && <p className="error" role="alert">{error}</p>}
         <ResultList features={data.features} selectedId={selectedId} onSelect={setSelectedId} loading={loading} sectionIds={sectionIds} onToggleSection={toggleSection} />
+        {!loading && data.total != null && data.features.length < data.total && (
+          <button className="btn load-more" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? 'Loading…' : `Show ${Math.min(200, data.total - data.features.length)} more of ${(data.total - data.features.length).toLocaleString('en')}`}
+          </button>
+        )}
       </aside>
 
       <main className={`map-wrap${sectionFeatures.length ? ' map-wrap-section' : ''}`}>
-        <MapView data={data} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} />
+        <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} />
         <div className="legend" aria-label="Map legend">
           <span><i className="dot dot-high" /> released</span>
           <span><i className="dot dot-medium" /> waiting for review</span>
@@ -218,7 +278,7 @@ export default function App() {
           />
         )}
         {view === 'review' && (
-          <ReviewQueue items={queue} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9} onSelect={setSelectedId}
+          <ReviewQueue items={queue} total={queueTotal} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9} onSelect={setSelectedId}
             onChanged={() => setRefresh((n) => n + 1)} />
         )}
       </main>

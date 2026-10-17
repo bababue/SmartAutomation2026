@@ -67,7 +67,7 @@ def _feature(r: sqlite3.Row) -> dict:
     return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]}, "properties": props}
 
 
-MAP_COLUMNS = "id, name, lat, lon, review_status, score, loc_method"
+MAP_COLUMNS = "id, name, location_name, lat, lon, review_status, score, loc_method"
 
 
 def _bbox_clause(bbox: str) -> tuple[str, list]:
@@ -161,8 +161,9 @@ def list_boreholes(
         rows = con.execute(f"SELECT {MAP_COLUMNS} FROM boreholes WHERE {sql_where}", params).fetchall()
         return {"type": "FeatureCollection", "total": len(rows), "features": [
             {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]},
-             "properties": {"id": r["id"], "name": r["name"], "review_status": r["review_status"], "score": r["score"],
-                            "loc_method": r["loc_method"]}} for r in rows]}
+             "properties": {"id": r["id"], "name": r["name"], "location_name": r["location_name"],
+                            "review_status": r["review_status"], "score": r["score"], "loc_method": r["loc_method"]}}
+            for r in rows]}
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {sql_where}", params).fetchone()[0]
     rows = con.execute(f"SELECT {LIGHT_COLUMNS} FROM boreholes WHERE {sql_where} ORDER BY project, name, id "
                        "LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
