@@ -301,6 +301,11 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     if not dry_run:
         for doc_id in done:
             for page, issue in lost_logs(doc_id):
+                # A record read from that page may hold the missing hole's layers: it is blocked as well.
+                for bh in boreholes:
+                    if bh.borehole_id.split(":", 1)[0] == doc_id and any(s.page == page for s in bh.sources):
+                        bh.issues.append(issue)
+                        corrections.rescore(bh)
                 boreholes.append(placeholder(doc_id, source_file[doc_id], page, issue))
                 print(f"  ! {doc_id}: {issue}", file=sys.stderr)
     # Per document group: read knowledge and corrections and replace the group's records in one short write

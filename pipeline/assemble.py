@@ -854,9 +854,13 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
 
 
 def placeholder(doc_id: str, source_file: str, page: int | None, issue: str, name: str | None = None) -> Borehole:
-    """A blocking record for a log the run could not turn into a hole, so its page goes to a person."""
-    bh = Borehole(borehole_id=f"{doc_id}:{id_key(name)}" if name else f"{doc_id}:p{page}-lost",
-                  borehole_name=name or f"log not extracted, {doc_id} p{page}",
+    """A blocking record for a log the run could not turn into a hole, so its page goes to a person: the hole
+    `name` that failed to assemble, else a log page that came back short. Its id and name never equal a real
+    hole's, so it cannot overwrite one."""
+    what = "not assembled" if name is not None else "not extracted"
+    stem = f"{id_key(name)}-" if name else ""
+    bh = Borehole(borehole_id=f"{doc_id}:{stem}p{page}-{what.replace(' ', '-')}",
+                  borehole_name=f"{name or 'log'} {what}, {doc_id} p{page}",
                   sources=[SourceRef(file=source_file, page=page)])
     bh.issues = [issue] + bh.validate_log()
     score(bh, {}, 0)
@@ -1031,7 +1035,8 @@ PRECISE_METHODS = (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)
 DEPTH_TOLERANCE_M = 0.05
 # Findings that describe a record's layer sequence or its position travel with the layers or the position.
 LAYER_FINDINGS = STRUCTURAL + ("no layers extracted", "layer ", "minor discontinuity", "core loss inferred",
-                               "lithology of layer", "missing sheets", "page ", "depths printed in feet")
+                               "lithology of layer", "missing sheets", "page ", "depths printed in feet",
+                               "properties differ")
 POSITION_FINDINGS = ("coordinate", "CRS", "position", "printed coordinates", "not georeferenced", "invalid WGS84",
                      "no place to cross-check")
 

@@ -225,11 +225,19 @@ def test_fresh_database_stores_a_lost_log_page_as_one_blocking_placeholder(con):
     args = inputs(names=("BH1", "BH2"))
     args[3][("report", 1)].logs = args[3][("report", 1)].logs[:1]
     assert cli._store(con, *args) == {"report"}
-    assert not any(i.startswith("log not extracted") for i in store.load_borehole(con, "report:BH1").issues)
-    lost = store.load_borehole(con, "report:p1-lost")
+    # BH1 was read from the page that came back short: it may hold the lost hole's layers.
+    assert any(finding_severity(i) == "blocking" for i in store.load_borehole(con, "report:BH1").issues)
+    lost = store.load_borehole(con, "report:p1-not-extracted")
     assert "log not extracted: page 1 shows 2 logs, 1 came back" in lost.issues
     assert lost.review_status == ReviewStatus.pending_review and [s.page for s in lost.sources] == [1]
     assert any(finding_severity(i) == "blocking" for i in lost.issues)
+
+
+def test_placeholders_never_take_the_id_of_a_real_hole_or_of_each_other():
+    from pipeline.assemble import placeholder
+    ids = {placeholder("d", "d.pdf", 1, "x", "BH2").borehole_id, placeholder("d", "d.pdf", 1, "x", "").borehole_id,
+           placeholder("d", "d.pdf", 1, "x").borehole_id, "d:BH2", "d:p1"}
+    assert len(ids) == 5
 
 
 def test_fresh_database_stores_a_hole_that_failed_to_assemble_as_a_blocking_placeholder(con, monkeypatch):
@@ -244,7 +252,7 @@ def test_fresh_database_stores_a_hole_that_failed_to_assemble_as_a_blocking_plac
     monkeypatch.setattr(assembly, "build_borehole", fail_second)
     assert cli._store(con, *inputs(names=("BH1", "BH2"))) == {"report"}
     assert store.load_borehole(con, "report:BH1").layers
-    failed = store.load_borehole(con, "report:BH2")
+    failed = store.load_borehole(con, "report:BH2-p1-not-assembled")
     assert not failed.layers and any(i.startswith("log not assembled: BH2") for i in failed.issues)
     assert any(finding_severity(i) == "blocking" for i in failed.issues)
 
