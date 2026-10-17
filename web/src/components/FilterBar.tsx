@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetSta
 import { parseDecimal, words } from '../format'
 import { lithStyle, patternId } from '../lithology'
 import { SEVERITY_LABEL } from '../review'
-import { DEFAULT_FILTERS, hasFilters } from '../url'
+import { DEFAULT_FILTERS, DEFAULT_REVIEW_FILTERS, hasFilters } from '../url'
 import type { FindingFacet, Filters, QueuePosition, RangeFilter, ReviewFilters, StatusFilter } from '../types'
 
 const STATUS: [StatusFilter, string][] = [
@@ -123,11 +123,15 @@ export function FilterBar({ filters, setFilters, lithologies, review }: Props) {
   const lithName = (key: string) => lithStyle(key).label
   const ground = filters.rockMax != null || filters.waterMax != null || filters.material.length > 0
   const active = hasFilters({ ...filters, q: '' })
-  const scored = filters.scoreMin != null || filters.scoreMax != null
-  const statusLabel = filters.status === 'all' ? (scored ? 'Score' : 'Release state') : STATUS.find(([s]) => s === filters.status)![1]
-  const scoreLabel = scored ? range({ key: '', min: filters.scoreMin, max: filters.scoreMax }) : ''
   const rf = review?.filters
   const setReview = (patch: Partial<ReviewFilters>) => review?.onChange({ ...review.filters, ...patch })
+  // Release state and score: of the review queue in review mode, of the list otherwise.
+  const release = rf ?? filters
+  const setRelease = (patch: Partial<Pick<Filters, 'status' | 'scoreMin' | 'scoreMax'>>) => (rf ? setReview(patch) : set(patch))
+  const scored = release.scoreMin != null || release.scoreMax != null
+  const statusLabel = release.status === 'all' ? (scored ? 'Score' : 'Release state') : STATUS.find(([s]) => s === release.status)![1]
+  const scoreLabel = scored ? range({ key: '', min: release.scoreMin, max: release.scoreMax }) : ''
+  const statusPill = pill('status', `${statusLabel}${scoreLabel}`, release.status !== (rf ? DEFAULT_REVIEW_FILTERS : DEFAULT_FILTERS).status || scored)
   const findings = review?.findings.filter((f) => !POSITION_FINDINGS.has(f.code)) ?? []
   const findingLabel = (f: string) => (f === 'blocking' || f === 'needs_look' ? `Any ${SEVERITY_LABEL[f].toLowerCase()}` : words(f))
   const [draft, setDraft] = useState({ group: 'sand', from: 0, to: 20, metres: 5 })
@@ -169,15 +173,16 @@ export function FilterBar({ filters, setFilters, lithologies, review }: Props) {
     <div className="filters" ref={root}>
       {rf ? (
       <div className="filter-bar" role="group" aria-label="Review filters">
+        {statusPill}
         {pill('position', rf.position == null ? 'Position' : POSITION.find(([p]) => p === rf.position)![1], rf.position != null)}
         {pill('findings', rf.finding ? findingLabel(rf.finding) : 'Findings', rf.finding != null)}
-        {(rf.position != null || rf.finding != null) && (
-          <button className="pill-reset" onClick={() => { setReview({ position: null, finding: null }); setOpen(null) }}>Reset</button>
+        {(rf.position != null || rf.finding != null || rf.status !== DEFAULT_REVIEW_FILTERS.status || scored) && (
+          <button className="pill-reset" onClick={() => { review?.onChange(DEFAULT_REVIEW_FILTERS); setOpen(null) }}>Reset</button>
         )}
       </div>
       ) : (<>
       <div className="filter-bar" role="group" aria-label="Filters">
-        {pill('status', `${statusLabel}${scoreLabel}`, filters.status !== 'all' || scored)}
+        {statusPill}
         {lithologies.length > 0 && pill('lithology', liths.length ? summary(liths, lithName, false) : 'Lithology', liths.length > 0)}
         {pill('lab', lab.length ? summary(lab, labName, true) : 'Lab value', lab.length > 0)}
         {pill('ground', 'Ground', ground)}
@@ -210,10 +215,10 @@ export function FilterBar({ filters, setFilters, lithologies, review }: Props) {
         <div className="filter-menu" id="filter-menu" style={{ top }}>
           {open === 'status' && (
             <>
-              {options(STATUS, filters.status, (status) => set({ status }))}
+              {options(STATUS, release.status, (status) => setRelease({ status }))}
               <label className="ground-field">Release score
-                <NumberField placeholder="0" value={filters.scoreMin} label="Lowest release score" onChange={(v) => set({ scoreMin: v })} />–
-                <NumberField placeholder="100" value={filters.scoreMax} label="Highest release score" onChange={(v) => set({ scoreMax: v })} />
+                <NumberField placeholder="0" value={release.scoreMin} label="Lowest release score" onChange={(v) => setRelease({ scoreMin: v })} />–
+                <NumberField placeholder="100" value={release.scoreMax} label="Highest release score" onChange={(v) => setRelease({ scoreMax: v })} />
               </label>
               <p className="menu-note">Score 0–100; records without a score fail any bound.</p>
             </>

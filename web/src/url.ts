@@ -27,7 +27,7 @@ export const DEFAULT_FILTERS: Filters = {
   q: '', lithology: [], lab: [], status: 'all', scoreMin: null, scoreMax: null, group: null, rockMax: null, waterMax: null,
   material: [],
 }
-export const DEFAULT_REVIEW_FILTERS: ReviewFilters = { finding: null, position: null }
+export const DEFAULT_REVIEW_FILTERS: ReviewFilters = { finding: null, position: null, status: 'pending', scoreMin: null, scoreMax: null }
 
 /** Whether the filters narrow the records at all. */
 export function hasFilters(f: Filters): boolean {
@@ -48,6 +48,7 @@ function decodeRange(value: string): RangeFilter {
 export function readUrl(search: string): UrlState {
   const p = new URLSearchParams(search)
   const status = p.get('status') as StatusFilter | null
+  const reviewStatus = p.get('rstatus') as StatusFilter | null
   return {
     view: VIEWS.includes(p.get('view') as View) ? (p.get('view') as View) : 'map',
     routeActive: p.get('route') === '1',
@@ -59,6 +60,9 @@ export function readUrl(search: string): UrlState {
     reviewFilters: {
       finding: p.get('finding'),
       position: POSITIONS.find((x) => x === p.get('position')) ?? null,
+      status: reviewStatus && STATUSES.includes(reviewStatus) ? reviewStatus : 'pending',
+      scoreMin: num(p.get('rsmin')),
+      scoreMax: num(p.get('rsmax')),
     },
     filters: {
       q: p.get('q') ?? '',
@@ -91,6 +95,9 @@ export function writeUrl(s: UrlState): string {
   if (f.status !== 'all') p.set('status', f.status)
   if (s.reviewFilters.finding) p.set('finding', s.reviewFilters.finding)
   if (s.reviewFilters.position) p.set('position', s.reviewFilters.position)
+  if (s.reviewFilters.status !== 'pending') p.set('rstatus', s.reviewFilters.status)
+  if (s.reviewFilters.scoreMin != null) p.set('rsmin', String(s.reviewFilters.scoreMin))
+  if (s.reviewFilters.scoreMax != null) p.set('rsmax', String(s.reviewFilters.scoreMax))
   if (f.scoreMin != null) p.set('smin', String(f.scoreMin))
   if (f.scoreMax != null) p.set('smax', String(f.scoreMax))
   if (f.group) p.set('group', f.group)

@@ -137,6 +137,25 @@ def test_review_queue_filters_by_finding_and_position_source(client):
     assert client.get("/api/review-queue?position=somewhere").status_code == 422
 
 
+def test_review_queue_filters_by_release_state_and_score(client):
+    con = store.connect()
+    for bid in ("q:W", "q:R"):
+        store.save_borehole(con, hole(bid, 47.0, 8.0, [(0, 5, "sand")]))
+    con.execute("UPDATE boreholes SET review_status = 'pending_review', score = 0.4 WHERE id = 'q:W'")
+    con.execute("UPDATE boreholes SET review_status = 'approved', score = 0.9 WHERE id = 'q:R'")
+    con.commit()
+    con.close()
+
+    def queue(**params):
+        return {item["id"] for item in client.get("/api/review-queue", params=params).json()["items"]}
+
+    assert "q:W" in queue() and "q:R" not in queue()
+    assert "q:R" in queue(status="released") and "q:W" not in queue(status="released")
+    assert {"q:W", "q:R"} <= queue(status="all")
+    assert "q:R" in queue(status="all", score_min=0.8) and "q:W" not in queue(status="all", score_min=0.8)
+    assert client.get("/api/review-queue?status=done").status_code == 422
+
+
 def test_list_filters_by_score(client):
     con = store.connect()
     con.execute("UPDATE boreholes SET score = CASE id WHEN 'q:A' THEN 0.9 WHEN 'q:B' THEN 0.2 ELSE 0.5 END")

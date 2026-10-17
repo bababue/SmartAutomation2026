@@ -7,11 +7,13 @@ import { GroupingToggle } from './GroupingToggle'
 interface Props {
   items: QueueItem[]
   groups: Pick<GroupFacet, 'group' | 'project' | 'count' | 'released'>[]
-  /** All waiting records that match (the items are the weakest of them; deciding them brings up the next). */
+  /** All records that match (the items are the weakest of them; deciding waiting ones brings up the next). */
   total: number
   loading: boolean
   /** The release audit sample instead of the waiting records. */
   audit: boolean
+  /** What the listed records are, for the count: 'waiting', 'sampled', … */
+  noun: string
   selectedId: string | null
   onSelect: (id: string) => void
   /** Documents whose coordinate system to confirm; shown above the records. */
@@ -21,8 +23,8 @@ interface Props {
   onGroupedChange: (grouped: boolean) => void
 }
 
-/** The waiting records, or the audit sample, weakest first. */
-export function ReviewList({ items, groups, total, loading, audit, selectedId, onSelect, crsGroups, onChanged, grouped, onGroupedChange }: Props) {
+/** The records of one release state, or the audit sample, weakest first. */
+export function ReviewList({ items, groups, total, loading, audit, noun, selectedId, onSelect, crsGroups, onChanged, grouped, onGroupedChange }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const byGroup = new Map<string, QueueItem[]>()
   for (const item of items) byGroup.set(item.grp, [...(byGroup.get(item.grp) ?? []), item])
@@ -54,7 +56,7 @@ export function ReviewList({ items, groups, total, loading, audit, selectedId, o
   return (
     <>
       <div className="result-head">
-        <span>{loading ? 'Loading…' : `${total.toLocaleString('en')} ${audit ? 'sampled' : 'waiting'}`}</span>
+        <span>{loading ? 'Loading…' : `${total.toLocaleString('en')} ${noun}`}</span>
         <GroupingToggle grouped={grouped} onChange={onGroupedChange} />
       </div>
       {crsGroups.map((g) => (
@@ -63,11 +65,11 @@ export function ReviewList({ items, groups, total, loading, audit, selectedId, o
           <ConfirmCrs crs={g} onChanged={onChanged} />
         </div>
       ))}
-      {!loading && !items.length && groups.length > 0 && <div className="result-head">No {audit ? 'sampled' : 'waiting'} records match these filters.</div>}
+      {!loading && !items.length && groups.length > 0 && <div className="result-head">No {noun} records match these filters.</div>}
       {!loading && !items.length && !groups.length ? (
         <div className="empty"><p>{audit
           ? 'No audit sample drawn yet: run python -m pipeline eval audit.'
-          : 'No waiting record matches these filters.'}</p></div>
+          : `No ${noun} record matches these filters.`}</p></div>
       ) : (
         <ul className="results review-list" aria-busy={loading}>
           {!grouped && items.map(renderItem)}
@@ -85,7 +87,7 @@ export function ReviewList({ items, groups, total, loading, audit, selectedId, o
                 </button>
               </div>
               {open && <ul className="group-items">
-                {!entries.length && <li className="group-empty">No {audit ? 'sampled' : 'waiting'} boreholes in this group.</li>}
+                {!entries.length && <li className="group-empty">No {noun} boreholes in this group.</li>}
                 {entries.map(renderItem)}
               </ul>}
             </li>
