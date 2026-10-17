@@ -47,7 +47,7 @@ def select(wanted: list[str] | None) -> list[ingest.SourceDoc]:
 
 
 def missing_credentials() -> str | None:
-    if config.LLM_BACKEND == "api" and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
+    if config.LLM_BACKEND == "api" and not os.getenv("ANTHROPIC_API_KEY"):
         return ("No Anthropic credentials: put ANTHROPIC_API_KEY=... into .env (git-ignored), "
                 "or set LLM_BACKEND=claude-code to use the local Claude Code login.")
     local = urllib.parse.urlsplit(config.OPENAI_BASE_URL).hostname in ("localhost", "127.0.0.1")
