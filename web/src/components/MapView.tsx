@@ -388,7 +388,8 @@ function applySelection(m: MapLibre, selectedId: string | null, focus: Props['fo
   const radius = focus.approximate ? Math.max(focus.accuracy_m ?? 0, 500) : 0
   source.setData({ type: 'FeatureCollection', features: radius ? [circlePolygon(focus.lon, focus.lat, radius)] : [] })
   const zoom = radius && !focus.hasDepth ? Math.max(6, Math.min(13, 16 - Math.log2(radius / 100))) : 16
-  m.flyTo({ center: [focus.lon, focus.lat], zoom, padding: { left: 0, right: Math.min(window.innerWidth * 0.55, 760), top: 0, bottom: 0 } })
+  m.flyTo({ center: [focus.lon, focus.lat], zoom, duration: 500,
+    padding: { left: 0, right: Math.min(window.innerWidth * 0.55, 760), top: 0, bottom: 0 } })
 }
 
 function fit(m: MapLibre, data: FeatureCollection) {
