@@ -14,6 +14,12 @@
       "port": 8000
     },
     {
+      "name": "api-windows",
+      "runtimeExecutable": ".venv/Scripts/uvicorn.exe",
+      "runtimeArgs": ["api.main:app", "--port", "8000"],
+      "port": 8000
+    },
+    {
       "name": "web",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "web", "run", "dev"],

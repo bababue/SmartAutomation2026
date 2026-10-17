@@ -556,9 +556,12 @@ _MUPDF = threading.Lock()  # PyMuPDF is not thread-safe; concurrent uploads must
 
 def _render_upload(doc: ingest.SourceDoc, upload_dir: Path, dest: Path) -> list[ingest.PageImage]:
     with _MUPDF:
-        if doc.kind == "pdf":  # count before rendering: a long PDF would take minutes to render only to be rejected
-            with pymupdf.open(dest) as pdf:
-                _check_page_count(pdf.page_count)
+        if doc.kind != "docx":
+            # Opened from memory first: on Windows a file PyMuPDF fails to open stays locked while the error is
+            # alive, and the rejected upload could not be removed.
+            with pymupdf.open(stream=dest.read_bytes(), filetype=dest.suffix.lstrip(".").lower()) as source:
+                if doc.kind == "pdf":  # a long PDF would take minutes to render only to be rejected
+                    _check_page_count(source.page_count)
         pages = ingest.render(doc, upload_dir)
     _check_page_count(len(pages))
     return pages
