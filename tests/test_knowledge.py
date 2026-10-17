@@ -1,5 +1,7 @@
 """Knowledge from reviewers: local grids from control points, terms, learned CRS, prompt context (synthetic)."""
 
+import math
+
 import pytest
 from pyproj import Transformer
 
@@ -115,6 +117,56 @@ def test_prompt_context_for_new_pages(con):
 def test_collapsed_control_points_are_not_a_grid():
     pts = [(local_coords(*ll), HOLES[0]) for ll in HOLES[:3]]  # three holes, all set to the same spot
     assert fit_grid(pts) is None
+
+
+FROM_LOCAL = Transformer.from_crs(TO_LOCAL.target_crs, 4326, always_xy=True)
+
+
+def at_local(x, y):
+    lon, lat = FROM_LOCAL.transform(x, y)
+    return lat, lon
+
+
+def is_helmert(grid):
+    c = grid["params"]
+    return c[0] == pytest.approx(c[4]) and c[1] == pytest.approx(-c[3])
+
+
+def test_control_points_along_a_route_get_a_helmert_grid():
+    # Six holes along an 8 km route, a few metres off its axis, each set by hand within about 10 m.
+    heading, pts = math.radians(30), []
+    errors = [(7, -5), (-8, 7), (6, 8), (-7, -8), (9, 5), (-5, -9)]
+    for i, (ex, ey) in enumerate(errors):
+        along, across = -4000 + i * 1600, (-3, 4, -2, 5, -4, 2)[i]
+        x = along * math.sin(heading) + across * math.cos(heading)
+        y = along * math.cos(heading) - across * math.sin(heading)
+        pts.append((local_coords(*at_local(x, y)), at_local(x + ex, y + ey)))
+    grid = fit_grid(pts)
+    assert is_helmert(grid) and grid["loo_m"] <= 20
+    assert fit_grid(pts, model="affine")["loo_m"] > 20  # cross-track terms fitted to the noise
+
+
+SPREAD = [(-1000, -1000), (1000, -1000), (-1000, 1000), (1000, 1000), (0, 0), (300, -600)]
+
+
+def test_well_spread_control_points_on_a_sheared_grid_stay_affine():
+    def sheared(x, y):
+        return 50000 + x + 0.03 * y, 30000 + 0.99 * y
+    errors = [(2, -1), (-1, 2), (1, 1), (-2, -1), (1, -2), (-1, 1)]
+    pts = [(sheared(x, y), at_local(x + ex, y + ey)) for (x, y), (ex, ey) in zip(SPREAD, errors)]
+    grid = fit_grid(pts)
+    assert not is_helmert(grid) and grid["loo_m"] <= 20
+    assert haversine_km(*grid_position(grid, sheared(500, 700)), *at_local(500, 700)) < 0.005
+    assert fit_grid(pts, model="helmert")["loo_m"] > 20
+
+
+def test_well_spread_control_points_on_a_similar_grid_stay_helmert():
+    # Affine fits these noisier positions more closely but predicts held-out holes worse.
+    errors = [(6, -4), (-5, 7), (4, 5), (-7, -3), (3, -6), (-4, 4)]
+    pts = [(local_coords(*at_local(x, y)), at_local(x + ex, y + ey)) for (x, y), (ex, ey) in zip(SPREAD, errors)]
+    grid = fit_grid(pts)
+    assert is_helmert(grid) and grid["loo_m"] <= 20
+    assert fit_grid(pts, model="affine")["rms_m"] < grid["rms_m"]
 
 
 def test_term_rule_does_not_override_a_named_main_material(con):

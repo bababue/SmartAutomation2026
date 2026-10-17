@@ -18,6 +18,7 @@ import statistics
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date
+from itertools import combinations
 
 from schema.borehole import (
     SPT,
@@ -37,6 +38,7 @@ from schema.borehole import (
 
 from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLog
 from .georef import candidates, crs_from_hint, georeference, haversine_km
+from .knowledge import printed_pair
 from .scoring import score
 
 LOG_KINDS = {"borehole_log", "test_pit_log", "probe_log"}
@@ -447,6 +449,22 @@ def flag_position_outliers(boreholes: list[Borehole]) -> None:
             b.location.confidence = min(b.location.confidence or 0.0, 0.5)
 
 
+def flag_shared_coordinates(boreholes: list[Borehole]) -> None:
+    """Two holes at differently named places cannot share a position to the last printed digit: a header
+    copied from another sheet. A redrilled hole at the same named place may."""
+    by_pair: dict[tuple[float, float], list[Borehole]] = defaultdict(list)
+    for b in boreholes:
+        pair = printed_pair(b.location.coords_raw)
+        if pair and b.location_name:
+            by_pair[pair].append(b)
+    place = lambda b: re.sub(r"\W+", "", b.location_name.lower())
+    for holes in by_pair.values():
+        for a, b in combinations(holes, 2):
+            if place(a) != place(b) and norm_name(a.borehole_name) != norm_name(b.borehole_name):
+                a.issues.append(f"same printed coordinates as {b.borehole_name} at another place ({b.location_name})")
+                b.issues.append(f"same printed coordinates as {a.borehole_name} at another place ({a.location_name})")
+
+
 def _unique_groundwater(observations) -> list[GroundwaterObservation]:
     """Header fields are repeated on every sheet; keep one entry per distinct observation."""
     seen: dict[tuple, GroundwaterObservation] = {}
@@ -731,6 +749,7 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
             print(f"  {group}: {linked} lab results linked, {unmatched} without a matching hole, "
                   f"{implausible} outside plausible ranges")
         flag_position_outliers([bh for bh, _, _ in records])
+        flag_shared_coordinates([bh for bh, _, _ in records])
         for bh, unreadable, page_texts in records:
             score(bh, page_texts, unreadable)
             boreholes.append(bh)
@@ -743,8 +762,8 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
     for bh in boreholes:
         loc = bh.location
         precise = loc.lat is not None and loc.method in (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)
-        if not precise or any(i.startswith("sheet header differs") for i in bh.issues):
-            kept[(bh.borehole_id,)] = bh  # never merge on approximate positions or sheets of disputed holes
+        if not precise or any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
+            kept[(bh.borehole_id,)] = bh  # never merge on approximate positions or disputed headers
             continue
         project = re.sub(r"\W+", "", (bh.project_name or "").lower())
         key = (norm_name(bh.borehole_name), project, round(loc.lat, 4), round(loc.lon, 4))

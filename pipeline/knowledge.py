@@ -11,7 +11,8 @@ Kinds:
 - note: {"text": "..."}                      – anything else; shown to reviewers and to the extraction model
 
 Local grids are not stored: they are fitted on every run from the positions reviewers set by hand
-in the same document (2-D Helmert, affine from four points), so they improve with every correction.
+in the same document (2-D Helmert; affine only where the points span both directions), so they improve
+with every correction.
 
 Order on every run: extraction → knowledge → reviewer corrections (a person's correction wins).
 Learned values stay suggestions (position confidence below the release threshold) until confirmed
@@ -110,21 +111,23 @@ def _affine(ab: list[tuple[float, float]], xy: list[tuple[float, float]]) -> lis
     return [*cx, *cy]
 
 
-def fit_grid(points: list[tuple[tuple[float, float], tuple[float, float]]], validate: bool = True) -> dict | None:
-    """Fit printed (a, b) → WGS84 from control points: Helmert, affine from four points. Tries both
-    axis orders; returns parameters, RMS residual in metres and point count, or None if inconsistent."""
-    if len(points) < 2:
-        return None
-    lat0 = sum(p[1][0] for p in points) / len(points)
-    lon0 = sum(p[1][1] for p in points) / len(points)
-    local = f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +datum=WGS84 +units=m"
-    to_local = Transformer.from_crs(4326, local, always_xy=True)
-    xy = [to_local.transform(lon, lat) for _, (lat, lon) in points]
+def _elongation(xy: list[tuple[float, float]]) -> float:
+    """Minor over major principal axis of the control points: near 0 for points along a line."""
+    n = len(xy)
+    mx, my = sum(x for x, _ in xy) / n, sum(y for _, y in xy) / n
+    sxx = sum((x - mx) ** 2 for x, _ in xy)
+    syy = sum((y - my) ** 2 for _, y in xy)
+    sxy = sum((x - mx) * (y - my) for x, y in xy)
+    half, root = (sxx + syy) / 2, math.sqrt(((sxx - syy) / 2) ** 2 + sxy ** 2)
+    return math.sqrt(max(half - root, 0.0) / (half + root)) if half + root > 0 else 0.0
+
+
+def _fit(points: list, xy: list[tuple[float, float]], model: str) -> dict | None:
     best = None
     for swap in (False, True):
         ab = [(b, a) if swap else (a, b) for (a, b), _ in points]
         try:
-            c = _affine(ab, xy) if len(points) >= 4 else _helmert(ab, xy)
+            c = _affine(ab, xy) if model == "affine" else _helmert(ab, xy)
         except ValueError:
             continue
         residuals = [(c[0] * a + c[1] * b + c[2] - x) ** 2 + (c[3] * a + c[4] * b + c[5] - y) ** 2
@@ -134,27 +137,54 @@ def fit_grid(points: list[tuple[tuple[float, float], tuple[float, float]]], vali
         if not 0.2 <= scale <= 5:  # e.g. all control points at one spot: not a grid
             continue
         if best is None or rms < best["rms_m"]:
-            best = {"swap": swap, "params": c, "rms_m": rms, "n": len(points), "lat0": lat0, "lon0": lon0,
-                    "scale": scale}
-    if not best or best["rms_m"] > 50:
+            best = {"swap": swap, "params": c, "rms_m": rms, "scale": scale}
+    return best if best and best["rms_m"] <= 50 else None
+
+
+def fit_grid(points: list[tuple[tuple[float, float], tuple[float, float]]], validate: bool = True,
+             model: str | None = None) -> dict | None:
+    """Fit printed (a, b) → WGS84 from control points. Tries both axis orders; returns parameters, RMS residual
+    in metres, point count and the leave-one-out error, or None if inconsistent.
+
+    Helmert by default. Affine only from four points that span both directions and when it recovers held-out
+    points clearly better: along a road or pipeline route its cross-track terms are guesses."""
+    if len(points) < 2:
         return None
-    spread = max(math.dist(a, b) for a in xy for b in xy)
-    if spread < 30:  # control points too close together to define a grid
+    lat0 = sum(p[1][0] for p in points) / len(points)
+    lon0 = sum(p[1][1] for p in points) / len(points)
+    local = f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +datum=WGS84 +units=m"
+    to_local = Transformer.from_crs(4326, local, always_xy=True)
+    xy = [to_local.transform(lon, lat) for _, (lat, lon) in points]
+    if max(math.dist(a, b) for a in xy for b in xy) < 30:  # control points too close together to define a grid
         return None
-    best["centre"] = (sum(a for (a, _), _ in points) / len(points), sum(b for (_, b), _ in points) / len(points))
-    best["radius"] = max(math.dist(pair, best["centre"]) for pair, _ in points)
-    if len(points) >= 3 and validate:  # predictive check: each point from a grid fitted to the others
-        errors = []
-        for i in range(len(points)):
-            g = fit_grid(points[:i] + points[i + 1:], validate=False)
-            if g is None:
-                return {**best, "loo_m": None}
-            lat, lon = grid_position(g, points[i][0])
-            errors.append(haversine_km(lat, lon, *points[i][1]) * 1000)
-        best["loo_m"] = max(errors)
+    if model is None:
+        models = ["helmert"] + (["affine"] if len(points) >= 4 and _elongation(xy) >= 0.3 else [])
     else:
-        best["loo_m"] = None
-    return best
+        models = [model]
+    centre = (sum(a for (a, _), _ in points) / len(points), sum(b for (_, b), _ in points) / len(points))
+    fits = {}
+    for m in models:
+        fit = _fit(points, xy, m)
+        if fit is None:
+            continue
+        fit |= {"n": len(points), "lat0": lat0, "lon0": lon0, "centre": centre,
+                "radius": max(math.dist(pair, centre) for pair, _ in points), "loo_m": None}
+        if len(points) >= 3 and validate:  # predictive check: each point from a grid fitted to the others
+            errors = []
+            for i in range(len(points)):
+                g = fit_grid(points[:i] + points[i + 1:], validate=False, model=m)
+                if g is None:
+                    break
+                lat, lon = grid_position(g, points[i][0])
+                errors.append(haversine_km(lat, lon, *points[i][1]) * 1000)
+            else:
+                fit["loo_m"] = max(errors)
+        fits[m] = fit
+    helmert, affine = fits.get("helmert"), fits.get("affine")
+    if affine and (helmert is None or affine["loo_m"] is not None
+                   and (helmert["loo_m"] is None or affine["loo_m"] < 0.75 * helmert["loo_m"])):
+        return affine
+    return helmert
 
 
 def grid_position(grid: dict, pair: tuple[float, float]) -> tuple[float, float]:

@@ -56,3 +56,34 @@ def test_sheet_with_another_header_is_not_a_continuation():
     # The same header on every sheet, also in another notation, is an ordinary continuation.
     [bh] = assemble([_page(1, here, 300.0, [(0, 2), (2, 6)]), _page(2, "412000 5320000", 300.0, [(0, 9)])])
     assert not any(i.startswith("sheet header differs") for i in bh.issues)
+
+
+def test_holes_at_different_places_with_the_same_coordinates_are_blocked():
+    here = "E 412000.000 N 5320000.000"
+
+    def page(n: int, name: str, place: str | None, doc: str = "r", layers=((0, 6),)) -> PageResult:
+        log = _log(name, here, 300.0, list(layers)).model_copy(update={"location_text": place})
+        return PageResult(doc, f"{doc}.pdf", n, "borehole_log", PageExtraction(logs=[log], coordinate_rows=[]))
+
+    def shared(bh) -> bool:
+        return any(finding_severity(i) == "blocking" and i.startswith("same printed coordinates") for i in bh.issues)
+
+    # A header copied from the hole at another crossing: both holes go to review, the other one is named.
+    records = {b.borehole_name: b for b in assemble([page(1, "BH1", "Elm Street / Oak Road"),
+                                                     page(2, "BH2", "Elm Street / Pine Road")])}
+    assert len(records) == 2
+    assert all(shared(bh) and bh.review_status.value != "auto_approved" for bh in records.values())
+    assert any("BH1" in i for i in records["BH2"].issues if i.startswith("same printed coordinates"))
+
+    # A redrilled hole at the same place, written differently, may share the position.
+    records = assemble([page(1, "BH1", "Elm Street / Oak Road"), page(2, "BH1A", "elm street, oak road")])
+    assert len(records) == 2 and not any(shared(bh) for bh in records)
+
+    # A richer copy of the hole in another document without the conflict does not swallow the finding.
+    records = assemble([page(1, "BH1", "Elm Street / Oak Road"), page(2, "BH2", "Elm Street / Pine Road"),
+                        page(1, "BH1", "Elm Street / Oak Road", "s", ((0, 2), (2, 6)))])
+    assert any(shared(bh) for bh in records if bh.borehole_name == "BH1")
+
+    # Without a place name on one of them there is nothing to contradict.
+    assert not any(shared(bh) for bh in assemble([page(1, "BH1", "Elm Street / Oak Road"), page(2, "BH2", None)]))
+
