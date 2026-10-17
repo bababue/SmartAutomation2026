@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -298,6 +299,64 @@ def rebuild(docs, max_pages: int | None = None, dry_run: bool = False) -> None:
     _store(con, docs, rendered, classes, extractions, labs, dry_run=dry_run)
 
 
+SHARE_README = """# Borehole Atlas data package
+
+Confidential: real project data from the hackathon challenge. Share only within the team, never via
+cloud services, and delete it after the event (including copies).
+
+Contents
+- boreholes.sqlite   database (records, review decisions, corrections, knowledge)
+- pages/             rendered source pages shown next to each record (optional)
+- cache/             cached model output, needed only for `pipeline rebuild` (optional)
+
+Run it
+1. Get the code: the repository at commit {commit} (branch marvin) and set it up as in its README
+   (python3 -m venv .venv; .venv/bin/pip install -r requirements.txt; npm --prefix web install).
+2. Copy the package into the repository's data/ folder:
+   boreholes.sqlite -> data/boreholes.sqlite, pages/ -> data/pages/, cache/ -> data/cache/
+   (or point DB_PATH / DATA_DIR at the package folder).
+3. Start: .venv/bin/uvicorn api.main:app --port 8000   and   npm --prefix web run dev
+   then open http://localhost:5173. Without pages/ the map, profiles and exports work; the source page
+   next to a record stays empty.
+
+Created {created} from {source}: {boreholes} boreholes, {documents} documents.
+"""
+
+
+def cmd_share(args) -> None:
+    """A consistent copy of the database (SQLite backup API, safe while the API runs), the page images and
+    optionally the cache, with a README for colleagues."""
+    import datetime
+    import shutil
+    import sqlite3
+    import subprocess
+
+    out = Path(args.out).expanduser()
+    if out.exists() and any(out.iterdir()):
+        sys.exit(f"{out} exists and is not empty")
+    out.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(config.DB_PATH)
+    dst = sqlite3.connect(out / "boreholes.sqlite")
+    with dst:
+        src.backup(dst)
+    counts = dst.execute("SELECT (SELECT COUNT(*) FROM boreholes), (SELECT COUNT(*) FROM documents)").fetchone()
+    dst.execute("PRAGMA journal_mode=DELETE")  # one self-contained file, no -wal/-shm to forget
+    dst.close()
+    src.close()
+    if not args.no_pages:
+        shutil.copytree(config.PAGES_DIR, out / "pages")
+    if args.with_cache:
+        shutil.copytree(config.CACHE_DIR, out / "cache")
+    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                            cwd=config.ROOT).stdout.strip() or "unknown"
+    (out / "README.md").write_text(SHARE_README.format(
+        commit=commit, created=datetime.date.today().isoformat(), source=config.DB_PATH.name,
+        boreholes=counts[0], documents=counts[1]))
+    size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file()) / 1e6
+    print(f"Package in {out}: {counts[0]} boreholes, {size:.0f} MB. Confidential: share locally only "
+          "(AirDrop, USB, scp), not via cloud services.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="pipeline")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -312,6 +371,11 @@ def main() -> None:
             p.add_argument("--max-pages", type=int, help="only the first N pages of each document")
         if name == "rebuild":
             p.add_argument("--dry-run", action="store_true", help="assemble and report, write nothing")
+    p = sub.add_parser("share", help="package the database (and page images) for colleagues")
+    p.add_argument("--out", required=True, help="empty or new folder for the package")
+    p.add_argument("--no-pages", action="store_true", help="leave out the page images (much smaller)")
+    p.add_argument("--with-cache", action="store_true", help="include the model cache, for rebuilds")
+    p.set_defaults(fn=cmd_share)
     p = sub.add_parser("eval", help="extraction quality against human-checked records")
     p.add_argument("action", nargs="?", choices=["compare", "snapshot"], default="compare")
     p.add_argument("--corrected", action="store_true", help="compare final values instead of the model output")

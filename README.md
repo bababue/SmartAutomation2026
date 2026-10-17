@@ -317,6 +317,33 @@ restores the records from the cache, but **review decisions are lost**.
 | A document is skipped with "kept previous results for incomplete documents" | Some pages failed (rate limit, timeout). Run the same command again; finished pages come from the cache. |
 | Records do not change after a code change | Run `pipeline rebuild` with the same `--doc`/`--max-pages`, then reload the UI. |
 
+## Data model
+
+SQLite, one file (`data/boreholes.sqlite`), schema version in `PRAGMA user_version`; older databases are
+migrated on connect.
+
+- `boreholes`: one row per hole with the canonical record as JSON (`data`) plus summary columns; a durable
+  `uid` survives id changes (ids and the natural key *document group / type / number* are aliases in
+  `borehole_aliases`), `record_versions` keeps every distinct content, `review_events` point to the version
+  a decision was about.
+- Queryable projections, rebuilt with every record: `layers` (depth and lithology), `lab_values`,
+  `findings` (code, severity, EPSG), `record_sources` (which pages a record comes from), R-tree and FTS5.
+- Human input: `corrections` and `knowledge`, re-applied on every rebuild; `review_events`.
+
+Measured with 50,000 synthetic boreholes (1 GB): map points 0.8 s / 1.5 MB gzipped, list page 0.3 s,
+'clay between 10 and 20 m' 0.2 s, 'UCS ≥ 80 MPa' 0.1 s, review queue page 6 ms, CSV streams from the first
+record. Details and the open points in `docs/data-model-review.md`.
+
+## Sharing the data with colleagues
+
+```bash
+.venv/bin/python -m pipeline share --out ~/borehole-package            # DB + page images (+ README)
+.venv/bin/python -m pipeline share --out ~/pkg --no-pages --with-cache  # small, but able to rebuild
+```
+
+The package is confidential (real project data): pass it on locally (AirDrop, USB, `scp`), not via cloud
+services, and delete it after the event. Its README says how to run it.
+
 ## Data security
 
 The brief asks for data security across every step. Design rules:

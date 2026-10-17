@@ -94,3 +94,18 @@ def test_old_database_is_migrated(tmp_path):
     assert con.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
     assert tuple(con.execute("SELECT uid IS NOT NULL, version_id IS NOT NULL FROM boreholes").fetchone()) == (1, 1)
     assert con.execute("SELECT COUNT(*) FROM layers").fetchone()[0] == 2
+
+
+def test_share_package(con, tmp_path, monkeypatch):
+    import argparse
+    from pipeline.__main__ import cmd_share
+    store.save_borehole(con, record())
+    monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
+    (tmp_path / "pages" / "rep").mkdir(parents=True)
+    (tmp_path / "pages" / "rep" / "0001.jpg").write_bytes(b"jpg")
+    out = tmp_path / "pkg"
+    cmd_share(argparse.Namespace(out=str(out), no_pages=False, with_cache=False))
+    copy = sqlite3.connect(out / "boreholes.sqlite")
+    assert copy.execute("SELECT COUNT(*) FROM boreholes").fetchone()[0] == 1
+    assert (out / "pages" / "rep" / "0001.jpg").exists() and "Confidential" in (out / "README.md").read_text()
+    assert not (out / "cache").exists()
