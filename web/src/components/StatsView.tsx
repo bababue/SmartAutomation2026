@@ -19,7 +19,8 @@ const pct = (part: number, whole: number) => (whole ? Math.round((100 * part) / 
 const words = (code: string) => code.replace(/_/g, ' ')
 
 function filtered(f: Filters) {
-  return Boolean(f.q.trim() || f.lithology.length || f.lab.length || f.minPosition != null || f.status !== 'all' || f.group)
+  return Boolean(f.q.trim() || f.lithology.length || f.lab.length || f.minPosition != null || f.status !== 'all' || f.group ||
+    f.rockMax != null || f.waterMax != null || f.material.length)
 }
 
 /** One stacked bar of shares, each part labelled with its count beside the bar (colour is never the only cue). */

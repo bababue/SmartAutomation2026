@@ -662,11 +662,17 @@ def stats_detail(
     min_position: float | None = None,
     status: Literal["all", "released", "pending", "rejected"] = "all",
     group: str | None = None,
+    rock_head_max: float | None = None,
+    groundwater_max: float | None = None,
+    material: list[str] = Query(default_factory=list),
 ):
     """Aggregates for the statistics view over the records the list filters select, holes without a position
     included: key figures, release funnel, findings, logged metres per lithology, final depths and groups."""
     where, params = _filters(q, None, _conditions(lithology, "lithology"), _conditions(lab, "lab"), None, None,
                              min_position, status, [], group, located=False)
+    ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max,
+                                                         similar.material_conditions(material))
+    where, params = where + ground_where, params + ground_params
     scope = f"SELECT rid FROM boreholes WHERE {' AND '.join(where)}"
 
     def rows(sql: str) -> list[sqlite3.Row]:

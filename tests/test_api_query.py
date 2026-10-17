@@ -165,3 +165,4 @@ def test_statistics_aggregate_the_filtered_records_including_those_without_a_pos
                             "top_finding": s["groups"][0]["top_finding"]}]
     clay = client.get("/api/stats/detail?lithology=clay:10:").json()
     assert clay["boreholes"] == 1 and dict(clay["lithology_m"])["clay"] == 18.0
+    assert client.get("/api/stats/detail?material=sand:0:20:5").status_code == 200  # the ground filters apply too
