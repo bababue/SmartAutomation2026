@@ -9,7 +9,14 @@ const mark = [
   '▒▒▒▒▒▒▒▒▒▒   ▒▒▒▒▒     ▒▒▒▒▒ ▒▒▒▒▒ ▒▒▒▒▒  ▒▒▒▒▒▒▒▒  ▒▒▒▒▒▒     ▒▒▒▒ ▒▒▒▒    ▒▒▒▒ ▒▒▒▒▒',
 ].join('\n')
 
-export function BrandLogo() {
-  return <h1 className="brand" aria-label="Drilldown"><span className="brand-art" aria-hidden="true">{mark}</span></h1>
+export function BrandLogo({ onHome }: { onHome: () => void }) {
+  return (
+    <h1 className="brand">
+      <a href="/" className="brand-link" aria-label="Drilldown, start page"
+        onClick={(e) => { if (!e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) { e.preventDefault(); onHome() } }}>
+        <span className="brand-art" aria-hidden="true">{mark}</span>
+      </a>
+    </h1>
+  )
 }
 

@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { GeoJSONSource, LngLatBounds, Map as MapLibre, NavigationControl, Popup, ScaleControl, setWorkerUrl, type LngLatLike, type MapLayerMouseEvent } from 'maplibre-gl'
+import { useEffect, useRef, useState } from 'react'
+import { GeoJSONSource, LngLat, LngLatBounds, Map as MapLibre, NavigationControl, Popup, ScaleControl, setWorkerUrl, type LngLatLike, type MapLayerMouseEvent, type TransformConstrainFunction } from 'maplibre-gl'
 import type { Feature as GeoJSONFeature, Polygon } from 'geojson'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
@@ -15,7 +15,7 @@ import type { BoreholeSummary, FeatureCollection, ReviewStatus } from '../types'
 setWorkerUrl(workerUrl)
 
 // Public vector basemap without API key. Tile requests reveal the viewed area, nothing else.
-const STYLE = 'https://tiles.openfreemap.org/styles/liberty'
+const STYLE = { light: 'https://tiles.openfreemap.org/styles/liberty', dark: 'https://tiles.openfreemap.org/styles/dark' }
 
 const ACCENT = '#0E6F8E'
 // Point colour = release status (see review.ts); a ring instead of a dot = approximate position.
@@ -34,12 +34,14 @@ interface Props {
   onSelect: (id: string) => void
   /** Width of the detail sheet over the map; the selected hole stays centred beside it. */
   sheetWidth: number | null
+  dark: boolean
 }
 
 const CLUSTER_MAX_ZOOM = 14
 const COLUMN_MIN_ZOOM = 15
 const LAYER_PREFETCH_ZOOM = 14
 const COLUMN_RADIUS_M = 5
+const PITCH = 45
 
 function sectionLine(coords: [number, number][]) {
   return {
@@ -153,24 +155,29 @@ function wrapLongitude(lon: number) {
   return ((lon + 180) % 360 + 360) % 360 - 180
 }
 
-export function MapView({ data, section, selectedId, focus, onSelect, sheetWidth }: Props) {
+export function MapView({ data, section, selectedId, focus, onSelect, sheetWidth, dark }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibre | null>(null)
   const ready = useRef(false)
-  const latest = useRef({ data, onSelect, selectedId, focus, section })
+  const latest = useRef({ data, onSelect, selectedId, focus, section, dark })
   const layerStrips = useRef(new Map<string, BoreholeSummary['strip']>())
-  latest.current = { data, onSelect, selectedId, focus, section }
+  latest.current = { data, onSelect, selectedId, focus, section, dark }
+  const [loaded, setLoaded] = useState(false)
+  const shownDark = useRef(dark)  // the basemap currently on the map
 
   useEffect(() => {
+    let created: MapLibre | undefined  // the constraint already runs inside the constructor
     const m = new MapLibre({
       container: container.current!,
-      style: STYLE,
+      style: STYLE[latest.current.dark ? 'dark' : 'light'],
       center: [10, 25],
       zoom: 1.4,
-      pitch: 45,
+      pitch: PITCH,
+      transformConstrain: keepWorldInView(container.current!, () => created),
       canvasContextAttributes: { antialias: true },
       attributionControl: { compact: true },
     })
+    created = m
     map.current = m
     const tooltip = new Popup({ closeButton: false, closeOnClick: false, offset: 10, className: 'map-tooltip' })
     const picker = new Popup({ closeButton: true, offset: 14, className: 'map-picker', maxWidth: '280px' })
@@ -226,66 +233,9 @@ export function MapView({ data, section, selectedId, focus, onSelect, sheetWidth
     m.addControl(new ScaleControl({ maxWidth: 120 }), 'bottom-left')
 
     m.on('load', async () => {
-      const images = await Promise.all(Object.keys(LITHOLOGY).map(async (key) => [key, await lithologyImage(key)] as const))
+      const images = await loadPatterns()
       if (disposed) return
-      for (const [key, image] of images) m.addImage(patternId(key), image, { pixelRatio: 2 })
-      m.addSource('boreholes', { type: 'geojson', data: latest.current.data, cluster: true, clusterRadius: 42, clusterMaxZoom: CLUSTER_MAX_ZOOM })
-      m.addSource('depth-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
-      m.addSource('uncertainty', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
-      m.addSource('section', { type: 'geojson', data: sectionLine(latest.current.section) })
-      m.addLayer({ id: 'section-line', type: 'line', source: 'section', paint: { 'line-color': '#1D2528', 'line-width': 2, 'line-dasharray': [2, 1.5] } })
-      m.addLayer({ id: 'uncertainty-fill', type: 'fill', source: 'uncertainty', paint: { 'fill-color': ACCENT, 'fill-opacity': 0.08 } })
-      m.addLayer({ id: 'uncertainty-line', type: 'line', source: 'uncertainty', paint: { 'line-color': ACCENT, 'line-width': 1.2, 'line-dasharray': [3, 2] } })
-      m.addLayer({
-        id: 'depth-columns', type: 'fill-extrusion', source: 'depth-markers', minzoom: COLUMN_MIN_ZOOM,
-        filter: ['!', ['has', 'pattern']],
-        paint: { 'fill-extrusion-color': ['get', 'color'], 'fill-extrusion-base': ['get', 'base_m'],
-          'fill-extrusion-height': ['get', 'height_m'], 'fill-extrusion-opacity': 0.95 },
-      })
-      m.addLayer({
-        id: 'depth-column-patterns', type: 'fill-extrusion', source: 'depth-markers', minzoom: COLUMN_MIN_ZOOM,
-        filter: ['has', 'pattern'],
-        paint: { 'fill-extrusion-pattern': ['get', 'pattern'], 'fill-extrusion-base': ['get', 'base_m'],
-          'fill-extrusion-height': ['get', 'height_m'], 'fill-extrusion-opacity': 0.95 },
-      })
-      m.addLayer({
-        id: 'clusters', type: 'circle', source: 'boreholes', filter: ['has', 'point_count'],
-        paint: {
-          'circle-color': ACCENT,
-          'circle-opacity': 0.88,
-          'circle-radius': ['step', ['get', 'point_count'], 13, 10, 17, 50, 22, 200, 28],
-          'circle-stroke-color': '#F6F7F4',
-          'circle-stroke-width': 2,
-        },
-      })
-      m.addLayer({
-        id: 'cluster-count', type: 'symbol', source: 'boreholes', filter: ['has', 'point_count'],
-        layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['Noto Sans Regular'], 'text-size': 12 },
-        paint: { 'text-color': '#FFFFFF' },
-      })
-      m.addLayer({
-        id: 'points', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM,
-        filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'loc_method'], 'geocoded_place']],
-        paint: { 'circle-color': STATUS_COLOR, 'circle-radius': 6, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5 },
-      })
-      m.addLayer({
-        id: 'points-no-depth', type: 'circle', source: 'boreholes', minzoom: COLUMN_MIN_ZOOM,
-        filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'loc_method'], 'geocoded_place'],
-          ['!', ['>', ['coalesce', ['get', 'depth'], 0], 0]]],
-        paint: { 'circle-color': STATUS_COLOR, 'circle-radius': 6, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5 },
-      })
-      m.addLayer({
-        id: 'points-approx', type: 'circle', source: 'boreholes',
-        filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'loc_method'], 'geocoded_place']],
-        paint: { 'circle-color': '#FFFFFF', 'circle-opacity': ['step', ['zoom'], 0.6, COLUMN_MIN_ZOOM, 0],
-          'circle-radius': ['step', ['zoom'], 6, COLUMN_MIN_ZOOM, 10],
-          'circle-stroke-color': STATUS_COLOR, 'circle-stroke-width': 2.5 },
-      })
-      m.addLayer({
-        // Below column zoom only: at column zoom the centred 3D column marks the selection.
-        id: 'selected', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM, filter: ['==', ['get', 'id'], ''],
-        paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 11, 'circle-stroke-color': ACCENT, 'circle-stroke-width': 3 },
-      })
+      addOverlay(m, images, latest.current)
 
       m.on('click', 'clusters', async (e: MapLayerMouseEvent) => {
         const feature = e.features?.[0]
@@ -332,9 +282,12 @@ export function MapView({ data, section, selectedId, focus, onSelect, sheetWidth
       m.on('mouseleave', 'clusters', () => (m.getCanvas().style.cursor = ''))
       // Collapsing the list resizes the map; keep the selected hole in view.
       m.on('resize', () => recenter(m, latest.current.focus))
+      // Tilting does not run the constraint; re-apply it once the tilt ends.
+      m.on('pitchend', () => m.jumpTo({ center: m.getCenter(), zoom: m.getZoom() }))
       m.on('move', scheduleRefresh)
       m.on('moveend', finishRefresh)
       ready.current = true
+      setLoaded(true)  // a theme switch made before this point applies now
       if (!latest.current.selectedId) fit(m, latest.current.data)
       applySelection(m, latest.current.selectedId, latest.current.focus)  // selection made before load
       refreshColumns()
@@ -373,20 +326,131 @@ export function MapView({ data, section, selectedId, focus, onSelect, sheetWidth
     ;(m.getSource('section') as GeoJSONSource).setData(sectionLine(section))
   }, [section])
 
+  useEffect(() => {
+    const m = map.current
+    if (!m || !loaded || shownDark.current === dark) return
+    shownDark.current = dark
+    ready.current = false
+    m.setStyle(STYLE[dark ? 'dark' : 'light'], { diff: false })
+    m.once('style.load', async () => {
+      addOverlay(m, await loadPatterns(), latest.current)
+      updateColumns(m, latest.current.data, layerStrips.current)
+      markSelection(m, latest.current.selectedId, latest.current.focus)
+      ready.current = true
+    })
+  }, [dark, loaded])
+
   return <div ref={container} className="map" />
 }
 
+let patterns: Promise<(readonly [string, Awaited<ReturnType<typeof lithologyImage>>])[]> | null = null
+function loadPatterns() {
+  patterns ??= Promise.all(Object.keys(LITHOLOGY).map(async (key) => [key, await lithologyImage(key)] as const))
+  return patterns
+}
+
+/** The borehole sources and layers on top of the basemap; a style switch drops them, so they are added again. */
+function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>>,
+  state: { data: FeatureCollection; section: [number, number][]; dark: boolean }) {
+  if (m.getSource('boreholes')) return
+  for (const [key, image] of images) m.addImage(patternId(key), image, { pixelRatio: 2 })
+  m.addSource('boreholes', { type: 'geojson', data: state.data, cluster: true, clusterRadius: 42, clusterMaxZoom: CLUSTER_MAX_ZOOM })
+  m.addSource('depth-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+  m.addSource('uncertainty', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+  m.addSource('section', { type: 'geojson', data: sectionLine(state.section) })
+  m.addLayer({ id: 'section-line', type: 'line', source: 'section', paint: { 'line-color': state.dark ? '#E2E7E5' : '#1D2528', 'line-width': 2, 'line-dasharray': [2, 1.5] } })
+  m.addLayer({ id: 'uncertainty-fill', type: 'fill', source: 'uncertainty', paint: { 'fill-color': ACCENT, 'fill-opacity': 0.08 } })
+  m.addLayer({ id: 'uncertainty-line', type: 'line', source: 'uncertainty', paint: { 'line-color': ACCENT, 'line-width': 1.2, 'line-dasharray': [3, 2] } })
+  m.addLayer({
+    id: 'depth-columns', type: 'fill-extrusion', source: 'depth-markers', minzoom: COLUMN_MIN_ZOOM,
+    filter: ['!', ['has', 'pattern']],
+    paint: { 'fill-extrusion-color': ['get', 'color'], 'fill-extrusion-base': ['get', 'base_m'],
+      'fill-extrusion-height': ['get', 'height_m'], 'fill-extrusion-opacity': 0.95 },
+  })
+  m.addLayer({
+    id: 'depth-column-patterns', type: 'fill-extrusion', source: 'depth-markers', minzoom: COLUMN_MIN_ZOOM,
+    filter: ['has', 'pattern'],
+    paint: { 'fill-extrusion-pattern': ['get', 'pattern'], 'fill-extrusion-base': ['get', 'base_m'],
+      'fill-extrusion-height': ['get', 'height_m'], 'fill-extrusion-opacity': 0.95 },
+  })
+  m.addLayer({
+    id: 'clusters', type: 'circle', source: 'boreholes', filter: ['has', 'point_count'],
+    paint: {
+      'circle-color': ACCENT,
+      'circle-opacity': 0.88,
+      'circle-radius': ['step', ['get', 'point_count'], 13, 10, 17, 50, 22, 200, 28],
+      'circle-stroke-color': '#F6F7F4',
+      'circle-stroke-width': 2,
+    },
+  })
+  m.addLayer({
+    id: 'cluster-count', type: 'symbol', source: 'boreholes', filter: ['has', 'point_count'],
+    layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['Noto Sans Regular'], 'text-size': 12 },
+    paint: { 'text-color': '#FFFFFF' },
+  })
+  m.addLayer({
+    id: 'points', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM,
+    filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'loc_method'], 'geocoded_place']],
+    paint: { 'circle-color': STATUS_COLOR, 'circle-radius': 6, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5 },
+  })
+  m.addLayer({
+    id: 'points-no-depth', type: 'circle', source: 'boreholes', minzoom: COLUMN_MIN_ZOOM,
+    filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'loc_method'], 'geocoded_place'],
+      ['!', ['>', ['coalesce', ['get', 'depth'], 0], 0]]],
+    paint: { 'circle-color': STATUS_COLOR, 'circle-radius': 6, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5 },
+  })
+  m.addLayer({
+    id: 'points-approx', type: 'circle', source: 'boreholes',
+    filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'loc_method'], 'geocoded_place']],
+    paint: { 'circle-color': '#FFFFFF', 'circle-opacity': ['step', ['zoom'], 0.6, COLUMN_MIN_ZOOM, 0],
+      'circle-radius': ['step', ['zoom'], 6, COLUMN_MIN_ZOOM, 10],
+      'circle-stroke-color': STATUS_COLOR, 'circle-stroke-width': 2.5 },
+  })
+  m.addLayer({
+    // Below column zoom only: at column zoom the centred 3D column marks the selection.
+    id: 'selected', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM, filter: ['==', ['get', 'id'], ''],
+    paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 11, 'circle-stroke-color': ACCENT, 'circle-stroke-width': 3 },
+  })
+}
+
 function applySelection(m: MapLibre, selectedId: string | null, focus: Props['focus']) {
-  m.setFilter('selected', ['==', ['get', 'id'], selectedId ?? ''])
-  const source = m.getSource('uncertainty') as GeoJSONSource
-  if (!focus) {
-    source.setData({ type: 'FeatureCollection', features: [] })
-    return
-  }
-  const radius = focus.approximate ? Math.max(focus.accuracy_m ?? 0, 500) : 0
-  source.setData({ type: 'FeatureCollection', features: radius ? [circlePolygon(focus.lon, focus.lat, radius)] : [] })
+  const radius = markSelection(m, selectedId, focus)
+  if (!focus) return
   const zoom = radius && !focus.hasDepth ? Math.max(6, Math.min(13, 16 - Math.log2(radius / 100))) : 16
   m.flyTo({ center: [focus.lon, focus.lat], zoom, duration: 500, padding: uncovered(m) })
+}
+
+function markSelection(m: MapLibre, selectedId: string | null, focus: Props['focus']) {
+  m.setFilter('selected', ['==', ['get', 'id'], selectedId ?? ''])
+  const source = m.getSource('uncertainty') as GeoJSONSource
+  const radius = focus?.approximate ? Math.max(focus.accuracy_m ?? 0, 500) : 0
+  source.setData({ type: 'FeatureCollection', features: focus && radius ? [circlePolygon(focus.lon, focus.lat, radius)] : [] })
+  return radius
+}
+
+/**
+ * Keeps the map covered by the world: Web Mercator ends near ±85°, and with the camera tilted the top
+ * edge of the view reaches far beyond the centre, so the centre and zoom are limited by the ground
+ * distance from the centre to the top and bottom edges.
+ */
+function keepWorldInView(el: HTMLElement, getMap: () => MapLibre | undefined): TransformConstrainFunction {
+  return (lngLat, zoom) => {
+    const m = getMap()
+    const h = el.clientHeight
+    const half = ((m?.getVerticalFieldOfView() ?? 36.87) * Math.PI) / 360
+    const pitch = ((m?.getPitch() ?? PITCH) * Math.PI) / 180
+    const dist = h / 2 / Math.tan(half)
+    const height = dist * Math.cos(pitch), across = dist * Math.sin(pitch)
+    const top = height * Math.tan(pitch + half) - across
+    const bottom = across - height * Math.tan(pitch - half)
+    const z = Math.max(zoom, Math.log2((top + bottom) / 512))
+    const world = 512 * 2 ** z
+    const rad = (lngLat.lat * Math.PI) / 180
+    const y = ((1 - Math.log(Math.tan(Math.PI / 4 + rad / 2)) / Math.PI) / 2) * world
+    const clamped = Math.min(Math.max(y, top), world - bottom)
+    const lat = (2 * Math.atan(Math.exp(Math.PI * (1 - (2 * clamped) / world))) - Math.PI / 2) * 180 / Math.PI
+    return { center: new LngLat(lngLat.lng, lat), zoom: z }
+  }
 }
 
 function recenter(m: MapLibre, focus: Props['focus']) {
