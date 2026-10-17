@@ -9,7 +9,7 @@ the challenge owner's priorities are in [docs/challenge-owner-feedback.md](docs/
 
 ### Ingest and extraction
 
-- Reads PDF (text, scanned, vector-only), JPG/PNG/TIFF, DOCX (through its PDF export, else its embedded images),
+- Reads PDF (text, scanned, vector-only), JPG/PNG/TIFF, DOCX (converted to PDF with LibreOffice, else its embedded images),
   plain-text logs and Excel workbooks (both laid out on A4 pages first).
 - Renders and processes every page on its own, so file size does not matter (reports of ~80 MB / 150 pages).
 - Classifies pages on a thumbnail (log, continuation sheet, coordinate table, lab sheet) and extracts only
