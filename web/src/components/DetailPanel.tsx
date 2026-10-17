@@ -82,24 +82,28 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
     return rows.sort((a, b) => a.depth - b.depth)
   }, [bh])
 
+  const closeButton = <button className="btn btn-icon" onClick={onClose} aria-label="Close details" title="Close (Esc)">✕</button>
+
   return (
     <aside className="detail" aria-label={`Borehole ${bh.borehole_name}`}>
       <header className="detail-head">
-        {editing === 'head' ? <HeaderEditor borehole={bh} onChange={onReviewChange} onDone={done} /> : (
-        <div>
-          <h2>{bh.borehole_name}</h2>
-          <p className="detail-sub">{[bh.project_name, bh.location_name].filter(Boolean).join(', ') || 'No project name on the log'}</p>
-        </div>
-        )}
-        <div className="detail-actions">
-          {!editing && (
-            <button className="btn btn-small btn-ghost head-edit-btn" onClick={() => setEditing('head')}
-              title="Edit name, project and location">
-              <span aria-hidden="true">✎</span> Edit
-            </button>
-          )}
-          <button className="btn btn-icon" onClick={onClose} aria-label="Close details" title="Close (Esc)">✕</button>
-        </div>
+        {editing === 'head' ? (
+          <HeaderEditor borehole={bh} onChange={onReviewChange} onDone={done}>{closeButton}</HeaderEditor>
+        ) : (<>
+          <div>
+            <h2>{bh.borehole_name}</h2>
+            <p className="detail-sub">{[bh.project_name, bh.location_name].filter(Boolean).join(', ') || 'No project name on the log'}</p>
+          </div>
+          <div className="detail-actions">
+            {!editing && (
+              <button className="btn btn-small btn-ghost head-edit-btn" onClick={() => setEditing('head')}
+                title="Edit name, project and location">
+                <span aria-hidden="true">✎</span> Edit
+              </button>
+            )}
+            {closeButton}
+          </div>
+        </>)}
       </header>
       <ReviewBox detail={detail} onChange={onReviewChange} onDecided={onDecided} findings={<>
         {blocking.size > 0 && (<><h4>Needs a person</h4><ul>{[...blocking].map((i) => <li key={i}>{i}</li>)}</ul></>)}
