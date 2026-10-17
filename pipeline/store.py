@@ -347,6 +347,10 @@ def _new_blocking(old: Borehole, bh: Borehole) -> list[str]:
     return [i for i in bh.issues if rules(i) - seen]
 
 
+def _blocking(bh: Borehole) -> set[str]:
+    return {i for i in bh.issues if scoring.is_blocking(i)}
+
+
 def natural_key(bh: Borehole) -> str:
     """The hole by what it is: document group, type and number ('nk:report|borehole|12')."""
     from .assemble import hole_key  # assembly rules define what counts as the same hole
@@ -474,20 +478,29 @@ def record_review(con: sqlite3.Connection, borehole_id: str, decision: ReviewSta
         if expected_revision is not None and row["review_revision"] != expected_revision:
             raise StaleReview(borehole_id)
         bh = Borehole.model_validate_json(row["data"])
+        version_id = row["version_id"]
+        # The content hash leaves findings out: a blocking finding added since the version was stored gets a
+        # version of its own, so the decision names what the reviewer saw.
+        version = con.execute("SELECT data FROM record_versions WHERE id = ?", (version_id,)).fetchone()
+        if row["uid"] and (version is None or _blocking(Borehole.model_validate_json(version["data"])) != _blocking(bh)):
+            version_id = con.execute(
+                "INSERT INTO record_versions (uid, content_hash, data, created_at) VALUES (?, ?, ?, ?)",
+                (row["uid"], row["content_hash"], row["data"], datetime.now(timezone.utc).isoformat())).lastrowid
         now = datetime.now(timezone.utc)
         bh.review_status = decision
         bh.reviewed_by = reviewer if decision in HUMAN else None
         bh.reviewed_at = now if decision in HUMAN else None
         bh.review_comment = comment if decision in HUMAN else None
         con.execute(
-            "UPDATE boreholes SET review_status = ?, data = ?, review_revision = review_revision + 1 WHERE id = ?",
-            (decision.value, bh.model_dump_json(), borehole_id),
+            "UPDATE boreholes SET review_status = ?, data = ?, version_id = ?, review_revision = review_revision + 1 "
+            "WHERE id = ?",
+            (decision.value, bh.model_dump_json(), version_id, borehole_id),
         )
         con.execute(  # the version id records exactly which content the decision was about
             "INSERT INTO review_events (borehole_id, decision, reviewer, comment, at, content_hash, uid, version_id) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (borehole_id, decision.value, reviewer, comment, now.isoformat(), row["content_hash"], row["uid"],
-             row["version_id"]),
+             version_id),
         )
     return bh
 

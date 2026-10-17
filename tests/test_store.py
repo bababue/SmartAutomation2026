@@ -94,6 +94,19 @@ def test_versions_only_for_changed_content_and_review_revision(con):
         store.record_review(con, "rep:BH01", ReviewStatus.rejected, "Ben", None, expected_revision=0)
 
 
+def test_an_approval_names_the_blocking_findings_the_reviewer_saw(con):
+    store.save_borehole(con, record())
+    flagged = record()
+    flagged.issues += ["sheet header differs from sheet 1"]  # same content, so no new version on save
+    store.save_borehole(con, flagged)
+    store.record_review(con, "rep:BH01", ReviewStatus.approved, "Ana", None)
+    store.delete_document_boreholes(con, "rep")
+    moved = record(bid="rep:BH1")
+    moved.issues += ["sheet header differs from sheet 1"]
+    store.save_borehole(con, moved)
+    assert store.load_borehole(con, "rep:BH1").review_status == ReviewStatus.approved
+
+
 def test_new_blocking_finding_reopens_an_approval(con):
     def rebuilt(*extra):
         bh = record()
