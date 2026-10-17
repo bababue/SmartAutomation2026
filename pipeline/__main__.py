@@ -224,7 +224,7 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     try:
         knowledge.apply_all(con, boreholes)  # what reviewers taught beyond single records
         for bh in boreholes:  # reviewer fixes survive re-extraction, and win over learned knowledge
-            corrections.apply(bh, store.corrections_for(con, bh.borehole_id))
+            corrections.apply(bh, store.corrections_for(con, bh.borehole_id, store.uid_for(con, bh)))
         if dry_run:
             con.rollback()
             _report(boreholes, len(done))

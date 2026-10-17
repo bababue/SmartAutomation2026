@@ -170,13 +170,14 @@ def document_grids(con: sqlite3.Connection, boreholes: list[Borehole]) -> dict[s
     """One grid per document group, from the holes a reviewer positioned by hand."""
     by_id = {bh.borehole_id: bh for bh in boreholes}
     points: dict[str, list] = {}
-    for row in con.execute("SELECT target, payload FROM corrections WHERE scope = 'borehole' AND kind = 'position' "
+    by_uid = {uid: bh for bh in boreholes if (uid := store.uid_for(con, bh))}
+    for row in con.execute("SELECT target, uid, payload FROM corrections WHERE scope = 'borehole' AND kind = 'position' "
                            "ORDER BY id"):
-        bh = by_id.get(row["target"])
+        bh = by_id.get(row["target"]) or (by_uid.get(row["uid"]) if row["uid"] else None)
         pair = printed_pair(bh.location.coords_raw) if bh else None
         if pair:
             payload = json.loads(row["payload"])
-            points.setdefault(store.document_group(row["target"]), {})[row["target"]] = (pair, (payload["lat"], payload["lon"]))
+            points.setdefault(store.document_group(bh.borehole_id), {})[bh.borehole_id] = (pair, (payload["lat"], payload["lon"]))
     return {g: grid for g, pts in points.items() if (grid := fit_grid(list(pts.values())))}
 
 
@@ -247,7 +248,7 @@ def apply_all(con: sqlite3.Connection, boreholes: list[Borehole]) -> None:
     if not items and not grids:
         return
     for bh in boreholes:
-        fixed = [c["payload"]["value"] for c in store.corrections_for(con, bh.borehole_id)
+        fixed = [c["payload"]["value"] for c in store.corrections_for(con, bh.borehole_id, store.uid_for(con, bh))
                  if c["kind"] == "field" and c["payload"]["field"] == "project_name"]
         notes = apply(bh, applicable(items, bh, fixed[-1] if fixed else None),
                       grids.get(store.document_group(bh.borehole_id)))

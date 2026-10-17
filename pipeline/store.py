@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -60,7 +61,82 @@ CREATE TABLE IF NOT EXISTS knowledge (
 CREATE INDEX IF NOT EXISTS knowledge_scope ON knowledge (scope_type, scope_value, kind);
 """
 
+# Version 3: queryable projections (layers, lab values, findings, sources), stable borehole uids with
+# aliases, immutable record versions, review revision. Older databases are migrated in connect().
+SCHEMA_VERSION = 3
+
+SCHEMA_V3 = """
+-- Projections of the current records for queries, rebuilt from 'data' at any time.
+CREATE TABLE IF NOT EXISTS layers (
+    rid INTEGER NOT NULL, seq INTEGER NOT NULL, top_m REAL, bottom_m REAL, primary_code TEXT, strat_code TEXT,
+    geologic_age TEXT, PRIMARY KEY (rid, seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS layers_lith ON layers (primary_code, top_m, bottom_m);
+CREATE TABLE IF NOT EXISTS lab_values (
+    rid INTEGER NOT NULL, seq INTEGER NOT NULL, parameter TEXT, value REAL, qualifier TEXT, top_m REAL,
+    bottom_m REAL, sample TEXT, PRIMARY KEY (rid, seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS lab_param ON lab_values (parameter, value);
+CREATE TABLE IF NOT EXISTS findings (
+    rid INTEGER NOT NULL, seq INTEGER NOT NULL, code TEXT, severity TEXT, epsg INTEGER, text TEXT,
+    PRIMARY KEY (rid, seq)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS findings_code ON findings (code, epsg);
+CREATE TABLE IF NOT EXISTS record_sources (
+    rid INTEGER NOT NULL, file TEXT NOT NULL, page INTEGER NOT NULL DEFAULT 0, role TEXT NOT NULL,
+    PRIMARY KEY (rid, file, page, role)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS sources_page ON record_sources (file, page);
+-- Identity: a durable uid per physical hole, ids and natural keys ('nk:group|type|number') are aliases.
+CREATE TABLE IF NOT EXISTS borehole_aliases (alias TEXT PRIMARY KEY, uid TEXT NOT NULL) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS aliases_uid ON borehole_aliases (uid);
+-- Every distinct content a record had: what a reviewer saw stays reconstructable.
+CREATE TABLE IF NOT EXISTS record_versions (
+    id INTEGER PRIMARY KEY, uid TEXT NOT NULL, content_hash TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS versions_uid ON record_versions (uid, id);
+"""
+
+
 HUMAN = (ReviewStatus.approved, ReviewStatus.rejected)
+
+
+def _add_columns(con: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    present = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
+    for name, decl in columns.items():
+        if name not in present:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
+def _migrate_v3(con: sqlite3.Connection) -> None:
+    """Projections, uids, aliases and a first version for every stored record (no rebuild needed)."""
+    with con:
+        _add_columns(con, "boreholes", {"reasons": "TEXT", "uid": "TEXT", "version_id": "INTEGER",
+                                        "review_revision": "INTEGER NOT NULL DEFAULT 0"})
+        _add_columns(con, "corrections", {"uid": "TEXT"})
+        _add_columns(con, "review_events", {"uid": "TEXT", "version_id": "INTEGER"})
+        for statement in SCHEMA_V3.split(";"):  # executescript would commit the open transaction
+            if statement.strip():
+                con.execute(statement)
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS boreholes_uid ON boreholes (uid)")
+        con.execute("CREATE INDEX IF NOT EXISTS corrections_uid ON corrections (uid, id)")
+        con.execute("CREATE INDEX IF NOT EXISTS review_events_uid ON review_events (uid, id)")
+        for row in con.execute("SELECT rid, id, data, content_hash, uid FROM boreholes").fetchall():
+            try:
+                bh = Borehole.model_validate_json(row["data"])
+            except ValidationError:
+                continue
+            uid = row["uid"] or _resolve_uid(con, bh) or uuid.uuid4().hex
+            version_id = _version(con, uid, row["content_hash"], row["data"])
+            con.execute("UPDATE boreholes SET uid = ?, version_id = ?, reasons = ? WHERE rid = ?",
+                        (uid, version_id, as_json(bh.score_reasons), row["rid"]))
+            _remember_aliases(con, bh, uid)
+            _write_projections(con, row["rid"], bh)
+        con.execute("""UPDATE corrections SET uid = (SELECT uid FROM boreholes b WHERE b.id = corrections.target)
+                       WHERE scope = 'borehole' AND uid IS NULL""")
+        con.execute("""UPDATE review_events SET uid = (SELECT uid FROM boreholes b WHERE b.id = review_events.borehole_id)
+                       WHERE uid IS NULL""")
+        con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
@@ -94,6 +170,8 @@ def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
                 except ValidationError:
                     continue  # stays empty until the next rebuild
                 con.execute("UPDATE boreholes SET ground = ? WHERE rid = ?", (summary, row["rid"]))
+    if con.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+        _migrate_v3(con)
     return con
 
 
@@ -132,13 +210,15 @@ def extracted_summary(bh: Borehole) -> dict:
 
 
 def _delete(con: sqlite3.Connection, borehole_id: str) -> dict | None:
-    row = con.execute("SELECT rid, content_hash, data, extracted FROM boreholes WHERE id = ?",
+    row = con.execute("SELECT rid, content_hash, data, extracted, uid, review_revision FROM boreholes WHERE id = ?",
                       (borehole_id,)).fetchone()
     if not row:
         return None
     con.execute("DELETE FROM boreholes WHERE rid = ?", (row["rid"],))
     con.execute("DELETE FROM boreholes_rtree WHERE rid = ?", (row["rid"],))
     con.execute("DELETE FROM boreholes_fts WHERE rowid = ?", (row["rid"],))
+    for table in ("layers", "lab_values", "findings", "record_sources"):
+        con.execute(f"DELETE FROM {table} WHERE rid = ?", (row["rid"],))
     return dict(row)
 
 
@@ -168,20 +248,85 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
                 bh.review_status = ReviewStatus.pending_review
                 bh.score_reasons = [f"Data changed since the {old.review_status.value} decision by "
                                     f"{old.reviewed_by or 'a reviewer'}"] + bh.score_reasons
-    _insert(con, bh, digest, extracted_json)
+    uid = (previous or {}).get("uid") or _resolve_uid(con, bh) or uuid.uuid4().hex
+    if con.execute("SELECT 1 FROM boreholes WHERE uid = ? AND id != ?", (uid, bh.borehole_id)).fetchone():
+        uid = uuid.uuid4().hex  # another current record is that hole: never share an identity
+    version_id = _version(con, uid, digest, bh.model_dump_json())
+    _insert(con, bh, digest, extracted_json, uid, version_id, (previous or {}).get("review_revision") or 0)
+    _remember_aliases(con, bh, uid)
     if commit:
         con.commit()
 
 
-def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str | None = None) -> None:
+def natural_key(bh: Borehole) -> str:
+    """The hole by what it is: document group, type and number ('nk:report|borehole|12')."""
+    from .assemble import hole_key  # assembly rules define what counts as the same hole
+    kind, number = hole_key(bh.borehole_name, bh.investigation_type.value if bh.investigation_type else None)
+    return f"nk:{document_group(bh.borehole_id)}|{kind or ''}|{number}"
+
+
+def _resolve_uid(con: sqlite3.Connection, bh: Borehole) -> str | None:
+    """The uid this record had before: by its natural key (the same hole by definition, also while its old
+    record under another id is still stored during a rebuild), else by its id unless another current record
+    holds that uid."""
+    row = con.execute("SELECT uid FROM borehole_aliases WHERE alias = ?", (natural_key(bh),)).fetchone()
+    if row:
+        return row["uid"]
+    row = con.execute("SELECT uid FROM borehole_aliases WHERE alias = ?", (bh.borehole_id,)).fetchone()
+    if row and not con.execute("SELECT 1 FROM boreholes WHERE uid = ? AND id != ?", (row["uid"], bh.borehole_id)).fetchone():
+        return row["uid"]
+    return None
+
+
+def uid_for(con: sqlite3.Connection, bh: Borehole) -> str | None:
+    row = con.execute("SELECT uid FROM boreholes WHERE id = ?", (bh.borehole_id,)).fetchone()
+    return row["uid"] if row and row["uid"] else _resolve_uid(con, bh)
+
+
+def _remember_aliases(con: sqlite3.Connection, bh: Borehole, uid: str) -> None:
+    for alias in (bh.borehole_id, natural_key(bh)):
+        con.execute("INSERT INTO borehole_aliases (alias, uid) VALUES (?, ?) ON CONFLICT (alias) DO UPDATE SET uid = excluded.uid",
+                    (alias, uid))
+
+
+def _version(con: sqlite3.Connection, uid: str, digest: str, data: str) -> int:
+    """The id of this content as a record version; a new version only when the content changed."""
+    last = con.execute("SELECT id, content_hash FROM record_versions WHERE uid = ? ORDER BY id DESC LIMIT 1",
+                       (uid,)).fetchone()
+    if last and last["content_hash"] == digest:
+        return last["id"]
+    cur = con.execute("INSERT INTO record_versions (uid, content_hash, data, created_at) VALUES (?, ?, ?, ?)",
+                      (uid, digest, data, datetime.now(timezone.utc).isoformat()))
+    return cur.lastrowid
+
+
+def _write_projections(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
+    from .scoring import EPSG_IN_FINDING, finding_code, finding_severity
+    con.executemany("INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [(rid, i, l.top_m, l.bottom_m, l.primary.value, l.stratigraphic_code, l.geologic_age)
+                     for i, l in enumerate(bh.layers)])
+    con.executemany("INSERT INTO lab_values VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(rid, i, r.parameter.value, r.value, r.qualifier, r.top_m, r.bottom_m, r.sample_name)
+                     for i, r in enumerate(bh.lab_results)])
+    con.executemany("INSERT INTO findings VALUES (?, ?, ?, ?, ?, ?)",
+                    [(rid, i, finding_code(t), finding_severity(t),
+                      int(m.group(1)) if (m := EPSG_IN_FINDING.search(t)) else None, t)
+                     for i, t in enumerate(bh.issues)])
+    sources = {(s.file, s.page or 0, "log") for s in bh.sources}
+    sources |= {(r.source.file, r.source.page or 0, "lab") for r in bh.lab_results if r.source}
+    con.executemany("INSERT OR IGNORE INTO record_sources VALUES (?, ?, ?, ?)", [(rid, *src) for src in sources])
+
+
+def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str | None = None, uid: str | None = None,
+            version_id: int | None = None, review_revision: int = 0) -> None:
     loc = bh.location
     doc_id = bh.borehole_id.split(":", 1)[0]
     lithologies = sorted({layer.primary.value for layer in bh.layers})
     cur = con.execute(
         """INSERT INTO boreholes (id, name, doc_id, project, location_name, country, lat, lon, depth, elevation,
            investigation_type, confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues,
-           lithologies, strip, content_hash, data, extracted, ground)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           lithologies, strip, content_hash, data, extracted, ground, reasons, uid, version_id, review_revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             bh.borehole_id, bh.borehole_name, doc_id, bh.project_name, bh.location_name, loc.country,
             loc.lat, loc.lon, bh.depth_m or (bh.layers[-1].bottom_m if bh.layers else None), bh.surface_elevation_m,
@@ -190,8 +335,10 @@ def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str |
             len(bh.issues), ",".join(lithologies),
             as_json([[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers]),
             digest, bh.model_dump_json(), extracted, ground.summarize(bh).model_dump_json(),
+            as_json(bh.score_reasons), uid, version_id, review_revision,
         ),
     )
+    _write_projections(con, cur.lastrowid, bh)
     if loc.lat is not None and loc.lon is not None:
         con.execute("INSERT INTO boreholes_rtree VALUES (?, ?, ?, ?, ?)", (cur.lastrowid, loc.lat, loc.lat, loc.lon, loc.lon))
     _insert_fts(con, cur.lastrowid, bh)
@@ -217,15 +364,20 @@ class StaleReview(Exception):
 
 
 def record_review(con: sqlite3.Connection, borehole_id: str, decision: ReviewStatus, reviewer: str,
-                  comment: str | None, expected_hash: str | None = None) -> Borehole | None:
+                  comment: str | None, expected_hash: str | None = None,
+                  expected_revision: int | None = None) -> Borehole | None:
     """Store a human decision in place (no delete/re-insert) and append it to the review log. With
-    `expected_hash`, the decision is refused if the content changed since the reviewer saw it."""
+    `expected_hash`, the decision is refused if the content changed since the reviewer saw it; with
+    `expected_revision`, if another decision was stored in the meantime."""
     with con:
         con.execute("BEGIN IMMEDIATE")
-        row = con.execute("SELECT data, content_hash FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
+        row = con.execute("SELECT data, content_hash, uid, version_id, review_revision FROM boreholes WHERE id = ?",
+                          (borehole_id,)).fetchone()
         if row is None:
             return None
         if expected_hash and row["content_hash"] != expected_hash:
+            raise StaleReview(borehole_id)
+        if expected_revision is not None and row["review_revision"] != expected_revision:
             raise StaleReview(borehole_id)
         bh = Borehole.model_validate_json(row["data"])
         now = datetime.now(timezone.utc)
@@ -234,12 +386,14 @@ def record_review(con: sqlite3.Connection, borehole_id: str, decision: ReviewSta
         bh.reviewed_at = now if decision in HUMAN else None
         bh.review_comment = comment if decision in HUMAN else None
         con.execute(
-            "UPDATE boreholes SET review_status = ?, data = ? WHERE id = ?",
+            "UPDATE boreholes SET review_status = ?, data = ?, review_revision = review_revision + 1 WHERE id = ?",
             (decision.value, bh.model_dump_json(), borehole_id),
         )
-        con.execute(
-            "INSERT INTO review_events (borehole_id, decision, reviewer, comment, at, content_hash) VALUES (?, ?, ?, ?, ?, ?)",
-            (borehole_id, decision.value, reviewer, comment, now.isoformat(), row["content_hash"]),
+        con.execute(  # the version id records exactly which content the decision was about
+            "INSERT INTO review_events (borehole_id, decision, reviewer, comment, at, content_hash, uid, version_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (borehole_id, decision.value, reviewer, comment, now.isoformat(), row["content_hash"], row["uid"],
+             row["version_id"]),
         )
     return bh
 
@@ -251,19 +405,33 @@ def document_group(borehole_id: str) -> str:
 def add_correction(con: sqlite3.Connection, scope: str, target: str, kind: str, payload: dict, reviewer: str,
                    comment: str | None) -> dict:
     at = datetime.now(timezone.utc).isoformat()
+    uid = None
+    if scope == "borehole":  # follows the hole even if its id changes later
+        row = con.execute("SELECT uid FROM boreholes WHERE id = ?", (target,)).fetchone()
+        uid = row["uid"] if row else None
     cur = con.execute(
-        "INSERT INTO corrections (scope, target, kind, payload, reviewer, comment, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (scope, target, kind, as_json(payload), reviewer, comment, at),
+        "INSERT INTO corrections (scope, target, kind, payload, reviewer, comment, at, uid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (scope, target, kind, as_json(payload), reviewer, comment, at, uid),
     )
     return {"id": cur.lastrowid, "scope": scope, "target": target, "kind": kind, "payload": payload,
-            "reviewer": reviewer, "comment": comment, "at": at}
+            "reviewer": reviewer, "comment": comment, "at": at, "uid": uid}
 
 
-def corrections_for(con: sqlite3.Connection, borehole_id: str) -> list[dict]:
-    """Corrections that apply to a record, oldest first (document-wide ones included)."""
+def corrections_for(con: sqlite3.Connection, borehole_id: str, uid: str | None = None) -> list[dict]:
+    """Corrections that apply to a record, oldest first (document-wide ones included). With the record's
+    uid, corrections made under an earlier id of the same hole are found too."""
     rows = con.execute(
-        "SELECT * FROM corrections WHERE (scope = 'borehole' AND target = ?) OR (scope = 'document' AND target = ?) "
-        "ORDER BY id", (borehole_id, document_group(borehole_id)),
+        "SELECT * FROM corrections WHERE (scope = 'borehole' AND (target = ? OR uid = ?)) "
+        "OR (scope = 'document' AND target = ?) ORDER BY id", (borehole_id, uid or "", document_group(borehole_id)),
+    ).fetchall()
+    return [{**dict(r), "payload": json.loads(r["payload"])} for r in rows]
+
+
+def orphan_corrections(con: sqlite3.Connection) -> list[dict]:
+    """Corrections of holes that no current record carries any more (renamed beyond recognition or gone)."""
+    rows = con.execute(
+        "SELECT * FROM corrections c WHERE scope = 'borehole' AND NOT EXISTS "
+        "(SELECT 1 FROM boreholes b WHERE b.id = c.target OR (c.uid IS NOT NULL AND b.uid = c.uid)) ORDER BY id"
     ).fetchall()
     return [{**dict(r), "payload": json.loads(r["payload"])} for r in rows]
 
@@ -316,8 +484,12 @@ def deactivate_knowledge(con: sqlite3.Connection, item_id: int) -> bool:
 
 
 def review_log(con: sqlite3.Connection, borehole_id: str) -> list[dict]:
+    """Decisions on this hole, also those made under an earlier id (via its uid), newest first."""
+    row = con.execute("SELECT uid FROM boreholes WHERE id = ?", (borehole_id,)).fetchone()
+    uid = row["uid"] if row else None
     return [dict(r) for r in con.execute(
-        "SELECT decision, reviewer, comment, at FROM review_events WHERE borehole_id = ? ORDER BY id DESC", (borehole_id,)
+        "SELECT decision, reviewer, comment, at, version_id FROM review_events WHERE borehole_id = ? OR "
+        "(uid IS NOT NULL AND uid = ?) ORDER BY id DESC", (borehole_id, uid or ""),
     )]
 
 

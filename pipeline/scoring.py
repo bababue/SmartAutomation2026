@@ -171,3 +171,41 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
     if not released and not reasons:
         reasons.append(f"Score below {round(config.AUTO_APPROVE_THRESHOLD * 100)}")
     bh.score_reasons = reasons
+
+
+# Findings as data: a stable code and a severity per finding text, for queries and the review queue.
+FINDING_CODES: list[tuple[str, str]] = [
+    ("no layers extracted", "no_layers"), ("layer ", "invalid_interval"), ("gap", "gap"), ("overlap", "overlap"),
+    ("minor discontinuity", "minor_discontinuity"), ("layers end at", "depth_mismatch"),
+    ("log starts at", "log_starts_below_surface"), ("missing sheets", "missing_sheets"),
+    ("CRS ambiguous", "crs_ambiguous"), ("coordinate system inferred", "crs_inferred"),
+    ("coordinate axes inferred", "axes_inferred"), ("coordinate notation or datum ambiguous", "notation_ambiguous"),
+    ("coordinate system taken from", "crs_from_document"), ("coordinate system from reviewer knowledge", "crs_from_knowledge"),
+    ("position from a local grid", "position_from_grid"), ("position from place name only", "position_from_place"),
+    ("printed coordinates could not be matched", "coords_unmatched"), ("coordinates ", "coords_far_from_place"),
+    ("position ", "position_outlier"), ("no place to cross-check", "no_place_check"),
+    ("not georeferenced", "not_georeferenced"), ("invalid WGS84", "invalid_position"), ("unreadable:", "unreadable"),
+    ("boundary inferred", "boundary_inferred"), ("core loss inferred", "core_loss_inferred"),
+    ("lithology of layer", "lithology_inferred"), ("reached at the final depth", "end_of_hole_material"),
+    ("corrected by", "correction"), ("stale correction", "stale_correction"), ("depths printed in feet", "feet"),
+    ("core run", "core_run_inconsistent"), ("sample", "test_below_final_depth"), ("SPT at", "test_below_final_depth"),
+    ("groundwater marked dry", "groundwater_inconsistent"),
+]
+EPSG_IN_FINDING = re.compile(r"EPSG:(\d{4,6})")
+
+
+def finding_code(issue: str) -> str:
+    # 'layer X–Y m restated / repeats / ends at' are sheet-merge notes, not invalid intervals
+    if issue.startswith("layer ") and re.search(r"restated|repeats|ends at", issue):
+        return "sheet_merge"
+    return next((code for prefix, code in FINDING_CODES if issue.startswith(prefix)), "other")
+
+
+def finding_severity(issue: str) -> str:
+    if any(b in issue for b in BLOCKING):
+        return "blocking"
+    if issue.startswith(NEEDS_LOOK) or NEEDS_LOOK_RE.match(issue):
+        return "needs_look"
+    if issue.startswith(("unreadable:", "corrected by")):
+        return "info"
+    return "warning"
