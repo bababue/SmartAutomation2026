@@ -1,5 +1,7 @@
 """Document replacement must preserve human work when processing is incomplete."""
 
+import json
+
 import pytest
 
 from pipeline import config, store
@@ -171,3 +173,18 @@ def test_fresh_database_stores_a_document_with_a_lost_hole_as_blocking(con):
     bh = store.load_borehole(con, "report:BH1")
     assert "log not extracted: page 1 shows 2 logs, 1 came back with layers" in bh.issues
     assert bh.review_status == ReviewStatus.pending_review
+
+
+def test_eval_snapshot_keeps_lab_values_merged_from_a_duplicate(con, monkeypatch):
+    docs, rendered, classes, extractions = inputs("folder__a")
+    other = inputs("folder__b")
+    docs += other[0]
+    rendered.update(other[1])
+    classes.update(other[2])
+    extractions.update(other[3])
+    a = record(bid="folder__a:BH1", name="BH1", ucs=42.0)
+    b = record(bid="folder__b:BH1", name="BH1", ucs=17.0)
+    monkeypatch.setattr(cli, "assemble", lambda *args, **kwargs: [a, b])
+    cli._store(con, docs, rendered, classes, extractions)
+    (kept, extracted), = con.execute("SELECT id, extracted FROM boreholes").fetchall()
+    assert sorted(value for _, value, *_ in json.loads(extracted)["lab"]) == [17.0, 42.0]

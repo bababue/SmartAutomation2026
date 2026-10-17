@@ -300,7 +300,6 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
                 corrections.rescore(bh)
         for doc_id, notes in lost.items():
             print(f"  ! {doc_id}: {len(notes)} classified logs came back without layers", file=sys.stderr)
-    extracted = {bh.borehole_id: store.extracted_summary(bh) for bh in boreholes}  # before fixes, for `eval`
     # Per document group: read knowledge and corrections and replace the group's records in one short write
     # transaction. A correction saved meanwhile cannot be lost, and reviewers wait for one group at most.
     groups: dict[str, list] = {}
@@ -308,22 +307,25 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
         groups.setdefault(doc_id.split("__")[0], [])
     for bh in boreholes:
         groups.setdefault(store.document_group(bh.borehole_id), []).append(bh)
-    stored = []
+    stored, extracted = [], {}
     for group, records in groups.items():
         con.execute("BEGIN IMMEDIATE")
         try:
-            knowledge.apply_all(con, records)  # what reviewers taught beyond single records
-            protected = set()
-            for bh in records:  # reviewer fixes survive re-extraction, and win over learned knowledge
+            fixes, protected = {}, set()
+            for bh in records:
                 uid = store.uid_for(con, bh)
-                fixes = store.corrections_for(con, bh.borehole_id, uid)
+                fixes[bh.borehole_id] = store.corrections_for(con, bh.borehole_id, uid)
                 previous_status = con.execute("SELECT review_status FROM boreholes WHERE id = ? OR uid = ?",
                                               (bh.borehole_id, uid)).fetchone()
-                if fixes or previous_status and previous_status[0] in {s.value for s in store.HUMAN}:
+                if fixes[bh.borehole_id] or previous_status and previous_status[0] in {s.value for s in store.HUMAN}:
                     protected.add(bh.borehole_id)
-                corrections.apply(bh, fixes)
             # Independent groups do not share an identity scope; coincident positions alone cannot join them.
             records = dedupe(records, protected)
+            # The model's output for `eval`: after merging duplicates, which moves lab values, before reviewer input.
+            extracted.update({bh.borehole_id: store.extracted_summary(bh) for bh in records})
+            knowledge.apply_all(con, records)  # what reviewers taught beyond single records
+            for bh in records:  # reviewer fixes survive re-extraction, and win over learned knowledge
+                corrections.apply(bh, fixes[bh.borehole_id])
             stored.extend(records)
             if dry_run:
                 con.rollback()
