@@ -181,11 +181,11 @@ def test_review_api(con):
     score(bh, {}, 0)
     store.save_borehole(con, bh)
     client = TestClient(app)
-    assert [r["id"] for r in client.get("/api/review-queue").json()] == ["demo:BH1"]
+    assert [r["id"] for r in client.get("/api/review-queue").json()["items"]] == ["demo:BH1"]
     res = client.post("/api/boreholes/demo:BH1/review", json={"decision": "approved", "reviewer": "Anna"})
     assert res.status_code == 200
     assert res.json()["review_log"][0]["reviewer"] == "Anna"
-    assert client.get("/api/review-queue").json() == []
+    assert client.get("/api/review-queue").json() == {"items": [], "total": 0}
     released = client.get("/api/boreholes", params={"status": "released"}).json()["features"]
     assert [f["properties"]["id"] for f in released] == ["demo:BH1"]
     assert client.post("/api/boreholes/missing/review", json={"decision": "approved", "reviewer": "A"}).status_code == 404

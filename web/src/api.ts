@@ -1,5 +1,5 @@
 import { encodeRange } from './url'
-import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, LayerStrips, QueueItem,
+import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, LayerStrips,
   QueuePage, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob, UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -66,12 +66,8 @@ export const fetchSimilar = (id: string, signal?: AbortSignal) =>
 export const fetchStats = () => request<Stats>('/api/stats')
 export const fetchStatsDetail = (f: Filters, signal?: AbortSignal) =>
   request<StatsDetail>(`/api/stats/detail?${filterParams(f)}`, { signal })
-export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200, audit = false): Promise<QueuePage> {
-  const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}${audit ? '&audit=true' : ''}`, { signal })
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-  const items = (await res.json()) as QueueItem[]
-  return { items, total: Number(res.headers.get('X-Total-Count') ?? items.length) }
-}
+export const fetchQueue = (blocking: boolean, signal?: AbortSignal, limit = 200, audit = false) =>
+  request<QueuePage>(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}${audit ? '&audit=true' : ''}`, { signal })
 export const fetchCrsGroups = (signal?: AbortSignal) => request<CrsGroup[]>('/api/review-queue/crs-groups', { signal })
 
 export function postCorrection(id: string, kind: CorrectionKind, payload: Record<string, unknown>, reviewer: string,

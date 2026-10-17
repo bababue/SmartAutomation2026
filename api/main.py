@@ -21,7 +21,7 @@ from typing import IO, Annotated, Literal, NamedTuple
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from datetime import date as date_type
@@ -272,8 +272,7 @@ def list_boreholes(
 def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
                  blocking: bool = Query(False, description="only records with a blocking finding"),
                  audit: bool = Query(False, description="the release audit sample instead (any status)")):
-    """Everything waiting for a human, weakest first (also records without a position), a page at a time.
-    The total is in the X-Total-Count header so the response stays a plain list."""
+    """Everything waiting for a human, weakest first (also records without a position), a page at a time."""
     where, params = "review_status = 'pending_review'" + (
         " AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = boreholes.rid AND f.severity = 'blocking')"
         if blocking else ""), []
@@ -289,7 +288,7 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
     ).fetchall()
     items = [{**{k: r[k] for k in r.keys() if k != "reasons"}, "reasons": json.loads(r["reasons"] or "[]")}
              for r in rows]
-    return JSONResponse(items, headers={"X-Total-Count": str(total)})
+    return {"items": items, "total": total}
 
 
 @app.get("/api/review-queue/crs-groups")

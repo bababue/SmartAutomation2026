@@ -87,8 +87,12 @@ def test_layer_strips_are_limited_to_the_visible_bbox(client):
 
 
 def test_review_queue_pages(client):
-    r = client.get("/api/review-queue?limit=1")
-    assert r.status_code == 200 and int(r.headers["X-Total-Count"]) >= len(r.json())
+    con = store.connect()
+    for bid in ("q:G1", "q:G2"):
+        store.save_borehole(con, hole(bid, 47.0, 8.0, [(0, 5, "sand"), (7, 10, "clay")]))  # gap: waits for review
+    con.close()
+    page = client.get("/api/review-queue?limit=1").json()
+    assert page["total"] == 2 and len(page["items"]) == 1
     assert client.get("/api/corrections/orphans").json() == []
 
 
@@ -96,9 +100,9 @@ def test_review_queue_blocking_only(client):
     con = store.connect()
     store.save_borehole(con, hole("q:G", 47.0, 8.0, [(0, 5, "sand"), (7, 10, "clay")]))  # gap: blocking
     con.close()
-    every = {item["id"] for item in client.get("/api/review-queue").json()}
-    r = client.get("/api/review-queue?blocking=true")
-    assert [item["id"] for item in r.json()] == ["q:G"] and r.headers["X-Total-Count"] == "1"
+    every = {item["id"] for item in client.get("/api/review-queue").json()["items"]}
+    page = client.get("/api/review-queue?blocking=true").json()
+    assert [item["id"] for item in page["items"]] == ["q:G"] and page["total"] == 1
     assert "q:G" in every
 
 
