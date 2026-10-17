@@ -230,7 +230,7 @@ def page_texts(bh: Borehole) -> dict[tuple[str, int | None], str]:
     if not manifest.exists():
         return {}
     file = bh.sources[0].file
-    return {(file, p["page"]): p["text"] for p in json.loads(manifest.read_text())}
+    return {(file, p["page"]): p["text"] for p in json.loads(manifest.read_text(encoding="utf-8"))}
 
 
 def rescore(bh: Borehole) -> None:

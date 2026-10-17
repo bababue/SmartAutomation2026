@@ -241,7 +241,7 @@ def measured_costs() -> dict[str, tuple[int, float]]:
     for stage in ("classify", "extract", "lab"):
         n, total = 0, 0.0
         for path in (config.CACHE_DIR / stage).glob("*/*.json"):
-            usage = json.loads(path.read_text()).get("usage")
+            usage = json.loads(path.read_text(encoding="utf-8")).get("usage")
             cost = cost_usd(usage) if usage else None
             if cost is not None:
                 n, total = n + 1, total + cost
@@ -404,7 +404,7 @@ def _cli_env() -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k not in drop}
     token_file = os.getenv("CLAUDE_CLI_TOKEN_FILE")
     if token_file:
-        env["ANTHROPIC_AUTH_TOKEN"] = Path(token_file).expanduser().read_text().strip()
+        env["ANTHROPIC_AUTH_TOKEN"] = Path(token_file).expanduser().read_text(encoding="utf-8").strip()
     return env
 
 
@@ -420,7 +420,7 @@ def _cached(stage: str, page: PageImage, key_for, model: str, effort: str, out: 
     path = cache_path(stage, page)
     key = key_for(model, effort)
     if path.exists():
-        cached = json.loads(path.read_text())
+        cached = json.loads(path.read_text(encoding="utf-8"))
         if cached.get("key") == key:
             return out.model_validate(cached["result"])
     _usage.acc = {}
@@ -435,7 +435,7 @@ def _cached(stage: str, page: PageImage, key_for, model: str, effort: str, out: 
     if usage:  # the CLI backend reports no token counts
         entry["usage"] = usage
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(entry, ensure_ascii=False))
+    path.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
     return result
 
 
@@ -446,7 +446,7 @@ def _from_cache(stage: str, page: PageImage, key_for, model: str, effort: str, o
     path = cache_path(stage, page)
     if not path.exists():
         return None
-    cached = json.loads(path.read_text())
+    cached = json.loads(path.read_text(encoding="utf-8"))
     key = key_for(cached.get("model", model), cached.get("effort", effort))
     return out.model_validate(cached["result"]) if cached.get("key") == key else None
 

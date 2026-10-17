@@ -438,7 +438,7 @@ def cmd_share(args) -> None:
                             cwd=config.ROOT).stdout.strip() or "unknown"
     (out / "README.md").write_text(SHARE_README.format(
         commit=commit, created=datetime.date.today().isoformat(), source=config.DB_PATH.name,
-        boreholes=counts[0], documents=counts[1]))
+        boreholes=counts[0], documents=counts[1]), encoding="utf-8")
     size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file()) / 1e6
     print(f"Package in {out}: {counts[0]} boreholes, {size:.0f} MB. Confidential: share locally only "
           "(AirDrop, USB, scp), not via cloud services.")

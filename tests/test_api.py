@@ -67,3 +67,8 @@ def test_csv_lists_source_file_and_pages(client):
     assert by_id["XYZ01:BH1"]["SourceFile"] == "reports/XYZ01_site_report.pdf"
     assert by_id["XYZ01:BH1"]["SourcePages"] == "1;2"  # pages of other files are left out
     assert by_id["QRS02:BH7"]["SourcePages"] == "5"
+
+
+def test_filter_by_ids(client):
+    features = client.get("/api/boreholes", params={"id": ["QRS02:BH7", "missing"]}).json()["features"]
+    assert [f["properties"]["id"] for f in features] == ["QRS02:BH7"]

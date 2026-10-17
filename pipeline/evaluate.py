@@ -52,7 +52,7 @@ def current_entries(con: sqlite3.Connection, corrected: bool = False) -> tuple[d
 
 
 def _load(path: Path) -> dict:
-    return json.loads(path.read_text()) if path.exists() else {"boreholes": {}}
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"boreholes": {}}
 
 
 def load_reference(path: Path = REFERENCE_PATH) -> dict[str, dict]:
@@ -67,7 +67,7 @@ def load_holdout(path: Path = REFERENCE_PATH) -> set[str]:
 def _write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({**data, "created": datetime.now(timezone.utc).isoformat()},
-                               indent=1, ensure_ascii=False))
+                               indent=1, ensure_ascii=False), encoding="utf-8")
 
 
 def snapshot(con: sqlite3.Connection, path: Path = REFERENCE_PATH) -> tuple[int, int, int]:
