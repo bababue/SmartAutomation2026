@@ -18,8 +18,8 @@ from schema.borehole import Borehole, GeorefMethod, ReviewStatus
 from . import config
 
 # Findings that always need a human, whatever the score: anything that suggests a misread.
-BLOCKING = ("no layers extracted", "CRS ambiguous", "invalid interval", "non-finite depth", "invalid WGS84",
-            "gap", "overlap", "layers end at", "stale correction", "log starts at", "depths printed in feet",
+BLOCKING = ("no layers extracted", "log not extracted", "CRS ambiguous", "invalid interval", "non-finite depth",
+            "invalid WGS84", "gap", "overlap", "layers end at", "stale correction", "log starts at", "depths printed in feet",
             "missing sheets", "sheet header differs", "same printed coordinates as")
 
 # Georeferencing doubts that explain a position confidence below the release threshold.
@@ -186,7 +186,7 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
 
 # Findings as data: a stable code and a severity per finding text, for queries and the review queue.
 FINDING_CODES: list[tuple[str, str]] = [
-    ("no layers extracted", "no_layers"), ("layer ", "invalid_interval"), ("gap", "gap"), ("overlap", "overlap"),
+    ("no layers extracted", "no_layers"), ("log not extracted", "log_not_extracted"), ("layer ", "invalid_interval"), ("gap", "gap"), ("overlap", "overlap"),
     ("minor discontinuity", "minor_discontinuity"), ("layers end at", "depth_mismatch"),
     ("log starts at", "log_starts_below_surface"), ("missing sheets", "missing_sheets"),
     ("sheet header differs", "sheet_header_differs"), ("same printed coordinates as", "coords_shared"),

@@ -162,3 +162,12 @@ def test_invalid_page_cap_is_rejected_before_processing(monkeypatch, max_pages):
     for command in (cli.run, cli.rebuild):
         with pytest.raises(ValueError, match="positive"):
             command([], max_pages=max_pages)
+
+
+def test_fresh_database_stores_a_document_with_a_lost_hole_as_blocking(con):
+    args = inputs(names=("BH1", "BH2"))
+    args[3][("report", 1)].logs = args[3][("report", 1)].logs[:1]
+    assert cli._store(con, *args) == {"report"}
+    bh = store.load_borehole(con, "report:BH1")
+    assert "log not extracted: page 1 shows 2 logs, 1 came back with layers" in bh.issues
+    assert bh.review_status == ReviewStatus.pending_review

@@ -22,7 +22,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config, corrections, evaluate, experiment, ingest, knowledge, llm, store
-from .assemble import LOG_KINDS, PageResult, assemble, dedupe, hole_key, lookup, norm_name
+from .assemble import LOG_KINDS, PageResult, assemble, dedupe, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
 
@@ -237,6 +237,20 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     labs = labs or {}
     source_file = {d.doc_id: d.path for d in docs}
 
+    def lost_logs(doc_id: str) -> list[str]:
+        """Log pages that came back with fewer holes than the classification counted. Counted, not matched by
+        name: the classification reads the thumbnail and often writes a hole's name differently. Probe records
+        (dynamic probe, CPT) often carry blow counts only, so they need no layers."""
+        lost = []
+        for p in rendered[doc_id]:
+            c = classes[(doc_id, p.page)]
+            if c.kind.value in LOG_KINDS - {"probe_log"}:
+                found = sum(1 for log in extractions[(doc_id, p.page)].logs if log.layers)
+                if found < max(len(c.logs), 1):
+                    lost.append(f"log not extracted: page {p.page} shows {max(len(c.logs), 1)} logs, "
+                                f"{found} came back with layers")
+        return lost
+
     def complete(doc_id: str) -> bool:
         if doc_id in (incomplete_docs or set()):
             return False
@@ -248,13 +262,10 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
         )
         if not available:
             return False
-        for p in pages:
-            c = classes[(doc_id, p.page)]
-            if c.kind.value in LOG_KINDS:
-                extracted = {hole_key(log.name, None): True for log in extractions[(doc_id, p.page)].logs if log.layers}
-                if not extracted or any(not lookup(extracted, hole_key(log.name, None)) for log in c.logs):
-                    return False
-        return True
+        # Earlier records of the document stay rather than lose a hole; without any, the document is stored
+        # with a blocking finding, so a fresh database does not silently miss it.
+        return not (lost_logs(doc_id) and con.execute("SELECT 1 FROM boreholes WHERE doc_id = ? LIMIT 1",
+                                                      (doc_id,)).fetchone())
 
     done = [doc_id for doc_id in rendered if complete(doc_id)]
     if dry_run:  # nothing is written, so show what is there so far
@@ -281,6 +292,14 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
         done = [d for d in done if d.split("__")[0] not in failed_groups]
         boreholes = [bh for bh in boreholes if store.document_group(bh.borehole_id) not in failed_groups]
         print(f"  ! kept previous results for {len(failed_groups)} groups with assembly errors", file=sys.stderr)
+    if not dry_run:
+        lost = {doc_id: notes for doc_id in done if (notes := lost_logs(doc_id))}
+        for bh in boreholes:
+            if notes := lost.get(bh.borehole_id.split(":", 1)[0]):
+                bh.issues += notes
+                corrections.rescore(bh)
+        for doc_id, notes in lost.items():
+            print(f"  ! {doc_id}: {len(notes)} classified logs came back without layers", file=sys.stderr)
     extracted = {bh.borehole_id: store.extracted_summary(bh) for bh in boreholes}  # before fixes, for `eval`
     # Per document group: read knowledge and corrections and replace the group's records in one short write
     # transaction. A correction saved meanwhile cannot be lost, and reviewers wait for one group at most.
