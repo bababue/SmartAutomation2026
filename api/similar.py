@@ -10,8 +10,6 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 
-from fastapi import HTTPException
-
 from pipeline.ground import NO_DATA, SOIL
 from schema.borehole import Lithology
 
@@ -148,9 +146,9 @@ def material_conditions(values: list[str]) -> list[tuple[str, float, float, floa
         try:
             name, top, bottom, metres = parts[0], *(float(v) for v in parts[1:])
         except ValueError:
-            raise HTTPException(422, f"material: expected group:from_m:to_m:metres, got {value!r}") from None
+            raise ValueError(f"material: expected group:from_m:to_m:metres, got {value!r}") from None
         if name not in GROUPS or not 0 <= top < bottom or metres <= 0:
-            raise HTTPException(422, f"material: unknown group or empty range in {value!r}; groups: {', '.join(GROUPS)}")
+            raise ValueError(f"material: unknown group or empty range in {value!r}; groups: {', '.join(GROUPS)}")
         out.append((name, top, bottom, metres))
     return out
 

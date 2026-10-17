@@ -14,10 +14,10 @@ import threading
 import uuid
 import zipfile
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import IO, Annotated, Literal
+from typing import IO, Annotated, Literal, NamedTuple
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
@@ -140,16 +140,37 @@ def _conditions(values: list[str], name: str) -> list[tuple[str, float | None, f
     return out
 
 
-def _filters(q, bbox, lithology, lab, min_position, status, ids,
-             group=None, located=True) -> tuple[list[str], list]:
-    """WHERE clauses of the list filters; `located`: only holes with a position (the map and the list)."""
-    where, params = ["lat IS NOT NULL"] if located else ["1"], []
+StatusFilter = Literal["all", "released", "pending", "rejected"]
+
+
+class Where(NamedTuple):
+    clauses: list[str]
+    params: list
+
+    def also(self, clause: str, params: Sequence = ()) -> Where:
+        return Where([*self.clauses, clause], [*self.params, *params])
+
+    def sql(self) -> str:
+        return " AND ".join(self.clauses) or "1"
+
+
+def list_filters(
+    q: str | None = None,
+    lithology: list[str] = Query(default_factory=list,
+                                 description="code[:from_m:to_m], e.g. clay:10:20 (a clay layer between 10 and 20 m)"),
+    lab: list[str] = Query(default_factory=list, description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
+    min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
+    status: StatusFilter = "all",
+    group: str | None = Query(None, description="only this document group (see the 'groups' facet)"),
+    rock_head_max: float | None = Query(None, description="rock head at most this deep (m)"),
+    groundwater_max: float | None = Query(None, description="groundwater at most this deep (m)"),
+    material: list[str] = Query(default_factory=list, description="group:from_m:to_m:metres, e.g. sand:0:20:5"),
+) -> Where:
+    """WHERE clauses of the filters the list, the map and the statistics share."""
+    where, params = [], []
     if group:
         where.append(f"{GROUP} = ?")
         params.append(group)
-    if ids:
-        where.append(f"id IN ({','.join('?' * len(ids))})")
-        params += ids
     if q and (fq := _fts_query(q)):
         # Text match, or every search word appears in the source document's file path (e.g. 'report').
         tokens = re.findall(r"\w+", q, flags=re.UNICODE)
@@ -157,13 +178,9 @@ def _filters(q, bbox, lithology, lab, min_position, status, ids,
         where.append("(rid IN (SELECT rowid FROM boreholes_fts WHERE boreholes_fts MATCH ?) "
                      f"OR doc_id IN (SELECT doc_id FROM documents WHERE {path_match}))")
         params += [fq, *(f"%{_like_escape(t)}%" for t in tokens)]
-    if bbox:
-        clause, values = _bbox_clause(bbox)
-        where.append(clause)
-        params += values
     # Set lookups through the (code, depth) and (parameter, value) indexes. A correlated EXISTS per hole
     # would make SQLite scan every matching layer for every hole (171 s at 50,000 holes).
-    for code, depth_from, depth_to in lithology:  # each lithology somewhere in the hole, within its depth range
+    for code, depth_from, depth_to in _conditions(lithology, "lithology"):  # each within its depth range
         clause = "rid IN (SELECT rid FROM layers WHERE primary_code = ?"
         params.append(code)
         if depth_to is not None:
@@ -173,7 +190,7 @@ def _filters(q, bbox, lithology, lab, min_position, status, ids,
             clause += " AND bottom_m > ?"
             params.append(depth_from)
         where.append(clause + ")")
-    for parameter, lab_min, lab_max in lab:  # each parameter measured at least once within its range
+    for parameter, lab_min, lab_max in _conditions(lab, "lab"):  # each measured at least once within its range
         clause = "rid IN (SELECT rid FROM lab_values WHERE parameter = ?"
         params.append(parameter)
         if lab_min is not None:
@@ -191,39 +208,38 @@ def _filters(q, bbox, lithology, lab, min_position, status, ids,
         values = STATUS_GROUPS[status]
         where.append(f"review_status IN ({','.join('?' * len(values))})")
         params += list(values)
-    return where, params
+    try:
+        materials = similar.material_conditions(material)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max, materials)
+    return Where(where + ground_where, params + ground_params)
+
+
+ListFilters = Annotated[Where, Depends(list_filters)]
 
 
 @app.get("/api/boreholes")
 def list_boreholes(
     con: DB,
-    q: str | None = None,
+    filters: ListFilters,
     bbox: str | None = Query(None, description="minLon,minLat,maxLon,maxLat (min > max crosses the antimeridian)"),
-    lithology: list[str] = Query(default_factory=list,
-                                 description="code[:from_m:to_m], e.g. clay:10:20 (a clay layer between 10 and 20 m)"),
-    lab: list[str] = Query(default_factory=list, description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
-    min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
-    status: Literal["all", "released", "pending", "rejected"] = "all",
     id: list[str] = Query(default_factory=list, max_length=500, description="only these borehole ids"),
-    group: str | None = Query(None, description="only this document group (see the 'groups' facet)"),
-    rock_head_max: float | None = Query(None, description="rock head at most this deep (m)"),
-    groundwater_max: float | None = Query(None, description="groundwater at most this deep (m)"),
-    material: list[str] = Query(default_factory=list, description="group:from_m:to_m:metres, e.g. sand:0:20:5"),
     fields: Literal["list", "map", "layers"] = Query("list", description="'map': slim points; 'layers': depth strips for visible columns"),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
 ):
-    """Filtered boreholes. 'map' returns slim GeoJSON points; 'layers' returns strips in a bbox;
+    """Filtered boreholes with a position. 'map' returns slim GeoJSON points; 'layers' returns strips in a bbox;
     'list' returns a GeoJSON page with the total, lithology counts and groups (document groups with their most
     frequent project name, count, released count and bounding box) of all matches, ordered by group."""
     if fields == "layers" and not bbox:
         raise HTTPException(422, "bbox is required for layer strips")
-    where, params = _filters(q, bbox, _conditions(lithology, "lithology"), _conditions(lab, "lab"),
-                             min_position, status, id, group)
-    ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max,
-                                                         similar.material_conditions(material))
-    where, params = where + ground_where, params + ground_params
-    sql_where = " AND ".join(where)
+    where = filters.also("lat IS NOT NULL")
+    if bbox:
+        where = where.also(*_bbox_clause(bbox))
+    if id:
+        where = where.also(f"id IN ({','.join('?' * len(id))})", id)
+    sql_where, params = where.sql(), where.params
     if fields == "layers":
         rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {sql_where}", params).fetchall()
         return {"items": [{"id": r["id"], "strip": json.loads(r["strip"]) if r["strip"] else None} for r in rows]}
@@ -746,26 +762,11 @@ SEVERITY_ORDER = ("blocking", "needs_look", "warning", "info")
 
 
 @app.get("/api/stats/detail")
-def stats_detail(
-    con: DB,
-    q: str | None = None,
-    lithology: list[str] = Query(default_factory=list),
-    lab: list[str] = Query(default_factory=list),
-    min_position: float | None = None,
-    status: Literal["all", "released", "pending", "rejected"] = "all",
-    group: str | None = None,
-    rock_head_max: float | None = None,
-    groundwater_max: float | None = None,
-    material: list[str] = Query(default_factory=list),
-):
+def stats_detail(con: DB, filters: ListFilters):
     """Aggregates for the statistics view over the records the list filters select, holes without a position
     included: key figures, release funnel, findings, logged metres per lithology, final depths and groups."""
-    where, params = _filters(q, None, _conditions(lithology, "lithology"), _conditions(lab, "lab"),
-                             min_position, status, [], group, located=False)
-    ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max,
-                                                         similar.material_conditions(material))
-    where, params = where + ground_where, params + ground_params
-    scope = f"SELECT rid FROM boreholes WHERE {' AND '.join(where)}"
+    params = filters.params
+    scope = f"SELECT rid FROM boreholes WHERE {filters.sql()}"
 
     def rows(sql: str) -> list[sqlite3.Row]:
         return con.execute(sql.replace("{scope}", scope), params).fetchall()
