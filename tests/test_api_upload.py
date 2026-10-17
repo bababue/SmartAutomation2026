@@ -77,7 +77,7 @@ def test_strips_directory_components_from_the_filename(client, monkeypatch):
 def test_accepts_file_within_the_page_cap(client, monkeypatch):
     calls = []
 
-    def fake_run(docs, max_pages=None, yes=True, dataset_dir=config.DATASET_DIR):
+    def fake_run(docs, max_pages=None, yes=True, dataset_dir=config.DATASET_DIR, progress=None):
         calls.append(docs)
 
     monkeypatch.setattr("pipeline.__main__.run", fake_run)
@@ -215,3 +215,25 @@ def test_byte_cap_applies_to_the_extracted_zip(client):
     res = client.post("/api/upload", files={"files": ("batch.zip", archive, "application/zip")})
     assert res.status_code == 413
     assert not any(config.UPLOADS_DIR.iterdir())
+
+
+def test_status_reports_the_running_stage(client, monkeypatch):
+    import threading
+
+    reported, release = threading.Event(), threading.Event()
+
+    def fake_run(docs, progress=None, **kwargs):
+        progress("extract", 3, 7)
+        reported.set()
+        assert release.wait(3)
+
+    monkeypatch.setattr("pipeline.__main__.run", fake_run)
+    job_id = client.post("/api/upload", files={"files": ("log.pdf", _pdf_bytes(1), "application/pdf")}).json()["job_id"]
+    assert reported.wait(3)
+    try:
+        status = client.get(f"/api/upload/{job_id}").json()
+        assert status["status"] == "processing"
+        assert status["progress"] == {"stage": "extract", "done": 3, "total": 7}
+    finally:
+        release.set()
+    assert _wait(client, job_id)["progress"] is None

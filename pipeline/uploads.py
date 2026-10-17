@@ -32,11 +32,18 @@ class UploadedBorehole(BaseModel):
     review_status: str
 
 
+class UploadProgress(BaseModel):
+    stage: Literal["classify", "extract", "lab results", "store"]
+    done: int
+    total: int
+
+
 class UploadResult(BaseModel):
     status: Literal["queued", "processing", "done", "error"]
     boreholes: list[UploadedBorehole] = Field(default_factory=list)
     error: str | None = None
     ahead: int | None = None  # jobs to finish before this one starts; only while queued
+    progress: UploadProgress | None = None  # only while processing
 
 
 class QueueFull(Exception):
@@ -47,6 +54,8 @@ class UploadQueue:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.executor = ThreadPoolExecutor(max_workers=config.MAX_UPLOAD_WORKERS, thread_name_prefix="upload")
+        # Stage of each running job; in memory only, as a restart ends the job anyway.
+        self.progress: dict[str, UploadProgress] = {}
         con = store.connect(db_path)
         try:
             with con:
@@ -87,7 +96,9 @@ class UploadQueue:
                 con.execute("UPDATE upload_jobs SET status = 'processing' WHERE id = ?", (task.job_id,))
             try:
                 run([ingest.SourceDoc(d.doc_id, d.path, d.kind) for d in task.docs],
-                    dataset_dir=config.UPLOADS_DIR / task.folder)
+                    dataset_dir=config.UPLOADS_DIR / task.folder,
+                    progress=lambda stage, done, total: self.progress.__setitem__(
+                        task.job_id, UploadProgress(stage=stage, done=done, total=total)))
                 doc_ids = [d.doc_id for d in task.docs]
                 rows = con.execute(f"SELECT id, name, review_status FROM boreholes WHERE doc_id IN "
                                    f"({', '.join('?' * len(doc_ids))}) ORDER BY name, id", doc_ids)
@@ -97,6 +108,7 @@ class UploadQueue:
             with con:
                 con.execute("UPDATE upload_jobs SET status = ?, result = ?, error = ? WHERE id = ?",
                             (result.status, result.model_dump_json(), result.error, task.job_id))
+            self.progress.pop(task.job_id, None)
         finally:
             con.close()
 

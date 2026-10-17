@@ -15,12 +15,16 @@ interface Batch {
   jobId: string | null
   status: Status
   ahead?: number | null
+  progress?: UploadStatus['progress']
   error?: string
   boreholes?: UploadStatus['boreholes']
 }
 
 const STATUS_TEXT: Record<Status, string> = {
   uploading: 'Uploading…', queued: 'Queued', processing: 'Processing…', done: 'Done', error: 'Failed',
+}
+const STAGE_TEXT: Record<NonNullable<UploadStatus['progress']>['stage'], string> = {
+  classify: 'Reading pages', extract: 'Extracting logs', 'lab results': 'Reading lab sheets', store: 'Combining records…',
 }
 const pending = (s: Status) => s === 'uploading' || s === 'queued' || s === 'processing'
 
@@ -48,7 +52,7 @@ export function useUploadQueue(onUploaded: () => void, onSelect: (id: string) =>
       batchesRef.current.filter((b) => b.jobId && (b.status === 'queued' || b.status === 'processing')).forEach((b) => {
         fetchUploadStatus(b.jobId!)
           .then((s) => {
-            update(b.key, { status: s.status, ahead: s.ahead, error: s.error ?? undefined, boreholes: s.boreholes })
+            update(b.key, { status: s.status, ahead: s.ahead, progress: s.progress, error: s.error ?? undefined, boreholes: s.boreholes })
             if (s.status === 'done') {
               onUploaded()
               // Jump to the new record only when it is the sole result on the list: a batch should not steal focus.
@@ -68,6 +72,10 @@ export function useUploadQueue(onUploaded: () => void, onSelect: (id: string) =>
 function outcome(b: Batch): string {
   if (b.status === 'queued') return b.ahead ? `Queued (${b.ahead} ahead)` : 'Next up'
   if (b.status === 'error') return b.error ?? STATUS_TEXT.error
+  if (b.status === 'processing' && b.progress) {
+    const { stage, done, total } = b.progress
+    return total ? `${STAGE_TEXT[stage]} ${done}/${total}` : STAGE_TEXT[stage]
+  }
   if (b.status !== 'done') return STATUS_TEXT[b.status]
   if (!b.boreholes?.length) return 'No borehole recognised'
   return `Added ${b.boreholes.map((h) => `${h.name} (${REVIEW_LABEL[h.review_status].toLowerCase()})`).join(', ')}`

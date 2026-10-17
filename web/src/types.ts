@@ -240,6 +240,8 @@ export interface UploadStatus {
   error: string | null
   /** Uploads to finish before this one starts; set only while queued. */
   ahead: number | null
+  /** The running stage; set only while processing. */
+  progress: { stage: 'classify' | 'extract' | 'lab results' | 'store'; done: number; total: number } | null
 }
 
 export type StatusFilter = 'all' | 'released' | 'pending' | 'rejected'

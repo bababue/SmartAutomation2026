@@ -19,6 +19,7 @@ from pathlib import Path
 import os
 import sys
 import urllib.parse
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config, corrections, evaluate, experiment, ingest, knowledge, llm, store
@@ -68,7 +69,11 @@ def _ingest(docs, con, dataset_dir: Path = config.DATASET_DIR) -> dict[str, list
     return rendered
 
 
-def _parallel(fn, items, label):
+# stage, items done, items in the stage
+Progress = Callable[[str, int, int], None]
+
+
+def _parallel(fn, items, label, progress: Progress | None = None):
     results, failed = {}, []
     with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as pool:
         futures = {pool.submit(fn, item): item for item in items}
@@ -78,6 +83,8 @@ def _parallel(fn, items, label):
                 results[(item.doc_id, item.page)] = fut.result()
             except Exception as exc:  # keep going; report at the end
                 failed.append((item, exc))
+            if progress:
+                progress(label, i, len(items))
             if i % 10 == 0 or i == len(items):
                 print(f"  {label}: {i}/{len(items)}", flush=True)
     for item, exc in failed:
@@ -128,7 +135,7 @@ def _walk(chain, classes, extract):
     return results, failed
 
 
-def _extract(todo, classes, con=None):
+def _extract(todo, classes, con=None, progress: Progress | None = None):
     chains = _chains(todo, classes)
     hints = {doc_id: knowledge.prompt_context(con, doc_id) for doc_id in {p.doc_id for p in todo}} if con else {}
     extract = lambda p, kind, context: llm.extract_page(p, kind, context, hints.get(p.doc_id, ""))
@@ -139,6 +146,8 @@ def _extract(todo, classes, con=None):
             results.update(r)
             failed += f
             before, done = done, done + len(r) + len(f)
+            if progress:
+                progress("extract", done, len(todo))
             if done // 10 > before // 10 or done == len(todo):
                 print(f"  extract: {done}/{len(todo)}", flush=True)
     for item, exc in failed:
@@ -164,7 +173,7 @@ def cmd_estimate(args) -> None:
 
 
 def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = True,
-        dataset_dir: Path = config.DATASET_DIR) -> None:
+        dataset_dir: Path = config.DATASET_DIR, progress: Progress | None = None) -> None:
     """Ingest, classify, extract and store the given documents (costs API calls)."""
     if max_pages is not None and max_pages < 1:
         raise ValueError("max_pages must be positive")
@@ -184,7 +193,9 @@ def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = 
             raise RuntimeError(f"{len(pages)} pages, estimated ≈ ${est:.2f}. Re-run with --yes to proceed.")
 
         print(f"Classify {len(pages)} pages")
-        classes = _parallel(llm.classify_page, pages, "classify")
+        if progress:
+            progress("classify", 0, len(pages))
+        classes = _parallel(llm.classify_page, pages, "classify", progress)
         for (doc_id, page_no), c in classes.items():
             con.execute(
                 "UPDATE pages SET kind = ?, language = ?, logs = ? WHERE doc_id = ? AND page = ?",
@@ -194,11 +205,15 @@ def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = 
 
         todo = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
         print(f"Extract {len(todo)} log/coordinate pages")
-        extractions, _ = _extract(todo, classes, con)
+        if progress:
+            progress("extract", 0, len(todo))
+        extractions, _ = _extract(todo, classes, con, progress)
         lab_pages = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"]
         if lab_pages:
             print(f"Extract {len(lab_pages)} lab result pages")
-        labs = _parallel(llm.extract_lab_results, lab_pages, "lab results")
+        labs = _parallel(llm.extract_lab_results, lab_pages, "lab results", progress)
+        if progress:
+            progress("store", 0, 0)
         published = _store(con, docs, rendered, classes, extractions, labs, incomplete_docs=truncated)
         if set(rendered) != published:
             raise RuntimeError("Some documents were incomplete; their previous records were preserved")

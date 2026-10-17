@@ -83,7 +83,7 @@ def test_page_cap_preserves_records_from_omitted_pages(con, monkeypatch, command
     monkeypatch.setattr(cli, "_missing_credentials", lambda: None)
     monkeypatch.setattr(cli, "_ingest", lambda *args: rendered)
     monkeypatch.setattr(cli.ingest, "render", lambda *args: rendered["report"])
-    monkeypatch.setattr(cli, "_parallel", lambda fn, pages, label: classes if label == "classify" else {})
+    monkeypatch.setattr(cli, "_parallel", lambda fn, pages, label, progress=None: classes if label == "classify" else {})
     monkeypatch.setattr(cli, "_extract", lambda *args: (extractions, 0))
     monkeypatch.setattr(cli, "cached_inputs", lambda *args: (classes, {}))
     monkeypatch.setattr(cli.llm, "cached_extraction", lambda *args: extractions[("report", 1)])

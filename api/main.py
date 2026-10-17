@@ -671,6 +671,8 @@ def upload_status(job_id: str, con: DB) -> uploads.UploadResult:
     job = uploads.result(con, job_id)
     if job is None:
         raise HTTPException(404, "upload job not found")
+    if job.status == "processing":
+        job.progress = app.state.upload_queue.progress.get(job_id)
     return job
 
 
