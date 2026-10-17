@@ -356,6 +356,8 @@ button, input, select { font: inherit; color: inherit; }
 .detail-head > div:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
 .detail-head h2 { margin: 0; font-size: 28px; line-height: 1.1; font-weight: 700; letter-spacing: -0.01em; }
 .detail-sub { margin: 0; color: var(--graphite); max-width: 70ch; }
+.detail-back { display: block; width: 100%; padding: 8px 22px; border: 0; border-bottom: 1px solid var(--grid); background: var(--water-soft); color: var(--water); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.detail-back:hover { text-decoration: underline; }
 .head-edit-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; }
 /* The header text itself, made typeable: same type, a light frame that shows it can be edited. The field and a
    hidden copy of its text share one grid cell, so the copy sets the field's width. */
@@ -382,11 +384,7 @@ button, input, select { font: inherit; color: inherit; }
 .btn { height: 32px; padding: 0 12px; border: 1px solid var(--grid); border-radius: 3px; background: var(--panel); cursor: pointer; font-weight: 500; white-space: nowrap; }
 .btn:hover { border-color: var(--graphite); }
 .btn-icon { width: 32px; padding: 0; }
-.level { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
-.level-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--grid); }
-.level-high .level-dot { background: var(--high); }
-.level-medium .level-dot { background: var(--medium); }
-.level-low .level-dot { background: var(--low); }
+.level { font-weight: 400; }
 
 .detail-body {
   flex: 1;
@@ -520,41 +518,41 @@ button, input, select { font: inherit; color: inherit; }
 
 .stats-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 1100px; margin-bottom: 4px; }
 
-.review { padding: 12px 22px; border-bottom: 1px solid var(--grid); background: var(--panel); }
-.review-auto_approved, .review-approved { background: var(--approved-soft); }
-.review-pending_review { background: var(--pending-soft); }
-.review-rejected { background: var(--rejected-soft); }
+.review { padding: 12px 22px 12px 19px; border-bottom: 1px solid var(--grid); border-left: 3px solid var(--grid); background: var(--panel); }
+.review-pending_review { background: var(--pending-soft); border-left-color: var(--medium); }
+.review-approved, .review-auto_approved { background: var(--approved-soft); border-left-color: var(--high); }
+.review-rejected { background: var(--rejected-soft); border-left-color: var(--low); }
 .review-head { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
 .review-score { display: flex; align-items: baseline; gap: 2px; }
 .review-score-n { font-size: 32px; font-weight: 700; line-height: 1; }
 .review-score-of { color: var(--graphite); font-size: 13px; }
-.review-status {
-  padding: 2px 8px; border-radius: 2px; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-  background: color-mix(in srgb, var(--medium) 22%, transparent); color: var(--warn-ink);
-}
-.review-auto_approved .review-status, .review-approved .review-status { background: color-mix(in srgb, var(--high) 18%, transparent); color: var(--high); }
-.review-rejected .review-status { background: color-mix(in srgb, var(--low) 18%, transparent); color: var(--low); }
-.checks-score { border-left-color: var(--grid); background: var(--panel); }
+.review-status { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--graphite); }
+.checks-score { border: 0; background: none; padding: 0; margin: 0; }
 .checks-score h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
-.checks-levels { display: inline-flex; flex-wrap: wrap; gap: 4px 14px; font-size: 14px; font-weight: 400; }
-.checks-score .level { font-weight: 400; }
+.checks-levels { display: inline-flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-weight: 400; color: var(--graphite); }
 .review-summary { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); }
 .review-summary .checks { margin-bottom: 10px; }
 .checks h4 { margin: 10px 0 2px; font-size: 14px; }
-.review-toggle { height: 40px; }
+.review-toggle { border-color: transparent; background: none; color: var(--graphite); }
+.review-toggle:hover { color: var(--ink); }
+.review-toggle svg { transition: transform 150ms; }
+.review-toggle-open svg { transform: rotate(180deg); }
 .btn-decide { display: inline-flex; align-items: center; justify-content: center; width: 40px; }
 .btn-decide svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.btn-reject.btn-decide { background: var(--panel); }
-.btn-reject.btn-decide:hover { background: var(--rejected-soft); border-color: var(--low); }
 .review-meta { font-size: 13px; }
 .review-comment { font-style: italic; font-size: 13px; }
-.review-form { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin-top: 10px; }
+.review-form { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--rule-soft); }
 .review-form label { display: grid; gap: 2px; font-size: 12px; color: var(--graphite); }
 .review-form input { height: 30px; border: 1px solid var(--grid); border-radius: 3px; padding: 0 8px; color: var(--ink); background: var(--panel); }
-.review-form-comment input { width: min(360px, 60vw); }
+.review-form label:first-child { flex: 0 1 200px; }
+.review-form-comment { flex: 1 1 240px; }
+.review-form input { width: 100%; }
 .review-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
 .review-buttons .btn { white-space: nowrap; height: 40px; padding: 0 18px; font-weight: 600; }
 .review-buttons .btn-decide { padding: 0; }
+.review .btn-reject { color: var(--ink); border-color: var(--grid); background: var(--panel); }
+.review .btn-reject:hover { border-color: var(--graphite); }
+.review .error { margin: 8px 0 0; padding: 0; border: 0; background: none; color: var(--low); font-size: 13px; }
 .btn-approve { background: var(--high); border-color: var(--high); color: var(--on-accent); }
 .btn-approve:hover { background: var(--high-strong); border-color: var(--high-strong); }
 .btn-reject { color: var(--low); border-color: var(--low); }

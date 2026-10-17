@@ -19,6 +19,9 @@ interface Props {
   onCrsConfirmed?: () => void
   onSourceToggle: (open: boolean) => void
   onSelect: (id: string) => void
+  /** Name of the hole this one was opened from (similar ground), with the way back to it. */
+  backTo?: string
+  onBack?: () => void
   onFindLike: (like: NonNullable<SimilarGround['like']>) => void
 }
 
@@ -32,14 +35,14 @@ const METHOD_TEXT: Record<string, string> = {
 function Level({ value, label }: { value: number | null; label: string }) {
   const level = value == null ? 'none' : value >= 0.7 ? 'high' : value >= 0.4 ? 'medium' : 'low'
   return (
-    <span className={`level level-${level}`} title={value == null ? undefined : `${Math.round(value * 100)} %`}>
-      <span className="level-dot" />
+    <span className="level" title={value == null ? undefined : `${Math.round(value * 100)} %`}>
       {label}: {level === 'none' ? 'unknown' : level}
     </span>
   )
 }
 
-export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsConfirmed, onSourceToggle, onSelect, onFindLike }: Props) {
+export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsConfirmed, onSourceToggle, onSelect, backTo, onBack,
+  onFindLike }: Props) {
   const bh = detail.borehole
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
@@ -86,6 +89,9 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
 
   return (
     <aside className="detail" aria-label={`Borehole ${bh.borehole_name}`}>
+      {backTo && onBack && (
+        <button className="detail-back" onClick={onBack}><span aria-hidden="true">←</span> Back to {backTo}</button>
+      )}
       <header className="detail-head">
         {editing === 'head' ? (
           <HeaderEditor borehole={bh} onChange={onReviewChange} onDone={done}>{closeButton}</HeaderEditor>
