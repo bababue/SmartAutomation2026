@@ -52,7 +52,6 @@ const COLUMNS: { label: string; lower?: boolean }[] = [
 ]
 
 const mid = ([low, high]: [number, number]) => (low + high) / 2
-const points = (a: Share, b: Share) => Math.round(100 * ((ratio(a) ?? 0) - (ratio(b) ?? 0)))
 const shareCell = (s: Share): Cell => ({ value: ratio(s), text: percent(s) })
 const rangeCell = (r: [number, number]): Cell => ({ value: mid(r), text: wholePercent(r) })
 
@@ -96,7 +95,7 @@ function Section({ title, rows }: { title: ReactNode; rows: Row[] }) {
       {rows.map((r, i) => (
         <tr key={r.name} className={r.name === SELECTED ? 'models-selected' : undefined}>
           <th scope="row">
-            {r.name}{r.name === SELECTED && <span className="models-tag">Selected</span>}
+            {r.name}{r.name === SELECTED && <span className="models-tag">selected</span>}
             {r.route && <span className="models-hint">{r.route}</span>}
           </th>
           {r.cells.map((cell, j) => (
@@ -135,40 +134,31 @@ export function ModelSummary({ quality, error, onDetails }: {
   const factor = versus && selected.usd_per_page && accurate.usd_per_page ? Math.round(accurate.usd_per_page / selected.usd_per_page) : null
   const c = bench.compared
   return (
-    <div className="stats-grid stats-grid-models">
-      <section className="stats-card stats-wide" aria-labelledby="models-head">
-        <h3 id="models-head">Models we tested</h3>
-        <p className="stats-lede">
-          <b>{SELECTED}</b> is selected for new uploads{versus && <>: {factor && factor > 1 ? `about ${factor}× cheaper` : 'cheaper'} per
-            page than {modelName(accurate.model)}, {points(accurate.metrics.boundaries, selected.metrics.boundaries)} points
-            lower on layer boundaries and {points(accurate.metrics.lab, selected.metrics.lab)} on lab values.
-            The corpus on this page was read with {modelName(accurate.model)}</>}.
-        </p>
-        <div className="stats-scroll">
-          <table className="models-table">
-            <thead>
-              <tr><th scope="col">Model</th>{COLUMNS.map((col) => <th key={col.label} scope="col" className="num">{col.label}</th>)}</tr>
-            </thead>
-            {measured.length > 0 && (
-              <Section rows={measured} title={<>Measured against {n(ev.models!.records)} human-checked records
-                <span>accuracy</span></>} />
-            )}
-            {screened.length > 0 && (
-              <Section rows={screened} title={<>Screened on {n(bench.pages)} log pages, compared with {against}
-                <span>agreement, not accuracy</span></>} />
-            )}
-          </table>
-        </div>
-        <p className="stats-note muted">
-          Best value per section in bold; values within 5 % of the best count as equal. Measured: the checked records
-          every measured model extracted itself. Screened: before there were reviewed records; {against} had{' '}
-          {n(c.boundaries)} layer boundaries, {n(c.final_depth)} final depths, {n(c.groundwater)} groundwater levels and{' '}
-          {n(c.lab)} lab values on those pages, so one value moves the last three shares a lot. Cost: billed, or ≈ an
-          estimate at API list prices; a run on the Claude subscription is not billed per page.
-        </p>
-        <button className="link-button stats-more-link" onClick={onDetails}>All figures and the prompt versions in Details</button>
-      </section>
-    </div>
+    <section className="stats-section" aria-labelledby="models-head">
+      <h3 id="models-head">Models we tested</h3>
+      <p className="stats-sub">
+        <b>{SELECTED}</b> is selected for new uploads{versus && factor && factor > 1 && <>: about {factor}× cheaper than{' '}
+          {modelName(accurate.model)}, which read the corpus</>}.
+      </p>
+      <div className="stats-scroll">
+        <table className="models-table">
+          <thead>
+            <tr><th scope="col">Model</th>{COLUMNS.map((col) => <th key={col.label} scope="col" className="num">{col.label}</th>)}</tr>
+          </thead>
+          {measured.length > 0 && (
+            <Section rows={measured} title={<>Measured on {n(ev.models!.records)} checked records <span>accuracy</span></>} />
+          )}
+          {screened.length > 0 && (
+            <Section rows={screened} title={<>Screened on {n(bench.pages)} pages <span>agreement with {against}</span></>} />
+          )}
+        </table>
+      </div>
+      <p className="stats-note">
+        Best per section in bold. Screening base: {n(c.boundaries)} boundaries, {n(c.final_depth)} final depths,{' '}
+        {n(c.groundwater)} groundwater levels, {n(c.lab)} lab values. ≈ estimate at API list prices.{' '}
+        <button className="link-button" onClick={onDetails}>All figures</button>
+      </p>
+    </section>
   )
 }
 
@@ -184,8 +174,7 @@ export function QualityDetails({ quality, error, onReviewAudit }: {
   return (
     <>
       <p className="stats-intro muted">
-        How well the model reads the logs, measured against records reviewers checked, and what each model costs.
-        Over the whole database; the list filters do not apply.{' '}
+        Measured against records reviewers checked, over the whole database.{' '}
         {quality.source === 'live' && <span className="stats-source">Live from the local evaluation data</span>}
         {quality.source === 'snapshot' && ev && (
           <span className="stats-source">Snapshot of {ev.generated}: this installation has no evaluation data</span>
@@ -199,11 +188,9 @@ export function QualityDetails({ quality, error, onReviewAudit }: {
               run <code>python -m pipeline eval snapshot</code>.</p>
           </section>
         )}
+        <Audit audit={quality.audit} onReviewAudit={onReviewAudit} />
         {ev?.models && <Models ev={ev} models={ev.models} />}
-        <div className="stats-stack-col">
-          <Audit audit={quality.audit} onReviewAudit={onReviewAudit} />
-          {ev && <Benchmark benchmark={ev.benchmark} />}
-        </div>
+        {ev && <Benchmark benchmark={ev.benchmark} />}
         {ev && ev.arms.runs.length > 0 && <Arms arms={ev.arms} />}
         <Usage rows={quality.usage} />
       </div>
@@ -217,10 +204,9 @@ function Current({ ev }: { ev: ModelEvaluation }) {
     <section className="stats-card stats-wide" id="extraction-quality" tabIndex={-1} aria-labelledby="quality-current">
       <h3 id="quality-current">Extraction quality</h3>
       <p className="muted">
-        The model output in this database, before reviewer corrections, against <b>{n(ev.reference.records)}</b> records
-        that reviewers approved ({n(ev.reference.documents)} documents{ev.reference.created ? `, reference of ${ev.reference.created}` : ''}).
-        Those records were approved from earlier Opus output, so the reference favours Opus, and where nobody corrected a
-        record it matches by construction. {n(c.corrected)} of them carry reviewer corrections.
+        Model output before corrections, against <b>{n(ev.reference.records)}</b> approved records
+        ({n(ev.reference.documents)} documents). They were approved from this Opus output, so uncorrected records match by
+        construction; {n(c.corrected)} carry corrections.
       </p>
       <dl className="quality-tiles">
         {METRICS.map(([key, label, hint]) => (
@@ -242,30 +228,33 @@ function Current({ ev }: { ev: ModelEvaluation }) {
 }
 
 function Audit({ audit, onReviewAudit }: { audit: Quality['audit']; onReviewAudit: () => void }) {
+  const pctOf = (v: number) => Math.round(100 * v)
   return (
-    <section className="stats-card" id="release-audit" tabIndex={-1} aria-labelledby="stats-audit">
+    <section className="stats-card stats-wide" id="release-audit" tabIndex={-1} aria-labelledby="stats-audit">
       <h3 id="stats-audit">Release audit</h3>
-      <p className="muted">How often an automatic release is wrong: a random sample of released records, checked by a
-        person. A correction or rejection counts as wrong.</p>
       {!audit ? (
         <p className="stats-note">No sample drawn yet: run <code>python -m pipeline eval audit</code>.</p>
       ) : (
-        <>
-          {audit.reviewed > 0 ? (
-            <p className="stats-figure">
-              <b>{Math.round(100 * (audit.rate ?? 0))} %</b> wrong
-              <span className="muted"> ({n(audit.wrong)} of {n(audit.reviewed)}; 95 % interval
-                {' '}{Math.round(100 * audit.low)}–{Math.round(100 * audit.high)} %)</span>
+        <div className="audit">
+          <p className="audit-figure">
+            {audit.reviewed ? <>{n(audit.wrong)}<small> / {n(audit.reviewed)}</small></> : '–'}
+            <span>automatic releases wrong</span>
+          </p>
+          <div>
+            <p>
+              A random sample of automatic releases, checked by a person; a correction or rejection counts as wrong.
+              {audit.reviewed > 0 && <> With 95 % confidence the true error rate lies between <b>{pctOf(audit.low)} %</b> and{' '}
+                <b>{pctOf(audit.high)} %</b>.</>}
             </p>
-          ) : <p className="stats-note">None of the sample checked yet.</p>}
-          <Shares label="Audit progress" parts={[
-            { key: 'checked', label: 'Checked', value: audit.reviewed, color: 'var(--water)' },
-            { key: 'open', label: 'Not checked yet', value: audit.sample - audit.reviewed, color: 'var(--grid)' },
-          ]} />
-          {audit.reviewed < audit.sample && (
-            <button className="btn stats-action" onClick={onReviewAudit}>Check the sample in the review queue</button>
-          )}
-        </>
+            <Shares label="Audit progress" parts={[
+              { key: 'checked', label: 'Checked', value: audit.reviewed, color: 'var(--bar)' },
+              { key: 'open', label: 'Not checked yet', value: audit.sample - audit.reviewed, color: 'var(--grid)' },
+            ]} />
+            {audit.reviewed < audit.sample && (
+              <button className="btn stats-action" onClick={onReviewAudit}>Check the sample in the review queue</button>
+            )}
+          </div>
+        </div>
       )}
     </section>
   )
@@ -283,11 +272,10 @@ function Models({ ev, models }: { ev: ModelEvaluation; models: NonNullable<Model
     return <td key={run} className={`num${top ? ' quality-best' : ''}`}>{percent(m[key])}</td>
   }
   return (
-    <section className="stats-card" aria-labelledby="quality-models">
+    <section className="stats-card stats-wide quality-models" aria-labelledby="quality-models">
       <h3 id="quality-models">Model comparison</h3>
       <p className="muted">
-        The same prompt with different models, on the <b>{n(models.records)}</b> reference records every run extracted
-        itself. Best value in bold.
+        Same prompt, <b>{n(models.records)}</b> reference records every run extracted itself. Best in bold.
       </p>
       <div className="stats-scroll">
         <table className="stats-table quality-table">
@@ -329,28 +317,39 @@ function Models({ ev, models }: { ev: ModelEvaluation; models: NonNullable<Model
         </table>
       </div>
       <p className="stats-note muted">
-        Estimates are at API list prices; a run on the Claude subscription is not billed per page. Time is one page after
-        the other; the pipeline runs several at once. Two plain runs of the same model also differ by a point or two.
+        Estimates at API list prices; the subscription is not billed per page. Time is one page at a time. Two runs of one
+        model differ by a point or two.
       </p>
     </section>
   )
 }
 
+/** Agreement columns of the wider benchmark: key, header, explanation. */
+const AGREEMENT: ['boundaries' | 'precision' | 'lithology' | 'final_depth' | 'groundwater' | 'lab', string, string][] = [
+  ['boundaries', 'Bound\u00adaries', 'layer boundaries as the reference model found them'],
+  ['precision', 'Precision', 'boundaries the reference model has too'],
+  ['lithology', 'Lith\u00adology', 'lithology by depth as the reference model read it'],
+  ['final_depth', 'Final depth', 'final depth as the reference model read it'],
+  ['groundwater', 'Ground\u00adwater', 'groundwater levels as the reference model found them'],
+  ['lab', 'Lab values', 'lab values as the reference model found them'],
+]
+
 function Benchmark({ benchmark }: { benchmark: ModelEvaluation['benchmark'] }) {
+  const c = benchmark.compared
   return (
-    <section className="stats-card" aria-labelledby="quality-bench">
+    <section className="stats-card stats-wide" aria-labelledby="quality-bench">
       <h3 id="quality-bench">Wider benchmark</h3>
       <p className="muted">
         <b>Agreement with {modelName(benchmark.against)}, not accuracy.</b> Before there were reviewed records, these
-        models read the same {benchmark.pages} log pages from {benchmark.documents} documents with the same prompt: enough
-        to see coarse differences only.
+        models read the same {benchmark.pages} log pages from {benchmark.documents} documents with the same prompt.
+        The reference model had {n(c.boundaries)} boundaries, {n(c.final_depth)} final depths, {n(c.groundwater)} groundwater
+        levels and {n(c.lab)} lab values there, so one value moves the last three columns a lot.
       </p>
       <div className="stats-scroll">
         <table className="stats-table">
           <thead>
             <tr><th>Model</th><th className="num">s / page</th><th className="num">$ / page</th>
-              <th className="num" title="Layer boundaries as Opus found them">Bound&shy;aries</th>
-              <th className="num" title="Lithology by depth as Opus read it">Lith&shy;ology</th></tr>
+              {AGREEMENT.map(([key, label, hint]) => <th key={key} className="num" title={hint}>{label}</th>)}</tr>
           </thead>
           <tbody>
             {benchmark.rows.map((r) => (
@@ -358,8 +357,7 @@ function Benchmark({ benchmark }: { benchmark: ModelEvaluation['benchmark'] }) {
                 <td>{r.model}<span className="quality-sub muted">{r.route}</span></td>
                 <td className="num">{range(r.seconds_per_page, String)}</td>
                 <td className="num">{usd(r.usd_per_page)}</td>
-                <td className="num">{wholePercent(r.boundaries)}</td>
-                <td className="num">{wholePercent(r.lithology)}</td>
+                {AGREEMENT.map(([key]) => <td key={key} className="num">{wholePercent(r[key])}</td>)}
               </tr>
             ))}
           </tbody>
@@ -371,14 +369,15 @@ function Benchmark({ benchmark }: { benchmark: ModelEvaluation['benchmark'] }) {
 
 function Arms({ arms }: { arms: ModelEvaluation['arms'] }) {
   const runs = arms.runs
+  // The arm without a prompt of its own is the main cache, the output the reference was approved from.
+  const compared = runs.filter((r) => r.prompt)
   return (
     <section className="stats-card stats-wide" aria-labelledby="quality-arms">
       <h3 id="quality-arms">Prompt versions</h3>
       <p className="muted">
-        Each experiment arm re-extracts the reference documents with its own prompt. All arms are scored on the
-        same <b>{n(arms.records)}</b> reference records ({n(arms.documents)} documents) that every arm extracted itself;
-        “covered” is how many reference records an arm extracted. The main-cache arm holds the output the reference was
-        approved from, so it is favoured. Best value per column in bold.
+        Each arm re-extracts the reference documents with its own prompt, scored on the <b>{n(arms.records)}</b> records
+        ({n(arms.documents)} documents) all arms extracted. Best per column in bold; the main cache is what reviewers
+        approved, so it is not compared.
       </p>
       <div className="stats-scroll">
         <table className="stats-table quality-table">
@@ -391,13 +390,16 @@ function Arms({ arms }: { arms: ModelEvaluation['arms'] }) {
           </thead>
           <tbody>
             {runs.map((r) => (
-              <tr key={r.name}>
-                <td><span className="quality-arm">{r.name}</span><span className="quality-sub muted">{r.date}</span></td>
+              <tr key={r.name} className={r.prompt ? undefined : 'quality-source'}>
+                <td>
+                  <span className="quality-arm">{r.name}</span>
+                  <span className="quality-sub muted">{r.prompt ? r.date : 'reference source, not compared'}</span>
+                </td>
                 <td>{modelName(r.model)}</td>
                 <td className="num">{r.pages ? n(r.pages) : <span className="muted">all</span>}</td>
                 <td className="num">{n(r.covered)}</td>
                 {METRICS.map(([key]) => {
-                  const top = ratio(r.metrics[key]) === best(runs, key)
+                  const top = Boolean(r.prompt) && ratio(r.metrics[key]) === best(compared, key)
                   return <td key={key} className={`num${top ? ' quality-best' : ''}`}>{percent(r.metrics[key])}</td>
                 })}
                 <td className="num">{n(r.metrics.missing)}</td>
@@ -415,8 +417,7 @@ function Usage({ rows }: { rows: UsageRow[] }) {
   return (
     <section className="stats-card stats-wide" aria-labelledby="quality-usage">
       <h3 id="quality-usage">Model calls</h3>
-      <p className="muted">Every call pipeline runs and uploads made against this database, per model, backend and step.
-        Cached pages make no call.</p>
+      <p className="muted">Every call against this database, per model, backend and step. Cached pages make no call.</p>
       {!rows.length ? <p className="stats-note">No model calls recorded in this database yet.</p> : (
         <div className="stats-scroll">
           <table className="stats-table">

@@ -30,8 +30,8 @@ const CRS_ROWS = 6
 
 /** How the coordinate system was settled: label and explanation. */
 const DETERMINATION: [CrsDetermination, string, string][] = [
-  ['stated', 'Stated on the sheet', 'the log names the system, or labels latitude and longitude'],
-  ['document', 'Stated elsewhere in the document', 'on another page or in the coordinate table'],
+  ['stated', 'On the sheet', 'the log names the system, or labels latitude and longitude'],
+  ['document', 'Elsewhere in the document', 'on another page or in the coordinate table'],
   ['reviewer', 'Set by a reviewer', 'a reviewer’s coordinate system correction'],
   ['knowledge', 'Learned from reviewers', 'confirmed on other holes of the document, or a local grid fitted to reviewer positions'],
   ['inferred', 'Inferred', 'not stated: the system that lands nearest the named place; marked for a look'],
@@ -113,7 +113,7 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
       <div className="stats-panel" role="tabpanel" id={`stats-panel-${tab}`} aria-labelledby={`stats-tab-${tab}`}>
         {tab === 'overview' && (
           <>
-            <Claims whole={whole} quality={quality} onOpen={open} onReview={onReview} />
+            <Claims whole={whole} quality={quality} onOpen={open} />
             <Overview stats={filtered ? narrowed : whole} filtered={filtered} error={dataError} quality={quality}
               onShowGroup={onShowGroup} onReview={onReview} />
           </>
@@ -126,12 +126,11 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
   )
 }
 
-/** The four claims of the challenge, each one figure over the whole database, each leading to its evidence. */
-function Claims({ whole, quality, onOpen, onReview }: {
+/** The headline figures over the whole database, each leading to its evidence. */
+function Claims({ whole, quality, onOpen }: {
   whole: StatsDetail | null
   quality: Quality | null
   onOpen: (tab: StatsTab, target: Target) => void
-  onReview: Props['onReview']
 }) {
   const loading = '…'
   const located = whole ? whole.position.printed + whole.position.linked_table : 0
@@ -139,48 +138,27 @@ function Claims({ whole, quality, onOpen, onReview }: {
   const found = ev?.current.boundaries
   const audit = quality?.audit
   return (
-    <section className="claims" aria-labelledby="claims-scope">
-      <h3 id="claims-scope" className="claims-scope">Whole database</h3>
-      <ul>
-        <Claim goal="Coordinates" hint="How positions and coordinate systems were obtained"
-          figure={whole ? `${pct(located, whole.boreholes)} %` : loading} label="positioned from printed coordinates"
-          note={whole && `${n(located)} of ${n(whole.boreholes)} holes, ${n(whole.crs.length)} coordinate ${whole.crs.length === 1 ? 'system' : 'systems'} (EPSG)`}
-          onClick={() => onOpen('overview', 'coordinates')} />
-        <Claim goal="Hit rate" hint="Extraction quality against the human-checked records"
-          figure={!quality ? loading : found?.of ? `${((100 * found.hit) / found.of).toFixed(1)} %` : 'n/a'}
-          label="of layer boundaries found"
-          note={quality && (ev && found?.of
-            ? `${n(Math.round(found.hit))} of ${n(found.of)} in ${n(ev.reference.records)} human-checked records${quality.source === 'snapshot' ? `, snapshot of ${ev.generated}` : ''}`
-            : 'No human-checked reference yet')}
-          onClick={() => onOpen('details', 'extraction-quality')} />
-        <Claim goal="Release safety" hint="The release audit"
-          figure={!quality ? loading : audit?.reviewed ? <>{n(audit.wrong)}<small> of {n(audit.reviewed)}</small></> : 'n/a'}
-          label="automatic releases wrong"
-          note={quality && (!audit ? 'No audit sample drawn yet'
-            : !audit.reviewed ? `${n(audit.sample)} drawn, none checked yet`
-            : `random sample checked by a person, 95\u00a0% interval ${Math.round(100 * audit.low)}–\u2060${Math.round(100 * audit.high)}\u00a0%${audit.reviewed < audit.sample ? `; ${n(audit.sample - audit.reviewed)} still to check` : ''}`)}
-          onClick={() => onOpen('details', 'release-audit')} />
-        <Claim goal="Work for people" hint="Open the review queue"
-          figure={whole ? n(whole.status.pending_review) : loading} label="records waiting for review"
-          note={whole && `${n(whole.waiting_blocking)} with a blocking finding, which no score releases`}
-          onClick={() => onReview(DEFAULT_REVIEW_FILTERS)} />
-      </ul>
-    </section>
+    <ul className="claims" aria-label="Headline figures, whole database">
+      <Claim figure={whole ? `${pct(located, whole.boreholes)} %` : loading} label="positioned from printed coordinates"
+        note={whole && `${n(located)} of ${n(whole.boreholes)} holes`}
+        onClick={() => onOpen('overview', 'coordinates')} />
+      <Claim figure={!quality ? loading : found?.of ? `${((100 * found.hit) / found.of).toFixed(1)} %` : 'n/a'}
+        label="of layer boundaries found"
+        note={quality && (ev && found?.of ? `in ${n(ev.reference.records)} human-checked records` : 'no checked records yet')}
+        onClick={() => onOpen('details', 'extraction-quality')} />
+      <Claim figure={!quality ? loading : audit?.reviewed ? <>{n(audit.wrong)}<small> / {n(audit.reviewed)}</small></> : 'n/a'}
+        label="audited automatic releases wrong"
+        note={quality && (!audit ? 'no audit yet' : !audit.reviewed ? `${n(audit.sample)} drawn, none checked`
+          : `random sample, 95\u00a0% interval ${Math.round(100 * audit.low)}–\u2060${Math.round(100 * audit.high)}\u00a0%`)}
+        onClick={() => onOpen('details', 'release-audit')} />
+    </ul>
   )
 }
 
-function Claim({ goal, figure, label, note, hint, onClick }: {
-  goal: string
-  figure: ReactNode
-  label: string
-  note: string | null
-  hint: string
-  onClick: () => void
-}) {
+function Claim({ figure, label, note, onClick }: { figure: ReactNode; label: string; note: string | null; onClick: () => void }) {
   return (
     <li>
-      <button className="claim" title={hint} onClick={onClick}>
-        <span className="claim-goal">{goal}</span>
+      <button className="claim" onClick={onClick}>
         <span className="claim-figure">{figure}</span>
         <span className="claim-label">{label}</span>
         {note && <span className="claim-note">{note}</span>}
@@ -212,14 +190,12 @@ function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }:
       {error && <p className="error" role="alert">{error}</p>}
       {!s ? (!error && <p className="muted">Loading…</p>) : (
         <>
-          {filtered && <p className="stats-scope">From here on: the records the list filters select.</p>}
-          <div className="stats-grid stats-grid-overview">
-            <Coordinates s={s} quality={quality} onReview={onReview} />
-            <Funnel s={s} />
-          </div>
+          {filtered && <p className="stats-scope">Below: only the records the list filters select.</p>}
+          <Coordinates s={s} quality={quality} onReview={onReview} />
+          <Funnel s={s} />
 
           <details className="stats-more">
-            <summary>More figures <span className="muted">key figures, final depth, lithology, findings, documents</span></summary>
+            <summary>More figures <span className="muted">depth, lithology, findings, documents</span></summary>
             <div className="stats-grid stats-grid-more">
               <section className="stats-card stats-wide" aria-labelledby="stats-figures">
                 <h3 id="stats-figures">Key figures</h3>
@@ -258,7 +234,7 @@ function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }:
 
               <section className="stats-card" aria-labelledby="stats-lith">
                 <h3 id="stats-lith">Lithology</h3>
-                <p className="muted">Share of the logged metres ({n(Math.round(lithTotal))} m) per DIN 4023 class.</p>
+                <p className="muted">Share of {n(Math.round(lithTotal))} logged metres per DIN 4023 class.</p>
                 <ol className="stats-rows">
                   {lithRows.map(([key, m]) => {
                     const label = key === 'other' ? 'Other classes' : lithStyle(key).label
@@ -276,7 +252,7 @@ function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }:
 
               <section className="stats-card stats-wide" aria-labelledby="stats-findings">
                 <h3 id="stats-findings">Findings</h3>
-                <p className="muted">Records per finding, blocking ones first; notes are left out.</p>
+                <p className="muted">Records per finding, blocking first.</p>
                 <table className="stats-table">
                   <thead><tr><th>Finding</th><th>Severity</th><th className="num" colSpan={2}>Records</th></tr></thead>
                   <tbody>
@@ -296,7 +272,7 @@ function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }:
 
               <section className="stats-card stats-wide" aria-labelledby="stats-groups">
                 <h3 id="stats-groups">Documents</h3>
-                <p className="muted">Per document group. Choose one to see its holes on the map.</p>
+                <p className="muted">Choose one to see it on the map.</p>
                 <table className="stats-table">
                   <thead><tr><th>Document</th><th className="num">Holes</th><th colSpan={2}>Released</th><th>Most frequent finding</th></tr></thead>
                   <tbody>
@@ -326,24 +302,22 @@ function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }:
 function Funnel({ s }: { s: StatsDetail }) {
   const f = s.funnel
   const t = Math.round(s.threshold * 100)
-  const steps: [string, number, string, string][] = [
-    ['Records extracted', f.records, 'var(--water)', ''],
-    ['Without a blocking finding', f.without_blocking, 'var(--water)', ''],
-    ['Passed the release rule', f.passed_rule, 'var(--water)', `score ≥ ${t} as well`],
-    ['Released in all', f.released, 'var(--high)', `${n(s.status.approved)} approved by a person`],
+  const steps: [string, number, string][] = [
+    ['extracted', f.records, ''],
+    ['nothing blocking', f.without_blocking, ''],
+    ['passed the rule', f.passed_rule, `score ≥ ${t} too`],
+    ['released', f.released, `${n(s.status.approved)} by a person`],
   ]
   return (
-    <section className="stats-card stats-wide" aria-labelledby="stats-funnel">
+    <section className="stats-section" aria-labelledby="stats-funnel">
       <h3 id="stats-funnel">Release funnel</h3>
-      <p className="muted">Released automatically only with a score of at least {Math.round(s.threshold * 100)} and no
-        blocking finding; everything else goes to a person.</p>
+      <p className="stats-sub">Automatic release only at score ≥ {t} with nothing blocking.</p>
       <ol className="funnel">
-        {steps.map(([label, value, fill, sub]) => (
+        {steps.map(([label, value, sub]) => (
           <li key={label}>
             <span className="funnel-figure">{n(value)}</span>
-            <span className="funnel-label">{label}{sub && <span className="funnel-sub">{sub}</span>}</span>
-            <Bar value={value} max={f.records} fill={fill} title={`${label}: ${n(value)} of ${n(f.records)}`} />
-            <span className="funnel-share muted">{pct(value, f.records)} % of the records</span>
+            <span className="funnel-label">{label}{sub && <span className="muted"> · {sub}</span>}</span>
+            <Bar value={value} max={f.records} title={`${label}: ${n(value)} of ${n(f.records)} (${pct(value, f.records)} %)`} />
           </li>
         ))}
       </ol>
@@ -357,22 +331,19 @@ function Coordinates({ s, quality, onReview }: { s: StatsDetail; quality: Qualit
   const howMax = Math.max(1, ...Object.values(s.crs_determination))
   const ev = quality?.evaluation
   return (
-    <section className="stats-card stats-wide" id="coordinates" tabIndex={-1} aria-labelledby="stats-coordinates">
+    <section className="stats-section" id="coordinates" tabIndex={-1} aria-labelledby="stats-coordinates">
       <h3 id="stats-coordinates">Coordinates</h3>
-      <p className="muted">Where each position comes from and how its coordinate system was settled. Only evidence places
-        a hole; the rest goes to a person.</p>
-      <h4>How the position was obtained</h4>
+      <p className="stats-sub">Only evidence places a hole; the rest goes to a person.</p>
       <Shares label="Position" parts={[
-        { key: 'printed', label: 'Printed coordinates', value: p.printed, color: 'var(--water)' },
-        { key: 'table', label: 'Coordinate table', value: p.linked_table, color: 'var(--water-deep)' },
+        { key: 'printed', label: 'Printed coordinates', value: p.printed, color: 'var(--bar)' },
+        { key: 'table', label: 'Coordinate table', value: p.linked_table, color: 'var(--water)' },
         { key: 'manual', label: 'Set by a reviewer', value: p.manual, color: 'var(--graphite)' },
-        { key: 'place', label: 'Place name only (approximate)', value: p.place_name, color: 'var(--water-mid)' },
+        { key: 'place', label: 'Place name only', value: p.place_name, color: 'var(--water-mid)' },
         { key: 'none', label: 'None', value: p.none, color: 'var(--grid)' },
       ]} />
       <div className="coord-cols">
         <div>
-          <h4>How the coordinate system was determined</h4>
-          <p className="coord-sub muted">For the {n(fromCoordinates)} holes positioned from printed or tabled coordinates.</p>
+          <h4>Coordinate system <span className="muted">· {n(fromCoordinates)} holes</span></h4>
           <ol className="stats-rows">
             {DETERMINATION.map(([key, label, hint]) => {
               const value = s.crs_determination[key]
@@ -381,40 +352,30 @@ function Coordinates({ s, quality, onReview }: { s: StatsDetail; quality: Qualit
                   <span className="stats-label" title={hint}>{label}</span>
                   <Bar value={value} max={howMax} title={`${label}: ${n(value)} holes (${hint})`}
                     {...(key === 'ambiguous' ? { fill: 'var(--medium)' } : {})} />
-                  <span className="stats-value">{n(value)} <span className="muted">{pct(value, fromCoordinates)} %</span></span>
+                  <span className="stats-value">{pct(value, fromCoordinates)} %</span>
                 </li>
               )
             })}
           </ol>
         </div>
         <div>
-          <h4>Coordinate systems</h4>
-          <p className="coord-sub muted">
-            {n(s.crs.length)} distinct EPSG codes
-            {s.crs_without_epsg > 0 && `; ${n(s.crs_without_epsg)} holes in a local grid without one`}.
-          </p>
+          <h4>EPSG codes <span className="muted">· {n(s.crs.length)}{s.crs_without_epsg > 0 && `, plus ${n(s.crs_without_epsg)} holes in local grids`}</span></h4>
           {s.crs.length > 0 && <CrsRows rows={s.crs.slice(0, CRS_ROWS)} max={s.crs[0][1]} />}
           {s.crs.length > CRS_ROWS && (
             <details className="coord-more">
-              <summary>All {n(s.crs.length)} coordinate systems</summary>
+              <summary>All {n(s.crs.length)}</summary>
               <CrsRows rows={s.crs.slice(CRS_ROWS)} max={s.crs[0][1]} />
             </details>
           )}
         </div>
       </div>
       <p className="stats-note">
-        {!quality ? <span className="muted">Position error against the reference: loading…</span>
-          : ev ? <>Position error against the reference: median <b>{fmtError(ev.current.position_median_m)}</b>, largest
-            {' '}<b>{fmtError(ev.current.position_max_m)}</b> <span className="muted">({n(ev.reference.records)} human-checked
-            records, whole database)</span></>
-          : <span className="muted">No human-checked reference yet to measure the position error against.</span>}
-      </p>
-      <p className="stats-note">
-        <b>{n(s.positions_withheld)}</b> {s.positions_withheld === 1 ? 'hole' : 'holes'} deliberately left without a
-        position: several holes of one folder would share one place-name point, so a reviewer places them.{' '}
+        {ev && <>Position error on checked records: median <b>{fmtError(ev.current.position_median_m)}</b>, largest{' '}
+          <b>{fmtError(ev.current.position_max_m)}</b>. </>}
+        <b>{n(s.positions_withheld)}</b> {s.positions_withheld === 1 ? 'hole' : 'holes'} held back: they would share one place-name point.{' '}
         {p.none > 0 && (
           <button className="link-button" onClick={() => onReview({ ...DEFAULT_REVIEW_FILTERS, position: 'none' })}>
-            Holes without a position in the review queue
+            Place them
           </button>
         )}
       </p>

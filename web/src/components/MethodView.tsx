@@ -4,12 +4,12 @@ import type { Quality, StatsDetail } from '../types'
 
 /** Name, who does the work, what it does. */
 const STEPS: [string, 'llm' | 'code', string][] = [
-  ['Render pages', 'code', 'Each document becomes page images, locally'],
-  ['Classify', 'llm', 'Log, lab sheet, coordinate table or other page'],
-  ['Extract', 'llm', 'Layers, groundwater, tests and coordinates, as printed'],
-  ['Assemble', 'code', 'One record per hole from all its sheets; layer sequence checked'],
-  ['Georeference', 'code', 'Printed coordinates read in every plausible system, checked against the named place; the LLM re-reads the digits'],
-  ['Score & decide', 'code', 'Release score from evidence, findings'],
+  ['Render', 'code', 'Page images, made locally'],
+  ['Classify', 'llm', 'Which kind of page'],
+  ['Extract', 'llm', 'Layers, water, tests, coordinates, as printed'],
+  ['Assemble', 'code', 'One record per hole'],
+  ['Georeference', 'code', 'Coordinates checked against the named place; the LLM re-reads the digits'],
+  ['Score', 'code', 'From evidence'],
 ]
 
 const Arrow = () => (
@@ -29,14 +29,14 @@ export function MethodView({ stats, quality }: { stats: StatsDetail | null; qual
   const since = quality?.usage.map((r) => r.first).sort()[0]?.slice(0, 10)
   const audit = quality?.audit
   return (
-    <div className="stats-grid stats-grid-method">
-      <section className="stats-card stats-wide" aria-labelledby="method-flow">
+    <>
+      <section className="stats-section" aria-labelledby="method-flow">
         <h3 id="method-flow">From page to record</h3>
         <ol className="flow">
           {STEPS.map(([name, kind, text], i) => (
             <li key={name} className="flow-item">
               <div className={`flow-step flow-${kind}`}>
-                <span className="flow-kind">{kind === 'llm' ? 'LLM' : 'Code'}</span>
+                <span className="flow-kind">{kind === 'llm' ? 'LLM' : 'code'}</span>
                 <b className="flow-name">{name}</b>
                 <span className="flow-text">{text}</span>
               </div>
@@ -50,78 +50,63 @@ export function MethodView({ stats, quality }: { stats: StatsDetail | null; qual
           <li className="flow-outcomes">
             <div className="flow-step flow-released">
               <b className="flow-name">Released</b>
-              <span className="flow-text">Score ≥ {t} and no blocking finding</span>
+              <span className="flow-text">Score ≥ {t}, nothing blocking</span>
             </div>
             <div className="flow-step flow-review">
-              <b className="flow-name">Review queue <span aria-hidden="true">→</span> <span className="flow-who"><Person />a person</span></b>
-              <span className="flow-text">Everything else: approve, correct or reject</span>
+              <b className="flow-name"><span className="flow-who"><Person />A person</span></b>
+              <span className="flow-text">Everything else</span>
             </div>
           </li>
         </ol>
-        <p className="flow-legend">
-          <span><i className="flow-swatch flow-llm" />LLM: reads the page</span>
-          <span><i className="flow-swatch flow-code" />Code: positions, checks, score and decision</span>
-        </p>
+        <p className="flow-legend">The LLM reads the pages; code computes positions, checks and the decision.</p>
       </section>
 
-      <section className="stats-card stats-wide" aria-labelledby="method-score">
-        <h3 id="method-score">The release score</h3>
+      <section className="stats-section" aria-labelledby="method-score">
+        <h3 id="method-score">Release score</h3>
         <p className="method-formula"><code>score = min(extraction, position)</code></p>
-        <p className="stats-lede">Computed from evidence, never the model’s own estimate. A record is only as trustworthy
-          as its weaker part.</p>
+        <p className="stats-sub">From evidence, never the model’s own estimate.</p>
         <div className="method-parts">
           <div>
             <h4>Extraction</h4>
             <dl className="method-rules">
               <Rule figure="100">Start</Rule>
-              <Rule figure="−10" detail="each, at most −40">Plausibility finding in the layer sequence: gap, overlap,
-                inferred boundary, layers that start below the surface or end away from the stated final depth</Rule>
-              <Rule figure="−5" detail="each, at most −20">Item the model reported as unreadable in the log or the position</Rule>
-              <Rule figure="−0.6" detail="per point below 80 %">Layer depths that do not appear in the PDF text layer</Rule>
-              <Rule figure="max 85">Nothing confirms the depths independently: neither the text layer nor, on a scan, a
-                complete log from 0 m to a stated final depth. Also when a finding needs a look.</Rule>
+              <Rule figure="−10" detail="each, max −40">Gap, overlap or other plausibility finding</Rule>
+              <Rule figure="−5" detail="each, max −20">Unreadable item in the log or the position</Rule>
+              <Rule figure="−0.6" detail="per point below 80\u00a0%">Depths missing from the PDF text layer</Rule>
+              <Rule figure="max 85">Depths not confirmed independently, or a finding needs a look</Rule>
             </dl>
           </div>
           <div>
             <h4>Position</h4>
             <dl className="method-rules">
               <Rule figure="100">Set by a reviewer</Rule>
-              <Rule figure="95">Printed coordinates in a stated coordinate system, at the named place</Rule>
-              <Rule figure="90">Coordinate system stated elsewhere in the document, or learned from reviewers</Rule>
-              <Rule figure="80">Coordinate system inferred, not stated</Rule>
-              <Rule figure="70–15">Printed coordinates farther from the named place</Rule>
-              <Rule figure="≤ 50">Several readings fit, or no place to check them against</Rule>
-              <Rule figure="30">Position from the place name only</Rule>
+              <Rule figure="95">Stated coordinate system, at the named place</Rule>
+              <Rule figure="90">System from elsewhere in the document, or learned</Rule>
+              <Rule figure="80">System inferred</Rule>
+              <Rule figure="70–15">Farther from the named place</Rule>
+              <Rule figure="≤ 50">Ambiguous, or nothing to check against</Rule>
+              <Rule figure="30">Place name only</Rule>
             </dl>
-            <p className="method-note">Where a second reading ran, the model reads the printed coordinates again, enlarged.
-              If that reading differs, the record is blocked.</p>
           </div>
         </div>
-        <p className="method-decision">
-          Released automatically only at a score ≥ <b>{t}</b> and without a blocking finding.
-          A blocking finding always goes to a person, whatever the score.
-        </p>
+        <p className="method-decision">Automatic release at score ≥ {t} with nothing blocking. Anything blocking goes to a
+          person, whatever the score.</p>
       </section>
 
-      <Principle title="Score system" lead="The weaker part decides.">
-        Both parts come from checks code can compute. Every deduction is shown on the record as a reason.
-      </Principle>
-      <Principle title="Blocking findings" lead="What could hide wrong data goes to a person."
-        figure={stats && `${n(stats.waiting_blocking)} records held for this now`}>
-        Gaps and overlaps, an ambiguous coordinate system, depths in feet, missing sheets, a second reading that
-        differs, text that addresses the model.
-      </Principle>
-      <Principle title="Human in the loop" lead="Reviewers decide, and the system learns."
-        figure={audit?.reviewed ? `${n(audit.wrong)} of ${n(audit.reviewed)} audited releases wrong` : null}>
-        A decision holds while the record stays unchanged. Confirmed coordinate systems and local grids carry over to
-        other holes. A random sample of automatic releases is checked by a person.
-      </Principle>
-      <Principle title="Governance" lead="Every model call is logged, never its content."
-        figure={calls != null && since && `${n(calls)} model calls logged since ${since}`}>
-        Stage, model, tokens, cost and outcome per call. Claude runs through Anthropic; OpenRouter routes only to
-        zero-data-retention providers. Pages are rendered locally and places looked up in an offline gazetteer.
-      </Principle>
-    </div>
+      <section className="stats-section principles" aria-label="Principles">
+        <Principle title="Weakest part decides">Every deduction is shown on the record.</Principle>
+        <Principle title="Blocking findings" figure={stats && `${n(stats.waiting_blocking)} records held now`}>
+          Anything that could hide wrong data goes to a person, including a second coordinate reading that differs.
+        </Principle>
+        <Principle title="Human in the loop"
+          figure={audit?.reviewed ? `${n(audit.wrong)} of ${n(audit.reviewed)} audited releases wrong` : null}>
+          Decisions hold while the record is unchanged. Confirmed coordinate systems carry over.
+        </Principle>
+        <Principle title="Governance" figure={calls != null && since && `${n(calls)} calls logged since ${since}`}>
+          Every model call logged with tokens and cost, never content. OpenRouter: zero data retention only.
+        </Principle>
+      </section>
+    </>
   )
 }
 
@@ -134,13 +119,12 @@ function Rule({ figure, detail, children }: { figure: string; detail?: string; c
   )
 }
 
-function Principle({ title, lead, figure, children }: { title: string; lead: string; figure?: string | false | null; children: ReactNode }) {
+function Principle({ title, figure, children }: { title: string; figure?: string | false | null; children: ReactNode }) {
   return (
-    <section className="stats-card principle">
+    <div className="principle">
       <h3>{title}</h3>
-      <p className="principle-lead">{lead}</p>
-      <p className="principle-text">{children}</p>
+      <p>{children}</p>
       {figure && <p className="principle-figure">{figure}</p>}
-    </section>
+    </div>
   )
 }
