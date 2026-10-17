@@ -18,7 +18,6 @@ interface Props {
   onReviewAudit: () => void
   /** Open the review queue with these filters. */
   onReview: (filters: ReviewFilters) => void
-  onClose: () => void
 }
 
 /** The cards a headline figure leads to. */
@@ -45,7 +44,7 @@ function reveal(target: Target): boolean {
   return true
 }
 
-export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onReview, onClose }: Props) {
+export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onReview }: Props) {
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
   const [whole, setWhole] = useState<StatsDetail | null>(null)
   const [narrowed, setNarrowed] = useState<StatsDetail | null>(null)
@@ -97,10 +96,7 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
   return (
     <div className="stats-view">
       <header className="stats-head">
-        <div className="stats-title">
-          <h2>Statistics</h2>
-          <button className="btn" onClick={onClose}>Back to map</button>
-        </div>
+        <h2>Statistics</h2>
         <Claims whole={whole} quality={quality} onOpen={open} onReview={onReview} />
         <div className="stats-tabs" role="tablist" aria-label="Statistics" onKeyDown={onKey}>
           {TABS.map(([key, label], i) => (
@@ -114,7 +110,7 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
       </header>
       <div role="tabpanel" id={`stats-panel-${tab}`} aria-labelledby={`stats-tab-${tab}`}>
         {tab === 'data'
-          ? <DataTab stats={filtered ? narrowed : whole} error={dataError} filtered={filtered} quality={quality}
+          ? <DataTab stats={filtered ? narrowed : whole} error={dataError} quality={quality}
               onShowGroup={onShowGroup} onReview={onReview} />
           : <QualityView quality={quality} error={qualityError} onReviewAudit={onReviewAudit} />}
       </div>
@@ -136,7 +132,7 @@ function Claims({ whole, quality, onOpen, onReview }: {
   const audit = quality?.audit
   return (
     <section className="claims" aria-labelledby="claims-scope">
-      <h3 id="claims-scope" className="claims-scope">Whole database <span>· the list filters do not apply here</span></h3>
+      <h3 id="claims-scope" className="claims-scope">Whole database</h3>
       <ul>
         <Claim goal="Coordinates" hint="How positions and coordinate systems were obtained"
           figure={whole ? `${pct(located, whole.boreholes)} %` : loading} label="positioned from printed coordinates"
@@ -185,10 +181,9 @@ function Claim({ goal, figure, label, note, hint, onClick }: {
   )
 }
 
-function DataTab({ stats: s, error, filtered, quality, onShowGroup, onReview }: {
+function DataTab({ stats: s, error, quality, onShowGroup, onReview }: {
   stats: StatsDetail | null
   error: string | null
-  filtered: boolean
   quality: Quality | null
   onShowGroup: Props['onShowGroup']
   onReview: Props['onReview']
@@ -205,13 +200,9 @@ function DataTab({ stats: s, error, filtered, quality, onShowGroup, onReview }: 
 
   return (
     <>
-      <p className="stats-intro muted">
-        {filtered ? 'For the records the current filters select' : 'All records in the database'}, holes without a
-        position included. Change the filters in the list to narrow it.
-      </p>
       {error && <p className="error" role="alert">{error}</p>}
       {!s ? (!error && <p className="muted">Loading…</p>) : (
-        <div className="stats-grid">
+        <div className="stats-grid stats-grid-data">
           <Coordinates s={s} quality={quality} onReview={onReview} />
 
           <section className="stats-card stats-wide" aria-labelledby="stats-figures">
