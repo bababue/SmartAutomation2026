@@ -58,6 +58,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 .demo-flag { font-size: 12px; padding: 2px 8px; border-radius: 2px; background: #fbf3e4; color: #8a5a12; white-space: nowrap; }
 .brand { font-size: 21px; font-weight: 700; letter-spacing: -0.01em; margin: 0; white-space: nowrap; }
+.brand-art { display: block; font-family: var(--mono); font-size: 5px; font-weight: 500; line-height: 5.1px; letter-spacing: 0; white-space: pre; }
 .search { flex: 1; max-width: 620px; }
 .search input {
   width: 100%;

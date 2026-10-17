@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { fetchBoreholes, fetchBoreholesById, fetchDetail, fetchMapPoints, fetchQueue, fetchStats, fetchUploadStatus, postUpload } from './api'
 import { LithologyPatterns } from './lithology'
+import { BrandLogo } from './components/BrandLogo'
 import { DetailPanel } from './components/DetailPanel'
 import { MapView } from './components/MapView'
 import { ResultList } from './components/ResultList'
@@ -263,7 +264,7 @@ export default function App() {
       <svg width={0} height={0} style={{ position: 'absolute' }} aria-hidden="true"><LithologyPatterns /></svg>
 
       <header className="topbar">
-        <h1 className="brand">Borehole Atlas</h1>
+        <BrandLogo />
         {stats?.demo && <span className="demo-flag" title="The API serves data/demo.sqlite: synthetic records without source pages">Synthetic demo data</span>}
         <nav className="tabs" aria-label="Views">
           <button className={`tab${view === 'map' ? ' tab-on' : ''}`} aria-current={view === 'map'} onClick={() => setView('map')}>Map</button>
