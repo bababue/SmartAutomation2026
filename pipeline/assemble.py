@@ -1,8 +1,8 @@
 """Turn per-page extractions into canonical `Borehole` records.
 
 - Sheets of the same hole within a document are merged (continuation layers joined).
-- A sheet that prints another position or ground level than the earlier sheets of its name goes to review,
-  and is a hole of its own when its depths restart at the surface.
+- A sheet that prints another position, ground level or investigation (report number, project, date) than
+  the earlier sheets of its name goes to review, and is a hole of its own when its depths restart at the surface.
 - Coordinates from summary tables are linked to logs by hole name.
 - A coordinate system stated elsewhere in the document (other holes, tables, notes, report text) is used
   when a log does not name one; positions far from the other holes of a document are flagged.
@@ -15,8 +15,9 @@ from __future__ import annotations
 import math
 import re
 import statistics
+import unicodedata
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from itertools import combinations
 
@@ -225,14 +226,44 @@ def _same_page(a: SourceRef | None, b: SourceRef | None) -> bool:
 CONTINUED = re.compile(r"\((?:continued|cont'?d\.?|cont\.|fortsetzung|continuaci[oó]n|continua[çc][aã]o)\)|\bcontinued\b(?!\w)|^\s*\.{3}", re.I)
 
 
-def _continues(prev: Layer, nxt: Layer) -> bool:
-    """A layer split by a sheet break: same boundary, next sheet, same lithology, and either an
-    explicit continuation marker or the same description."""
-    if _same_page(prev.source, nxt.source) or abs(prev.bottom_m - nxt.top_m) > 0.05 or prev.primary != nxt.primary:
-        return False
-    a = re.sub(r"\W+", " ", prev.description_original.lower()).strip()
-    b = re.sub(r"\W+", " ", nxt.description_original.lower()).strip()
-    return bool(CONTINUED.search(nxt.description_original)) or a == b
+# Text that points back at the previous sheet's unit instead of describing one: 'strata as previous page',
+# 'As above', 'Ditto', '(continued from previous sheet: ...)'. A ditto further into a text refers to that text.
+SAME_AS_BEFORE = re.compile(
+    r"^\W*(?:(?:strata|stratum|same)\s+)?(?:as\s+(?:on\s+)?(?:the\s+)?(?:previous|preceding|last)\s+(?:page|sheet)"
+    r"|as\s+above|ditto)\b"
+    r"|continued\s+from\s+(?:the\s+)?(?:previous|preceding|last|above)(?:\s+(?:page|sheet))?|continuation\s+of\b"
+    r"|^\s*\.{3}", re.I)
+
+# Sheets of cable-percussive logs end at a round depth, but the last unit is often drawn down to the end of
+# the last sample (10.45 m on a 10 m sheet).
+SHEET_JOIN_M = 0.5
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"\W+", " ", CONTINUED.sub(" ", SAME_AS_BEFORE.sub(" ", text)).lower()).strip()
+
+
+def _sheet_join(prev: Layer, nxt: Layer) -> str | None:
+    """How the first layer of a sheet relates to the last one of the sheet before. 'merge': one unit split by
+    the sheet break (a back-reference, the same description, or the same lithology run past the sheet end).
+    'extend': a unit marked as continued, with its own description, below a short undescribed stretch: it
+    started there, at the foot of the previous sheet. None: separate units, or too unclear to join."""
+    if _same_page(prev.source, nxt.source) or nxt.top_m < prev.top_m:
+        return None
+    d = prev.bottom_m - nxt.top_m  # > 0: the sheets overlap; < 0: a stretch nobody describes
+    if abs(d) > SHEET_JOIN_M:
+        return None
+    back = bool(SAME_AS_BEFORE.search(nxt.description_original))
+    marked = back or bool(CONTINUED.search(nxt.description_original))
+    if prev.primary != nxt.primary and not (back and nxt.primary == Lithology.unknown):
+        return "extend" if marked and not back and d < -0.05 else None
+    if back or _plain(prev.description_original) == _plain(nxt.description_original):
+        return "merge"
+    if abs(d) <= 0.05:
+        return "merge" if marked or nxt.bottom_m - nxt.top_m < 0.01 else None  # or a fragment without thickness
+    if d > 0:
+        return "merge"
+    return "extend" if marked else None
 
 
 SHEET = re.compile(r"(\d{1,2})\s*(?:of|de|von|aus|di|sur|af|av|/)\s*(\d{1,2})", re.IGNORECASE)
@@ -334,9 +365,24 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
             layer.primary = prev.primary
             if notes is not None:
                 notes.append(f"lithology of layer {top:g}–{bottom:g} m taken from the previous sheet")
-        if layers and _continues(layers[-1], layer):
-            layers[-1].bottom_m = layer.bottom_m  # continuation across a sheet break
+        join = _sheet_join(layers[-1], layer) if layers and not _same_page(src, flat[index - 1][1]) else None
+        if join == "merge":
+            prev = layers[-1]
+            if notes is not None and abs(prev.bottom_m - top) > 0.05:
+                notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats the unit "
+                             f"{prev.top_m:g}–{prev.bottom_m:g} m of the previous sheet; joined as "
+                             f"{prev.top_m:g}–{max(prev.bottom_m, bottom):g} m")
+            prev.bottom_m = max(prev.bottom_m, bottom)
+            if _plain(layer.description_original) not in ("", _plain(prev.description_original)):
+                prev.description_original += f" / {layer.description_original}"
+                if prev.description_en and layer.description_en:
+                    prev.description_en += f" / {layer.description_en}"
             continue
+        if join == "extend":
+            if notes is not None:
+                notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page} as continued from the previous "
+                             f"sheet; top set to {layers[-1].bottom_m:g} m")
+            layer.top_m = top = layers[-1].bottom_m
         if (layers and abs(layers[-1].top_m - top) < 0.01 and abs(layers[-1].bottom_m - bottom) < 0.01
                 and layers[-1].primary == layer.primary):
             continue  # same layer read twice (overlapping sheets); a different material stays as an overlap
@@ -544,38 +590,117 @@ def _header_difference(sheets: list[tuple[XLog, SourceRef]], log: XLog, doc_crs:
     return " and ".join(parts), next(iter(worst.values()))[1]
 
 
+def _same_id(a: str, b: str) -> bool:
+    """Report or archive numbers as printed ('S.I. No. 12' = 'SI No 12'); one may add a number the other
+    leaves out."""
+    na = {n.lstrip("0") for n in re.findall(r"\d+", a)}
+    nb = {n.lstrip("0") for n in re.findall(r"\d+", b)}
+    if na and nb:
+        return na <= nb or nb <= na
+    return re.sub(r"\W+", "", a.lower()) == re.sub(r"\W+", "", b.lower())
+
+
+def _words(text: str) -> set[str]:
+    plain = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
+    return set(re.findall(r"[a-z0-9]{2,}", plain))
+
+
+def _same_text(a: str, b: str) -> bool:
+    """Header texts read with different spelling, case or abbreviation still share most of their words."""
+    wa, wb = _words(a), _words(b)
+    return not wa or not wb or 2 * len(wa & wb) >= min(len(wa), len(wb))
+
+
+def _first_sheet_total(sheet: str | None) -> int | None:
+    m = SHEET.search(sheet or "")
+    return int(m.group(2)) if m and int(m.group(1)) == 1 else None
+
+
+def _identity_difference(sheets: list[tuple[XLog, SourceRef]], log: XLog, restart: bool) -> str | None:
+    """How the header of `log` shows another investigation than the earlier sheets of its hole: another
+    report or project number, or at least two of project, site, client and contractor. A sheet whose depths
+    restart at the surface is also told apart by another drilling date or a sheet count of its own ('1 of 1'
+    after '1 of 3'); continuation sheets may carry the date they were drilled on."""
+    earlier = [x for x, _ in sheets if x.layers]
+    found: list[str] = []
+    ids = [x.project_id for x in earlier if x.project_id]
+    if log.project_id and ids and not any(_same_id(i, log.project_id) for i in ids):
+        found.append(f"report/project id '{log.project_id}' vs '{ids[0]}'")
+    texts = [field.replace("_", " ") for field in ("project_name", "location_text", "client", "contractor")
+             if (value := getattr(log, field)) and (others := [getattr(x, field) for x in earlier if getattr(x, field)])
+             and not any(_same_text(o, value) for o in others)]
+    if len(texts) >= 2:
+        found.append(f"{', '.join(texts)} differ")
+    if restart:
+        dates = {d for x in earlier if (d := _date(x.start_date))}
+        if (d := _date(log.start_date)) and dates and d not in dates:
+            found.append(f"drilled {d.isoformat()} vs {min(dates).isoformat()}")
+        totals = {t for x in earlier if (t := _first_sheet_total(x.sheet))}
+        if (t := _first_sheet_total(log.sheet)) and totals and t not in totals:
+            found.append(f"sheet 1 of {t} after 1 of {min(totals)}")
+    return "; ".join(found) or None
+
+
+def _repeats(sheets: list[tuple[XLog, SourceRef]], log: XLog) -> int | None:
+    """The page of an earlier sheet with the same layers as `log`: the same sheet copied twice into a report."""
+    depth = lambda v: None if v is None else round(v, 2)
+    layers = lambda x: [(depth(l.top_m), depth(l.bottom_m), l.primary) for l in x.layers]
+    return next((src.page for x, src in sheets if x.layers and layers(x) == layers(log)), None)
+
+
 def split_holes(logs: list[tuple[XLog, SourceRef]], doc_crs: tuple[str, int] | None = None,
                 doc_place: tuple[float, float, float] | None = None
-                ) -> list[tuple[list[tuple[XLog, SourceRef]], list[str], bool]]:
-    """Sheets grouped under one name, as (sheets, findings, split off) per hole. The model gives an unnamed
-    sheet the name of the previous one, so a sheet that prints another position or ground level and whose
-    depths start again near the surface is another hole. Without the restart the sheets stay together, and
+                ) -> list[tuple[list[tuple[XLog, SourceRef]], list[str], str]]:
+    """Sheets grouped under one name, as (sheets, findings, naming) per hole: 'named' for the hole that bears
+    the name, 'unnamed' for a split-off sheet whose name may be the previous hole's, 'qualified' for each of
+    several holes that share the name.
+    A sheet whose depths start again near the surface is another hole when its header shows another
+    investigation (compilations of older reports each have a 'Borehole No. 2'), and then all holes of the
+    name are qualified. It is also another hole when it prints another position or ground level: the model
+    gives an unnamed sheet the name of the previous one. Without the restart the sheets stay together, and
     either way the difference goes to a person."""
-    runs: list[tuple[list[tuple[XLog, SourceRef]], list[str], bool]] = []
+    runs: list[tuple[list[tuple[XLog, SourceRef]], list[str], str]] = []
+    loose: list[XLog] = []  # summary and table entries, matched by name only
     for log, src in logs:
+        if not log.layers:
+            loose.append(log)
         if not runs:
-            runs.append(([(log, src)], [], False))
+            runs.append(([(log, src)], [], "named"))
             continue
         if not log.layers:  # a summary or coordinate table entry belongs to the hole that bears the name
             runs[0][0].append((log, src))
             continue
-        diff = _header_difference(runs[-1][0], log, doc_crs, doc_place)
-        if diff is None:
-            runs[-1][0].append((log, src))
-            continue
-        what, ref_page = diff
         sheets, findings, _ = runs[-1]
         top = min((x.top_m for x in log.layers if x.top_m is not None), default=None)
         reached = max((x.bottom_m for s, _ in sheets for x in s.layers if x.bottom_m is not None), default=0.0)
-        if top is not None and top < 0.5 and reached > top + 0.5:
+        restart = top is not None and top < 0.5 and reached > top + 0.5
+        identity = _identity_difference(sheets, log, restart)
+        diff = _header_difference(sheets, log, doc_crs, doc_place)
+        if diff is None and identity is None:
+            if restart and (page := _repeats(sheets, log)) is not None:
+                # Read once: the copy adds a source, not a second layer sequence.
+                findings.append(f"page {src.page} repeats the layers of page {page}; read once")
+                log = log.model_copy(update={"layers": [], "spt": [], "samples": [], "core_runs": [],
+                                             "lab_results": []})
+            sheets.append((log, src))
+            continue
+        what = " and ".join(filter(None, (diff[0] if diff else None, identity)))
+        ref_page = diff[1] if diff else next(s.page for x, s in sheets if x.layers)
+        if restart:
             findings.append(f"sheet header differs on page {src.page}: {what}; split off as a separate hole")
+            name = (" of the same name" if identity else
+                    f", the name '{log.name}' on this sheet may be the previous hole's")
             runs.append(([(log, src)], [f"sheet header differs from page {ref_page}: {what}, depths restart at "
-                                        f"{top:g} m; recorded as a separate hole, the name '{log.name}' on this "
-                                        f"sheet may be the previous hole's"], True))
+                                        f"{top:g} m; recorded as a separate hole{name}"],
+                         "qualified" if identity else "unnamed"))
         else:
             findings.append(f"sheet header differs on page {src.page} from page {ref_page}: {what}; "
                             f"check that the sheets belong to one hole")
             sheets.append((log, src))
+    if any(naming == "qualified" for _, _, naming in runs):
+        # An entry found by the name alone cannot tell which of the holes it belongs to.
+        sheets, findings, _ = runs[0]
+        runs[0] = ([(x, s) for x, s in sheets if not any(x is y for y in loose)], findings, "qualified")
     return runs
 
 
@@ -685,6 +810,73 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     return bh, len(unreadable)
 
 
+def _log_key(log: XLog, page_kind: str) -> tuple[str | None, str]:
+    return hole_key(log.name, log.investigation_type if log.investigation_type in ("borehole", "test_pit", "probe")
+                    else _KINDS.get(page_kind))
+
+
+def _sheet_number(log: XLog) -> tuple[int, int] | None:
+    m = SHEET.search(log.sheet or "")
+    return (int(m.group(1)), int(m.group(2))) if m and 1 <= int(m.group(1)) <= int(m.group(2)) <= 50 else None
+
+
+def _file_order(doc_id: str) -> list:
+    """'x_4' before 'x_10'."""
+    return [(0, int(t), "") if t.isdigit() else (1, 0, t) for t in re.split(r"(\d+)", doc_id) if t]
+
+
+SHEET_GAP_M = 1.0  # a continuation sheet starts at most this far below where the previous sheet ends
+
+
+def join_image_sheets(by_doc: dict[str, list[PageResult]], group_crs: dict[str, tuple[str, int] | None]) -> None:
+    """A folder of single images (one log sheet per file) spreads a hole over several documents. Sheet 'k of n'
+    joins the hole whose sheet 'k-1 of n' is in an earlier file of the folder when the header agrees and the depths
+    continue; it is moved into the document of the first sheet, so the hole keeps that document's id."""
+    singles: dict[str, list[str]] = defaultdict(list)
+    for doc_id, pages in by_doc.items():
+        if "__" in doc_id and len(pages) == 1:
+            singles[doc_id.split("__")[0]].append(doc_id)
+    for group, doc_ids in singles.items():
+        open_holes: dict[tuple[str | None, str], tuple[str, list[tuple[XLog, SourceRef]], tuple[int, int]]] = {}
+        for doc_id in sorted(doc_ids, key=_file_order):
+            r = by_doc[doc_id][0]
+            if r.extraction is None or r.kind not in LOG_KINDS:
+                continue
+            moved: dict[str, list[XLog]] = defaultdict(list)
+            for log in r.extraction.logs:
+                sheet = _sheet_number(log)
+                if not log.layers or sheet is None:
+                    continue
+                key = _log_key(log, r.kind)
+                src = SourceRef(file=r.source_file, page=r.page)
+                held = open_holes.get(key)
+                if held and held[0] != doc_id and sheet == (held[2][0] + 1, held[2][1]) \
+                        and _continues_sheet(held[1], log) \
+                        and _header_difference(held[1], log, group_crs.get(group), None) is None:
+                    moved[held[0]].append(log)
+                    open_holes[key] = (held[0], held[1] + [(log, src)], sheet)
+                else:
+                    open_holes[key] = (doc_id, [(log, src)], sheet)
+            for target, logs in moved.items():
+                # Only the moved logs travel; tables and other holes on the image stay with its own document.
+                by_doc[target].append(replace(r, labs=None, extraction=r.extraction.model_copy(
+                    update={"logs": logs, "coordinate_rows": []})))
+            if moved:
+                gone = {id(log) for logs in moved.values() for log in logs}
+                by_doc[doc_id][0] = replace(r, extraction=r.extraction.model_copy(
+                    update={"logs": [log for log in r.extraction.logs if id(log) not in gone]}))
+
+
+def _continues_sheet(sheets: list[tuple[XLog, SourceRef]], log: XLog) -> bool:
+    """The next sheet starts within the last unit of the earlier ones (a restated unit) or just below their end."""
+    ends = [(x.top_m, x.bottom_m) for s, _ in sheets for x in s.layers if x.bottom_m is not None]
+    top = min((x.top_m for x in log.layers if x.top_m is not None), default=None)
+    if not ends or top is None:
+        return False
+    last_top, bottom = max(ends, key=lambda e: e[1])
+    return (last_top if last_top is not None else bottom) - 0.01 <= top <= bottom + SHEET_GAP_M
+
+
 def assemble(results: list[PageResult]) -> list[Borehole]:
     by_doc: dict[str, list[PageResult]] = defaultdict(list)
     for r in results:
@@ -695,6 +887,7 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
     for r in results:
         by_group[r.doc_id.split("__")[0]].append(r)
     group_crs = {g: document_crs(rs) for g, rs in by_group.items()}
+    join_image_sheets(by_doc, group_crs)
 
     boreholes: list[Borehole] = []
     built: dict[str, list[tuple[Borehole, int, dict]]] = defaultdict(list)
@@ -721,9 +914,7 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
                     # coordinates and header values to the hole, not layers.
                     log = log.model_copy(update={"layers": []})
                 if log.layers or log.coords_raw or r.kind in LOG_KINDS:
-                    k = hole_key(log.name, log.investigation_type if log.investigation_type in ("borehole", "test_pit", "probe")
-                                 else _KINDS.get(r.kind))
-                    groups[k].append((log, SourceRef(file=r.source_file, page=r.page)))
+                    groups[_log_key(log, r.kind)].append((log, SourceRef(file=r.source_file, page=r.page)))
                 if log.place_lat is not None and log.place_lon is not None:
                     places.append((log.place_lat, log.place_lon, log.place_precision_km or 10.0))
         doc_place = None
@@ -736,19 +927,25 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
         doc_records: list[Borehole] = []
         split_pages: Counter[int] = Counter()
         for (kind, _), named in groups.items():
-            for logs, findings, split in split_holes(named, group_crs[group], doc_place):
+            for logs, findings, naming in split_holes(named, group_crs[group], doc_place):
                 if not any(log.layers for log, _ in logs):
                     continue
                 try:
-                    # The printed name of a split-off hole may be the previous hole's: no table row by name.
-                    bh, unreadable = build_borehole(doc_id, pages[0].source_file, logs, {} if split else coord_rows,
+                    # A split-off hole's name may be the previous hole's or one several holes share: no table
+                    # row by name.
+                    bh, unreadable = build_borehole(doc_id, pages[0].source_file, logs,
+                                                    coord_rows if naming == "named" else {},
                                                     doc_place, group_crs[group], kind)
-                    if split:  # a placeholder, so that nothing stored for the named hole follows this one
+                    if naming != "named":  # nothing stored or linked for the bare name follows this hole
                         page = logs[0][1].page
                         split_pages[page] += 1
                         suffix = f"-{split_pages[page]}" if split_pages[page] > 1 else ""
-                        bh.borehole_id = f"{doc_id}:p{page}{suffix}"
-                        bh.borehole_name = f"unnamed sheet, {doc_id} p{page}{suffix}"
+                        if naming == "unnamed":
+                            bh.borehole_id = f"{doc_id}:p{page}{suffix}"
+                            bh.borehole_name = f"unnamed sheet, {doc_id} p{page}{suffix}"
+                        else:
+                            bh.borehole_id = f"{doc_id}:{id_key(bh.borehole_name)}-p{page}{suffix}"
+                            bh.borehole_name = f"{bh.borehole_name}, p{page}{suffix}"
                     bh.issues += findings
                     built[group].append((bh, unreadable, page_texts))
                     doc_records.append(bh)
@@ -784,8 +981,10 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
         if other is None:
             kept[key] = bh
             continue
-        # The better-checked record wins; the layer count only breaks ties (more layers can mean over-segmented).
-        better = lambda b: (b.confidence or 0.0, len(b.layers))
+        # A record with all its sheets wins over a fragment, then the better-checked one; the layer count only
+        # breaks ties (more layers can mean over-segmented).
+        better = lambda b: (not any(i.startswith("missing sheets") for i in b.issues), b.confidence or 0.0,
+                            len(b.layers))
         richer, poorer = (bh, other) if better(bh) > better(other) else (other, bh)
         richer.sources = list({(s.file, s.page): s for s in richer.sources + poorer.sources}.values())
         # Lab sheets are often in one of the documents only.
