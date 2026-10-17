@@ -151,8 +151,8 @@ def test_holes_group_by_document_labelled_with_their_most_frequent_project(clien
         store.save_borehole(con, bh)
     con.close()
     groups = {g["group"]: g for g in client.get("/api/boreholes").json()["facets"]["groups"]}
-    assert {g: (v["count"], v["project"], v["project_names"]) for g, v in groups.items()} == {
-        "folder": (4, "Harbour tunnel", 2), "q": (3, None, 0)}
+    assert {g: (v["count"], v["project"]) for g, v in groups.items()} == {
+        "folder": (4, "Harbour tunnel"), "q": (3, None)}
     assert groups["q"]["bbox"] == [-179.5, 10.0, 179.5, 48.0]
     assert ids(client.get("/api/boreholes", params={"group": "folder"})) == ["folder__a:D", "folder__b:E",
                                                                              "folder__b:F", "folder__b:G"]

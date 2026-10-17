@@ -1,4 +1,4 @@
-// Mirrors schema/borehole.py (only the fields the UI uses).
+// Mirrors schema/borehole.py and the responses in api/models.py (only the fields the UI uses).
 
 export type Lithology = string
 
@@ -152,7 +152,6 @@ export interface BoreholeSummary {
   depth: number | null
   elevation: number | null
   loc_method: string | null
-  n_layers: number
   strip: [number, number, Lithology][] | null
   ground: Ground | null
   score: number | null
