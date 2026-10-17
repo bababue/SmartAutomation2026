@@ -310,7 +310,12 @@ export default function App() {
           {uploadNote && <p className="upload-note" role="status" title={uploadNote}>{uploadNote}</p>}
           {stats && (
             <p className="stats">
-              <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes,{' '}
+              <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes
+              {stats.boreholes > stats.located && (
+                <span className="muted" title="Not on the map or in the list until a reviewer sets the position">
+                  {' '}({(stats.boreholes - stats.located).toLocaleString('en')} without position)
+                </span>
+              )},{' '}
               <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> released
             </p>
           )}
