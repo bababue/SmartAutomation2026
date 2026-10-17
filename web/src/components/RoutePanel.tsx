@@ -64,7 +64,7 @@ export function RoutePanel({ name, project, route, draft, candidates, selectedId
             </> : <>
               <button className="btn btn-primary" onClick={onStartDrawing}>{route ? 'Redraw' : 'Draw on map'}</button>
               <button className="btn" onClick={() => fileInput.current?.click()}>Import GeoJSON</button>
-              <input ref={fileInput} className="visually-hidden" type="file" accept=".geojson,.json,application/geo+json,application/json"
+              <input ref={fileInput} className="visually-hidden" tabIndex={-1} type="file" accept=".geojson,.json,application/geo+json,application/json"
                 onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file) }}
                 aria-label="Import tunnel route GeoJSON" />
             </>}

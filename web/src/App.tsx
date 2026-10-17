@@ -391,7 +391,7 @@ export default function App() {
         </label>
         <div className="topbar-side topbar-end">
           <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx,.txt,.xlsx,.xlsm,.zip" multiple
-            className="visually-hidden" onChange={onFileChosen} aria-label="Upload borehole logs" />
+            className="visually-hidden" tabIndex={-1} onChange={onFileChosen} aria-label="Upload borehole logs" />
           <UploadQueue batches={batches} usage={usage} onCancel={cancel} onDismiss={dismiss} />
           {stats && <p className="stats">
             <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}/{stats.boreholes.toLocaleString('en')}</strong>{' '}
