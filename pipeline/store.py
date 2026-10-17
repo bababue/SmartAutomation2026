@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS review_events (
 CREATE TABLE IF NOT EXISTS corrections (
     id INTEGER PRIMARY KEY, scope TEXT, target TEXT, kind TEXT, payload TEXT, reviewer TEXT, comment TEXT, at TEXT
 );
+-- What reviewers taught the system, beyond single records. scope_type: document | project | region | global;
+-- source: derived (from corrections) | review (entered from the documents) | external (phone, e-mail, site).
+CREATE TABLE IF NOT EXISTS knowledge (
+    id INTEGER PRIMARY KEY, scope_type TEXT, scope_value TEXT, kind TEXT, payload TEXT, source TEXT, note TEXT,
+    created_by TEXT, created_at TEXT, confirmations INTEGER DEFAULT 1, active INTEGER DEFAULT 1
+);
 """
 
 HUMAN = (ReviewStatus.approved, ReviewStatus.rejected)
@@ -226,6 +232,39 @@ def group_borehole_ids(con: sqlite3.Connection, group: str) -> list[str]:
         "SELECT id FROM boreholes WHERE doc_id = ? OR doc_id LIKE ? ESCAPE '\\' ORDER BY id",
         (group, group.replace("_", "\\_").replace("%", "\\%") + "\\_\\_%"),
     )]
+
+
+def add_knowledge(con: sqlite3.Connection, scope_type: str, scope_value: str | None, kind: str, payload: dict,
+                  source: str, note: str | None, created_by: str) -> dict:
+    """Store a knowledge item; the same derived fact again only counts as one more confirmation."""
+    key = as_json(payload)
+    row = con.execute(
+        "SELECT id FROM knowledge WHERE active = 1 AND scope_type = ? AND IFNULL(scope_value, '') = ? AND kind = ? "
+        "AND payload = ?", (scope_type, scope_value or "", kind, key),
+    ).fetchone()
+    if row:
+        con.execute("UPDATE knowledge SET confirmations = confirmations + 1 WHERE id = ?", (row["id"],))
+        return knowledge_item(con, row["id"])
+    cur = con.execute(
+        "INSERT INTO knowledge (scope_type, scope_value, kind, payload, source, note, created_by, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (scope_type, scope_value, kind, key, source, note, created_by, datetime.now(timezone.utc).isoformat()),
+    )
+    return knowledge_item(con, cur.lastrowid)
+
+
+def knowledge_item(con: sqlite3.Connection, item_id: int) -> dict:
+    row = con.execute("SELECT * FROM knowledge WHERE id = ?", (item_id,)).fetchone()
+    return {**dict(row), "payload": json.loads(row["payload"])} if row else {}
+
+
+def active_knowledge(con: sqlite3.Connection) -> list[dict]:
+    return [{**dict(r), "payload": json.loads(r["payload"])}
+            for r in con.execute("SELECT * FROM knowledge WHERE active = 1 ORDER BY id")]
+
+
+def deactivate_knowledge(con: sqlite3.Connection, item_id: int) -> bool:
+    return con.execute("UPDATE knowledge SET active = 0 WHERE id = ?", (item_id,)).rowcount > 0
 
 
 def review_log(con: sqlite3.Connection, borehole_id: str) -> list[dict]:

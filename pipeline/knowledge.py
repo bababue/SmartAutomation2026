@@ -1,0 +1,244 @@
+"""What reviewers teach the system beyond single records, kept as data instead of code.
+
+Knowledge items have a scope (document, project, region = country, global), a kind and a source:
+- derived:  learned from corrections, e.g. a confirmed coordinate system counts for the country
+- review:   entered by a reviewer from the documents
+- external: told by someone (phone call, e-mail, site knowledge); kept apart so exports can say so
+
+Kinds:
+- crs:  {"epsg": 32639}                      – coordinate system used in this scope
+- term: {"term": "caliche", "primary": "limestone"} – a local word and its DIN 4023 class
+- note: {"text": "..."}                      – anything else; shown to reviewers and to the extraction model
+
+Local grids are not stored: they are fitted on every run from the positions reviewers set by hand
+in the same document (2-D Helmert, affine from four points), so they improve with every correction.
+
+Order on every run: extraction → knowledge → reviewer corrections (a person's correction wins).
+Learned values stay suggestions (position confidence below the release threshold) until confirmed
+three times.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+import sqlite3
+
+from pyproj import Transformer
+
+from schema.borehole import Borehole, GeorefMethod, Lithology
+
+from . import corrections, store
+from .georef import _apply, _pairs, haversine_km, parse_tokens, resolve_with
+
+SCOPES = ("document", "project", "region", "global")
+KINDS = ("crs", "term", "note")
+CONFIRMED = 3  # confirmations before a learned coordinate system counts as stated
+
+
+def norm_project(name: str | None) -> str | None:
+    return re.sub(r"\W+", "", name.lower()) or None if name else None
+
+
+def scope_keys(bh: Borehole) -> dict[str, str | None]:
+    return {"document": store.document_group(bh.borehole_id), "project": norm_project(bh.project_name),
+            "region": (bh.location.country or "").upper() or None, "global": None}
+
+
+def applicable(items: list[dict], bh: Borehole) -> list[dict]:
+    keys = scope_keys(bh)
+    return [k for k in items if k["scope_type"] == "global" or
+            (keys.get(k["scope_type"]) is not None and k["scope_value"] == keys[k["scope_type"]])]
+
+
+# --- local grids from reviewer positions -----------------------------------------------------------
+
+def printed_pair(coords_raw: str | None) -> tuple[float, float] | None:
+    """The two printed numbers as (easting-like, northing-like) by their labels, else in printed order."""
+    if not coords_raw:
+        return None
+    tokens = [t for t in parse_tokens(coords_raw) if t.values]
+    pairs = _pairs(tokens)
+    if not pairs:
+        return None
+    north, east, _ = pairs[0]
+    return east.values[0], north.values[0]
+
+
+def _solve3(m: list[list[float]], v: list[float]) -> list[float]:
+    """Gaussian elimination for a 3x3 system (normal equations of the affine fit)."""
+    a = [row[:] + [x] for row, x in zip(m, v)]
+    for i in range(3):
+        pivot = max(range(i, 3), key=lambda r: abs(a[r][i]))
+        a[i], a[pivot] = a[pivot], a[i]
+        if abs(a[i][i]) < 1e-12:
+            raise ValueError("degenerate control points")
+        for r in range(3):
+            if r != i:
+                f = a[r][i] / a[i][i]
+                a[r] = [x - f * y for x, y in zip(a[r], a[i])]
+    return [a[i][3] / a[i][i] for i in range(3)]
+
+
+def _helmert(ab: list[tuple[float, float]], xy: list[tuple[float, float]]) -> list[float]:
+    """Similarity transform X = p a - q b + tx, Y = q a + p b + ty (closed-form least squares)."""
+    n = len(ab)
+    ma, mb = sum(a for a, _ in ab) / n, sum(b for _, b in ab) / n
+    mx, my = sum(x for x, _ in xy) / n, sum(y for _, y in xy) / n
+    den = sum((a - ma) ** 2 + (b - mb) ** 2 for a, b in ab)
+    if den < 1e-9:
+        raise ValueError("control points coincide")
+    p = sum((a - ma) * (x - mx) + (b - mb) * (y - my) for (a, b), (x, y) in zip(ab, xy)) / den
+    q = sum((a - ma) * (y - my) - (b - mb) * (x - mx) for (a, b), (x, y) in zip(ab, xy)) / den
+    return [p, -q, mx - p * ma + q * mb, q, p, my - q * ma - p * mb]
+
+
+def _affine(ab: list[tuple[float, float]], xy: list[tuple[float, float]]) -> list[float]:
+    rows = [(a, b, 1.0) for a, b in ab]
+    m = [[sum(r[i] * r[j] for r in rows) for j in range(3)] for i in range(3)]
+    cx = _solve3(m, [sum(r[i] * x for r, (x, _) in zip(rows, xy)) for i in range(3)])
+    cy = _solve3(m, [sum(r[i] * y for r, (_, y) in zip(rows, xy)) for i in range(3)])
+    return [*cx, *cy]
+
+
+def fit_grid(points: list[tuple[tuple[float, float], tuple[float, float]]]) -> dict | None:
+    """Fit printed (a, b) → WGS84 from control points: Helmert, affine from four points. Tries both
+    axis orders; returns parameters, RMS residual in metres and point count, or None if inconsistent."""
+    if len(points) < 2:
+        return None
+    lat0 = sum(p[1][0] for p in points) / len(points)
+    lon0 = sum(p[1][1] for p in points) / len(points)
+    local = f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +datum=WGS84 +units=m"
+    to_local = Transformer.from_crs(4326, local, always_xy=True)
+    xy = [to_local.transform(lon, lat) for _, (lat, lon) in points]
+    best = None
+    for swap in (False, True):
+        ab = [(b, a) if swap else (a, b) for (a, b), _ in points]
+        try:
+            c = _affine(ab, xy) if len(points) >= 4 else _helmert(ab, xy)
+        except ValueError:
+            continue
+        residuals = [(c[0] * a + c[1] * b + c[2] - x) ** 2 + (c[3] * a + c[4] * b + c[5] - y) ** 2
+                     for (a, b), (x, y) in zip(ab, xy)]
+        rms = math.sqrt(sum(residuals) / len(residuals))
+        if best is None or rms < best["rms_m"]:
+            best = {"swap": swap, "params": c, "rms_m": rms, "n": len(points), "lat0": lat0, "lon0": lon0}
+    return best if best and best["rms_m"] <= 50 else None
+
+
+def grid_position(grid: dict, pair: tuple[float, float]) -> tuple[float, float]:
+    a, b = (pair[1], pair[0]) if grid["swap"] else pair
+    c = grid["params"]
+    x, y = c[0] * a + c[1] * b + c[2], c[3] * a + c[4] * b + c[5]
+    local = f"+proj=aeqd +lat_0={grid['lat0']} +lon_0={grid['lon0']} +datum=WGS84 +units=m"
+    lon, lat = Transformer.from_crs(local, 4326, always_xy=True).transform(x, y)
+    return lat, lon
+
+
+def document_grids(con: sqlite3.Connection, boreholes: list[Borehole]) -> dict[str, dict]:
+    """One grid per document group, from the holes a reviewer positioned by hand."""
+    by_id = {bh.borehole_id: bh for bh in boreholes}
+    points: dict[str, list] = {}
+    for row in con.execute("SELECT target, payload FROM corrections WHERE scope = 'borehole' AND kind = 'position' "
+                           "ORDER BY id"):
+        bh = by_id.get(row["target"])
+        pair = printed_pair(bh.location.coords_raw) if bh else None
+        if pair:
+            payload = json.loads(row["payload"])
+            points.setdefault(store.document_group(row["target"]), {})[row["target"]] = (pair, (payload["lat"], payload["lon"]))
+    return {g: grid for g, pts in points.items() if (grid := fit_grid(list(pts.values())))}
+
+
+# --- applying knowledge ------------------------------------------------------------------------------
+
+def _settle_position(bh: Borehole) -> None:
+    bh.issues = [i for i in bh.issues if not i.startswith(corrections.GEOREF_ISSUES)
+                 and not corrections.GEOREF_UNREADABLE.search(i)]
+
+
+def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str]:
+    """Apply what applies to this record; returns notes for its findings."""
+    notes: list[str] = []
+    loc = bh.location
+    doubtful = loc.method != GeorefMethod.manual and (loc.confidence or 0) < 0.9 and loc.coords_raw
+    if doubtful:
+        crs_items = sorted((k for k in items if k["kind"] == "crs"), key=lambda k: -k["confirmations"])
+        for k in crs_items:
+            epsg = int(k["payload"]["epsg"])
+            near = (loc.lat, loc.lon) if loc.lat is not None else None
+            c = resolve_with(loc.coords_raw, epsg, near)
+            # The learned system must land near where the record already is (inferred CRS or named place).
+            if c is None or (near and haversine_km(c.lat, c.lon, *near) > max(25.0, (loc.accuracy_m or 0) / 1000 * 2)):
+                continue
+            _apply(loc, c, loc.method if loc.method == GeorefMethod.linked_table else GeorefMethod.stated_coordinates)
+            loc.crs_candidates, loc.accuracy_m = [], 10.0
+            loc.confidence = 0.9 if k["confirmations"] >= CONFIRMED else 0.8
+            _settle_position(bh)
+            notes.append(f"coordinate system from reviewer knowledge: EPSG:{epsg} "
+                         f"({k['confirmations']} confirmation(s), {k['scope_type']})")
+            break
+    pair = printed_pair(loc.coords_raw)
+    if grid and pair and loc.method == GeorefMethod.geocoded_place:
+        lat, lon = grid_position(grid, pair)
+        if loc.lat is None or haversine_km(lat, lon, loc.lat, loc.lon) <= 50:
+            loc.lat, loc.lon, loc.method = round(lat, 7), round(lon, 7), GeorefMethod.stated_coordinates
+            loc.crs_epsg, loc.crs_candidates = None, []
+            loc.crs_proj = f"local grid fitted to {grid['n']} reviewer positions (RMS {grid['rms_m']:.1f} m)"
+            loc.accuracy_m = max(grid["rms_m"], 5.0)
+            loc.confidence = 0.9 if grid["n"] >= 3 and grid["rms_m"] <= 10 else 0.8
+            _settle_position(bh)
+            notes.append(f"position from a local grid fitted to {grid['n']} reviewer positions "
+                         f"(RMS {grid['rms_m']:.1f} m)")
+    for k in items:
+        if k["kind"] != "term":
+            continue
+        term, target = k["payload"]["term"], Lithology(k["payload"]["primary"])
+        pattern = re.compile(rf"(?<!\w){re.escape(term)}(?!\w)", re.I)
+        for layer in bh.layers:
+            if layer.primary != target and pattern.search(layer.description_original):
+                layer.primary = target
+                notes.append(f"lithology of layer {layer.top_m:g}–{layer.bottom_m:g} m from reviewer knowledge: "
+                             f"'{term}' → {target.value}")
+    return notes
+
+
+def apply_all(con: sqlite3.Connection, boreholes: list[Borehole]) -> None:
+    """Knowledge on freshly assembled records (before the reviewer corrections are re-applied)."""
+    items = store.active_knowledge(con)
+    grids = document_grids(con, boreholes)
+    if not items and not grids:
+        return
+    for bh in boreholes:
+        notes = apply(bh, applicable(items, bh), grids.get(store.document_group(bh.borehole_id)))
+        if notes:
+            bh.issues = list(dict.fromkeys(bh.issues + notes))
+            corrections.rescore(bh)
+
+
+def prompt_context(con: sqlite3.Connection, doc_id: str) -> str:
+    """Known facts for the extraction of a document's new pages ('' if none). Region and project come
+    from earlier records of the document, if any."""
+    group = doc_id.split("__")[0]
+    rows = con.execute("SELECT country, project FROM boreholes WHERE doc_id = ? OR doc_id LIKE ? ESCAPE '\\'",
+                       (group, group.replace("_", "\\_") + "\\_\\_%")).fetchall()
+    keys = {"document": group, "global": None,
+            "region": {(r["country"] or "").upper() for r in rows if r["country"]},
+            "project": {norm_project(r["project"]) for r in rows if r["project"]}}
+    lines = []
+    for k in store.active_knowledge(con):
+        scope = keys.get(k["scope_type"])
+        hit = k["scope_type"] == "global" or (k["scope_value"] in scope if isinstance(scope, set) else k["scope_value"] == scope)
+        if not hit:
+            continue
+        p, origin = k["payload"], "told by someone" if k["source"] == "external" else "from earlier reviews"
+        if k["kind"] == "crs":
+            lines.append(f"- Coordinates in this {k['scope_type']} have been EPSG:{p['epsg']} ({origin}).")
+        elif k["kind"] == "term":
+            lines.append(f"- '{p['term']}' means the DIN 4023 class {p['primary']} ({origin}).")
+        elif k["kind"] == "note":
+            lines.append(f"- {p['text']} ({origin})")
+    if not lines:
+        return ""
+    return ("Known from reviewers for this document or region (use only if the page agrees; what is printed on the "
+            "page wins; do not copy values that are not printed):\n" + "\n".join(lines[:15]))

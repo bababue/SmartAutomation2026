@@ -139,3 +139,31 @@ def test_crs_groups_offer_one_confirmation_per_document(client):
     r = post(client, groups[0]["borehole_id"], kind="crs", scope="document", payload={"epsg": 28356})
     assert r.json()["updated"] == ["demo__a:BH1", "demo__b:BH2"]
     assert client.get("/api/review-queue/crs-groups").json() == []
+
+
+def test_knowledge_api(client, monkeypatch):
+    import api.main as api
+    started = []
+    monkeypatch.setattr(api, "_rebuild_in_background", lambda docs: started.append(sorted(docs)) or len(docs))
+    r = client.post("/api/knowledge", json={"borehole_id": "demo__a:BH1", "scope_type": "document", "kind": "term",
+                                             "payload": {"term": "caliche", "primary": "limestone"},
+                                             "source": "external", "note": "phone call with the driller", "reviewer": "Ana"})
+    assert r.status_code == 200, r.text
+    assert r.json()["item"]["scope_value"] == "demo" and started == [["demo__a", "demo__b"]]
+    listed = client.get("/api/knowledge", params={"borehole_id": "demo__b:BH2"}).json()
+    assert [k["kind"] for k in listed["items"]] == ["term"] and listed["scopes"]["document"] == "demo"
+    assert client.get("/api/knowledge", params={"borehole_id": "other:BH3"}).json()["items"] == []
+    bad = {"borehole_id": "demo__a:BH1", "scope_type": "document", "kind": "crs", "payload": {"epsg": 1}, "reviewer": "Ana"}
+    assert client.post("/api/knowledge", json=bad).status_code == 422
+    item_id = r.json()["item"]["id"]
+    assert client.delete(f"/api/knowledge/{item_id}").status_code == 200
+    assert client.get("/api/knowledge").json()["items"] == []
+
+
+def test_crs_confirmation_becomes_knowledge_for_the_country(client):
+    con = store.connect()
+    con.execute("UPDATE boreholes SET data = json_set(data, '$.location.country', 'AU')")
+    con.commit()
+    post(client, "demo__a:BH1", kind="crs", scope="document", payload={"epsg": 28356})
+    items = client.get("/api/knowledge").json()["items"]
+    assert [(k["scope_type"], k["scope_value"], k["kind"], k["payload"]) for k in items] == [("region", "AU", "crs", {"epsg": 28356})]

@@ -355,11 +355,16 @@ def classify_page(page: PageImage) -> PageClassification:
     return _cached("classify", page, _classify_key(page), PageClassification, produce)
 
 
-def extract_page(page: PageImage, kind: str, context: str = "") -> PageExtraction:
+def extract_page(page: PageImage, kind: str, context: str = "", knowledge: str = "") -> PageExtraction:
+    """knowledge: what reviewers taught about this document or region. Deliberately not part of the cache
+    key: it helps the first extraction of a page, and new knowledge must not trigger re-extracting
+    everything (it is also applied in code on every run, see pipeline/knowledge.py)."""
     image = config.PAGES_DIR / page.image
     hint = f"Page type (from a quick pre-check): {kind}\n\nText layer (may be empty or scrambled):\n{page.text[:8000]}"
     if context:
         hint += f"\n\nPrevious sheet of this document (context only):\n{context}"
+    if knowledge:
+        hint += f"\n\n{knowledge}"
     if config.LLM_BACKEND == "claude-code":
         produce = lambda: _call_claude_code(config.EXTRACT_MODEL, EXTRACT_SYSTEM, image, hint, PageExtraction)
     else:

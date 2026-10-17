@@ -18,7 +18,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import config, corrections, evaluate, ingest, llm, store
+from . import config, corrections, evaluate, ingest, knowledge, llm, store
 from .assemble import LOG_KINDS, PageResult, assemble, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
@@ -118,11 +118,13 @@ def _walk(chain, classes, extract):
     return results, failed
 
 
-def _extract(todo, classes):
+def _extract(todo, classes, con=None):
     chains = _chains(todo, classes)
+    hints = {doc_id: knowledge.prompt_context(con, doc_id) for doc_id in {p.doc_id for p in todo}} if con else {}
+    extract = lambda p, kind, context: llm.extract_page(p, kind, context, hints.get(p.doc_id, ""))
     results, failed, done = {}, [], 0
     with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as pool:
-        for fut in as_completed([pool.submit(_walk, ch, classes, llm.extract_page) for ch in chains]):
+        for fut in as_completed([pool.submit(_walk, ch, classes, extract) for ch in chains]):
             r, f = fut.result()
             results.update(r)
             failed += f
@@ -175,7 +177,7 @@ def cmd_run(args) -> None:
 
     todo = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
     print(f"Extract {len(todo)} log/coordinate pages")
-    extractions = _extract(todo, classes)
+    extractions = _extract(todo, classes, con)
     lab_pages = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"]
     if lab_pages:
         print(f"Extract {len(lab_pages)} lab result pages")
@@ -214,7 +216,8 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     ]
     boreholes = assemble(results)
     extracted = {bh.borehole_id: store.extracted_summary(bh) for bh in boreholes}  # before fixes, for `eval`
-    for bh in boreholes:  # reviewer fixes survive re-extraction
+    knowledge.apply_all(con, boreholes)  # what reviewers taught beyond single records
+    for bh in boreholes:  # reviewer fixes survive re-extraction, and win over learned knowledge
         corrections.apply(bh, store.corrections_for(con, bh.borehole_id))
     if dry_run:
         _report(boreholes, len(done))
@@ -246,11 +249,15 @@ def _report(boreholes, n_docs: int) -> None:
 
 def cmd_rebuild(args) -> None:
     """Re-run assembly and georeferencing from cached LLM output only."""
+    rebuild(_select(args), args.max_pages, args.dry_run)
+
+
+def rebuild(docs, max_pages: int | None = None, dry_run: bool = False) -> None:
+    """Assemble, apply knowledge and corrections, and store, from the cache only (no API calls)."""
     con = store.connect()
-    docs = _select(args)
     rendered = {d.doc_id: ingest.render(d) for d in docs}
-    if args.max_pages:  # same page limit as the run that filled the cache
-        rendered = {doc_id: ps[: args.max_pages] for doc_id, ps in rendered.items()}
+    if max_pages:  # same page limit as the run that filled the cache
+        rendered = {doc_id: ps[: max_pages] for doc_id, ps in rendered.items()}
     classes, extractions = {}, {}
     for ps in rendered.values():
         for p in ps:
@@ -265,7 +272,7 @@ def cmd_rebuild(args) -> None:
             if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"
             and (x := llm.cached_lab_results(p)) is not None}
     print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")
-    _store(con, docs, rendered, classes, extractions, labs, dry_run=args.dry_run)
+    _store(con, docs, rendered, classes, extractions, labs, dry_run=dry_run)
 
 
 def main() -> None:

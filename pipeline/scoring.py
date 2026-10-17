@@ -23,7 +23,8 @@ BLOCKING = ("no layers extracted", "CRS ambiguous", "invalid interval", "non-fin
             "missing sheets")
 
 # Georeferencing doubts that explain a position confidence below the release threshold.
-GEOREF_DOUBTS = ("coordinate system inferred", "coordinate axes inferred", "coordinate notation or datum ambiguous")
+GEOREF_DOUBTS = ("coordinate system inferred", "coordinate axes inferred", "coordinate notation or datum ambiguous",
+                 "coordinate system from reviewer knowledge", "position from a local grid")
 
 STRUCTURAL = ("gap", "overlap", "invalid interval", "layers end at", "log starts at", "groundwater marked dry",
               "boundary inferred")
