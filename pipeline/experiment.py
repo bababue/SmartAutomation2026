@@ -126,19 +126,35 @@ def arm_scores(name: str, reference: dict[str, dict]) -> dict[str, evaluate.Scor
     return evaluate.compare(reference, current)
 
 
-def compare_arms(reference_path: Path = evaluate.REFERENCE_PATH) -> str:
+def arm_reference(name: str) -> dict[str, dict]:
+    """An arm's records in reference form, to measure agreement with it where nobody has checked the
+    documents yet. Hints only: agreeing with another model is not being right."""
+    path = arm_dir(name) / "boreholes.sqlite"
+    if not path.exists():
+        raise SystemExit(f"no results for arm {name!r}")
+    con = store.connect(path)
+    try:
+        return evaluate.current_entries(con)[0]
+    finally:
+        con.close()
+
+
+def compare_arms(reference_path: Path = evaluate.REFERENCE_PATH, against: str | None = None) -> str:
     names = arms()
     if not names:
         return "no experiment results yet: run `python -m pipeline experiment baseline` first"
     head = proxy_report(names)
-    reference = evaluate.load_reference(reference_path)
+    reference = arm_reference(against) if against else evaluate.load_reference(reference_path)
+    if not reference and against:
+        return "\n".join(head + [f"arm {against!r} has no records"])
     if not reference:
         return "\n".join(head + ["no reference yet: approve records in the review UI, then run "
                                  "`python -m pipeline eval snapshot`"])
     holdout = evaluate.load_holdout(reference_path)
     scores = {name: arm_scores(name, reference) for name in names}
     rule = "-" * len(evaluate.HEADER)
-    lines = head + ["against the reference:", "", evaluate.HEADER.replace(" " * 24, f"{'arm':<24}", 1), rule]
+    title = f"agreement with arm {against!r} (hints only, not accuracy):" if against else "against the reference:"
+    lines = head + [title, "", evaluate.HEADER.replace(" " * 24, f"{'arm':<24}", 1), rule]
     for name in names:
         lines.append(evaluate.line(name, evaluate.total(scores[name])))
         if holdout:

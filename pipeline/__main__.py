@@ -317,7 +317,7 @@ def cmd_experiment(args) -> None:
         print(f"edit {experiment.init(args.name)}, then run `python -m pipeline experiment run {args.name}`")
         return
     if args.action == "compare":
-        print(experiment.compare_arms())
+        print(experiment.compare_arms(against=args.against))
         return
     reference = evaluate.load_reference()
     if not args.doc and not reference:
@@ -441,6 +441,7 @@ def main() -> None:
     p.add_argument("name", nargs="?")
     p.add_argument("--doc", action="append", help="documents to use instead of the reference documents")
     p.add_argument("--yes", action="store_true", help="confirm the extraction cost")
+    p.add_argument("--against", metavar="ARM", help="compare: agreement with this arm instead of the reference")
     p.set_defaults(fn=cmd_experiment)
     args = parser.parse_args()
     args.fn(args)

@@ -177,6 +177,23 @@ echo "LLM_BACKEND=claude-code" >> .env
 To use another subscription than the CLI's default login, add `CLAUDE_CONFIG_DIR=~/.claude-other`
 (a profile directory logged in with that account) or `CLAUDE_CLI_TOKEN_FILE=~/path/to/token`.
 
+**Option C – other models (OpenRouter, or local with Ollama).** `LLM_BACKEND=openai` talks to any
+OpenAI-compatible chat API with the same prompts and schemas. Model names are the server's:
+
+```bash
+# local: brew install ollama; ollama pull qwen3-vl:8b-instruct
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve
+LLM_BACKEND=openai EXTRACT_MODEL=qwen3-vl:8b-instruct MAX_WORKERS=1 .venv/bin/python -m pipeline ...
+
+# OpenRouter: the cost of each call is stored with the cached answer
+LLM_BACKEND=openai OPENAI_BASE_URL=https://openrouter.ai/api/v1 OPENAI_API_KEY=sk-or-... \
+  EXTRACT_MODEL=anthropic/claude-sonnet-5.5 .venv/bin/python -m pipeline ...
+```
+
+Ollama's default context window can be smaller than the extraction needs: the prompt with its schema needs about
+10k plus the answer, hence `OLLAMA_CONTEXT_LENGTH`. A local server runs one request at a time, so
+`MAX_WORKERS=1` keeps the measured seconds per page free of queueing.
+
 ### 6. Process documents
 
 ```bash
@@ -302,7 +319,11 @@ A prompt change is tried on the reference documents before it becomes the next `
 Each arm has its own extraction cache (keyed by the prompt's hash, so an edited prompt never reuses pages) and a
 fresh database without corrections or knowledge, so the scores are the model's alone. Classifications and lab
 sheets come from the main cache. The main cache, database and review work are not touched. Model and effort
-follow `EXTRACT_MODEL` / `EXTRACT_EFFORT`, so the same command compares models.
+follow `EXTRACT_MODEL` / `EXTRACT_EFFORT`, so the same command compares models (with `LLM_BACKEND=openai`
+also models of other vendors). Each cached page records its duration and token usage.
+
+Without a reference, `experiment compare --against baseline` shows how far an arm agrees with the baseline
+(Opus). That is a hint, not accuracy: agreeing with another model is not being right.
 
 ## Configuration
 
@@ -311,7 +332,8 @@ Environment variables, read from the shell or from `.env`:
 | Variable | Default | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | – | API key for `LLM_BACKEND=api` |
-| `LLM_BACKEND` | `api` | `api` (Anthropic API) or `claude-code` (local `claude -p`) |
+| `LLM_BACKEND` | `api` | `api` (Anthropic API), `claude-code` (local `claude -p`) or `openai` (OpenAI-compatible API) |
+| `OPENAI_BASE_URL` / `OPENAI_API_KEY` | `http://localhost:11434/v1` / – | server and key for `LLM_BACKEND=openai` (e.g. OpenRouter) |
 | `CLAUDE_CLI` | `claude` | path to the Claude Code CLI |
 | `CLAUDE_CONFIG_DIR` | CLI default | profile directory for another subscription (CLI backend) |
 | `CLAUDE_CLI_TOKEN_FILE` | – | token file for another subscription (CLI backend) |
