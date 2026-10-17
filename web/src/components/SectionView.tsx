@@ -191,6 +191,14 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
   }
   const showTooltip = (event: ReactMouseEvent<SVGElement>, p: BoreholeSummary, layer?: NonNullable<BoreholeSummary['strip']>[number]) => {
     const content = tooltipContent(layer ? { ...p, layer_top: layer[0], layer_bottom: layer[1], layer_lithology: layer[2] } : p)
+    const elevation = p.elevation
+    if (layer && elevation != null) {
+      const line = document.createElement('div')
+      line.className = 'tip-line'
+      const level = (depth: number) => (elevation - depth).toLocaleString('en', { maximumFractionDigits: 1 })
+      line.textContent = `Level ${level(layer[0])} to ${level(layer[1])} m`
+      content.append(line)
+    }
     const position = routePositions.get(p.id)
     if (route && position) {
       const line = document.createElement('div')

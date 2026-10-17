@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Feature, GroupFacet } from '../types'
 import { STATUS_LABEL, scoreText } from '../review'
 import { CoreStrip } from './Profile'
@@ -19,6 +19,14 @@ const fmtDepth = (d: number | null) => (d == null ? '–' : `${d.toLocaleString(
 
 export function ResultList({ features, groups, activeGroup, onShowGroup, selectedId, onSelect, loading }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const selectedRef = useRef<HTMLButtonElement>(null)
+  const selectedGroup = features.find((feature) => feature.properties.id === selectedId)?.properties.grp
+  useEffect(() => {
+    if (loading || !selectedGroup) return
+    const button = selectedRef.current
+    button?.focus({ preventScroll: true })
+    button?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [selectedId, selectedGroup, loading])
   if (!loading && !features.length) {
     return (
       <div className="empty">
@@ -49,7 +57,7 @@ export function ResultList({ features, groups, activeGroup, onShowGroup, selecte
         const released = facet.get(group)?.released ?? items.filter((f) => f.properties.review_status.endsWith('approved')).length
         const share = Math.round((100 * released) / count)
         const project = facet.get(group)?.project
-        const open = !collapsed.has(group)
+        const open = group === selectedGroup || !collapsed.has(group)
         return (
           <li key={group} className="result-group">
             <div className="group-head">
@@ -72,6 +80,7 @@ export function ResultList({ features, groups, activeGroup, onShowGroup, selecte
                 {items.map(({ properties: p }) => (
                   <li key={p.id} className="result-item">
                     <button
+                      ref={p.id === selectedId ? selectedRef : undefined}
                       className={`result${p.id === selectedId ? ' result-selected' : ''}`}
                       onClick={() => onSelect(p.id)}
                       aria-current={p.id === selectedId}

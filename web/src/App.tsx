@@ -123,15 +123,15 @@ export default function App() {
     return next
   }), [])
 
-  // A route can select holes outside the currently loaded list page.
+  // Map selections and routes can refer to holes outside the currently loaded list page.
   useEffect(() => {
-    const missing = routeHoleIds.filter((id) => !known.has(id))
+    const missing = [...new Set([...routeHoleIds, ...(selectedId ? [selectedId] : [])])].filter((id) => !known.has(id))
     if (!missing.length) return
     const controller = new AbortController()
     fetchBoreholesById(missing, controller.signal).then((page) => remember(page.features))
       .catch((cause) => { if (cause.name !== 'AbortError') setError(`Could not load route boreholes (${cause.message}).`) })
     return () => controller.abort()
-  }, [routeHoleIds, known, remember])
+  }, [routeHoleIds, selectedId, known, remember])
 
   // Page and selection changes get a history entry, so Back closes a borehole or leaves the queue.
   useEffect(() => {
@@ -265,6 +265,11 @@ export default function App() {
     () => routeHoleIds.map((id) => known.get(id)).filter((f): f is NonNullable<typeof f> => !!f),
     [routeHoleIds, known],
   )
+  const listFeatures = useMemo(() => {
+    const selected = selectedId ? known.get(selectedId) : null
+    return selected && !data.features.some((feature) => feature.properties.id === selectedId)
+      ? [selected, ...data.features] : data.features
+  }, [data.features, known, selectedId])
   const activeRoute = routeActive ? route : null
   const nearby = useMemo(() => activeRoute ? nearbyBoreholes(routePoints.features, activeRoute) : [], [routePoints, activeRoute])
   const routeCandidates = useMemo(() => {
@@ -402,7 +407,7 @@ export default function App() {
           <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
         </div>
         {error && <p className="error" role="alert">{error}</p>}
-        <ResultList features={data.features} groups={data.facets?.groups ?? []} activeGroup={filters.group}
+        <ResultList features={listFeatures} groups={data.facets?.groups ?? []} activeGroup={filters.group}
           onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })) }}
           selectedId={selectedId} onSelect={setSelectedId} loading={loading} />
         {!loading && data.total != null && data.features.length < data.total && (
@@ -415,7 +420,8 @@ export default function App() {
       <main className={`map-wrap${activeRoute && routeFeatures.length ? ' map-wrap-section' : ''}`}>
         <MapView data={points} route={activeRoute} routeDraft={routeDraft}
           onRoutePoint={(point) => setRouteDraft((draft) => draft ? [...draft, point] : draft)}
-          selectedId={selectedId} focus={focus} onSelect={setSelectedId} sheetWidth={detail ? sheetWidth : null} dark={dark} columns3d={columns3d} />
+          selectedId={selectedId} focus={focus} onSelect={(id) => { setSelectedId(id); setListOpen(true) }}
+          sheetWidth={detail ? sheetWidth : null} dark={dark} columns3d={columns3d} />
         {!routeActive && view === 'map' && <button className="btn route-open" onClick={() => {
           if (closedRouteHoleIds.current.length) setRouteHoleIds(closedRouteHoleIds.current)
           setRouteActive(true)
