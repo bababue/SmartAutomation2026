@@ -143,7 +143,7 @@ def _extract(todo, classes, con=None):
                 print(f"  extract: {done}/{len(todo)}", flush=True)
     for item, exc in failed:
         print(f"  ! extract failed {item.doc_id} p{item.page}: {type(exc).__name__}: {exc}", file=sys.stderr)
-    return results
+    return results, len(failed)
 
 
 def cmd_ingest(args) -> None:
@@ -190,7 +190,7 @@ def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = 
 
     todo = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
     print(f"Extract {len(todo)} log/coordinate pages")
-    extractions = _extract(todo, classes, con)
+    extractions, _ = _extract(todo, classes, con)
     lab_pages = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"]
     if lab_pages:
         print(f"Extract {len(lab_pages)} lab result pages")
@@ -387,8 +387,12 @@ def cmd_experiment(args) -> None:
                      f"≈ ${len(new) * _page_cost(COST_EXTRACT, config.EXTRACT_MODEL):.2f} on the API or subscription quota. Re-run with --yes.")
         if new:
             _require_credentials()
+        extracted, failed = _extract(todo, classes)  # no DB: no reviewer knowledge in the prompt
+        # A partial arm would score its failed pages as missing records; its successful pages stay cached.
+        if failed:
+            sys.exit(f"{failed} of {len(todo)} pages failed: arm {name} left unchanged, re-run to retry them")
         con = experiment.fresh_db(name)
-        extractions = kept | _extract(todo, classes, con)  # empty DB: no reviewer knowledge in the prompt
+        extractions = kept | extracted
     _store(con, docs, rendered, classes, extractions, labs)
     experiment.save_proxy(name, experiment.proxy(con, docs, rendered))
     con.close()
