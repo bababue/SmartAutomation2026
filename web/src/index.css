@@ -278,6 +278,7 @@ button, input, select { font: inherit; color: inherit; }
 .queue { position: absolute; inset: 0; overflow: auto; background: var(--panel); padding: 22px 28px 40px; z-index: 2; }
 .queue-head h2 { margin: 0 0 4px; font-size: 24px; }
 .queue-head p { margin: 0 0 18px; max-width: 72ch; }
+.queue-filter { display: flex; align-items: center; gap: 6px; margin: -6px 0 18px; font-size: 14px; color: var(--ink); }
 .queue-table { width: 100%; max-width: 1100px; border-collapse: collapse; font-size: 14px; }
 .queue-table th { text-align: left; font-weight: 500; color: var(--graphite); border-bottom: 1px solid var(--grid); padding: 6px 8px; }
 .queue-table td { border-bottom: 1px solid #eceeeb; padding: 9px 8px; vertical-align: top; }

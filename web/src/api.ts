@@ -54,8 +54,8 @@ const enc = (id: string) => encodeURIComponent(id)
 
 export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>(`/api/boreholes/${enc(id)}/detail`, { signal })
 export const fetchStats = () => request<Stats>('/api/stats')
-export async function fetchQueue(signal?: AbortSignal, limit = 200): Promise<{ items: QueueItem[]; total: number }> {
-  const res = await fetch(`/api/review-queue?limit=${limit}`, { signal })
+export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200): Promise<{ items: QueueItem[]; total: number }> {
+  const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}`, { signal })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   const items = (await res.json()) as QueueItem[]
   return { items, total: Number(res.headers.get('X-Total-Count') ?? items.length) }

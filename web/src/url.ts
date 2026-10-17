@@ -7,6 +7,8 @@ export interface UrlState {
   selectedId: string | null
   sectionIds: string[]
   filters: Filters
+  /** Review queue: only records with a blocking finding. */
+  blockingOnly: boolean
 }
 
 const STATUSES: StatusFilter[] = ['all', 'released', 'pending', 'rejected']
@@ -24,6 +26,7 @@ export function readUrl(search: string): UrlState {
     view: p.get('view') === 'review' ? 'review' : 'map',
     selectedId: p.get('borehole'),
     sectionIds: p.getAll('section'),
+    blockingOnly: p.get('blocking') === '1',
     filters: {
       q: p.get('q') ?? '',
       lithology: p.getAll('lith'),
@@ -43,6 +46,7 @@ export function writeUrl(s: UrlState): string {
   if (s.view !== 'map') p.set('view', s.view)
   if (s.selectedId) p.set('borehole', s.selectedId)
   s.sectionIds.forEach((id) => p.append('section', id))
+  if (s.blockingOnly) p.set('blocking', '1')
   if (f.q.trim()) p.set('q', f.q.trim())
   f.lithology.forEach((l) => p.append('lith', l))
   if (f.depthFrom != null) p.set('from', String(f.depthFrom))

@@ -79,3 +79,13 @@ def test_review_queue_pages(client):
     r = client.get("/api/review-queue?limit=1")
     assert r.status_code == 200 and int(r.headers["X-Total-Count"]) >= len(r.json())
     assert client.get("/api/corrections/orphans").json() == []
+
+
+def test_review_queue_blocking_only(client):
+    con = store.connect()
+    store.save_borehole(con, hole("q:G", 47.0, 8.0, [(0, 5, "sand"), (7, 10, "clay")]))  # gap: blocking
+    con.close()
+    every = {item["id"] for item in client.get("/api/review-queue").json()}
+    r = client.get("/api/review-queue?blocking=true")
+    assert [item["id"] for item in r.json()] == ["q:G"] and r.headers["X-Total-Count"] == "1"
+    assert "q:G" in every

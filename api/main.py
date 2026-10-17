@@ -191,14 +191,18 @@ def list_boreholes(
 
 
 @app.get("/api/review-queue")
-def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0)):
+def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
+                 blocking: bool = Query(False, description="only records with a blocking finding")):
     """Everything waiting for a human, weakest first (also records without a position), a page at a time.
     The total is in the X-Total-Count header so the response stays a plain list."""
-    total = con.execute("SELECT COUNT(*) FROM boreholes WHERE review_status = 'pending_review'").fetchone()[0]
+    where = "review_status = 'pending_review'" + (
+        " AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = boreholes.rid AND f.severity = 'blocking')"
+        if blocking else "")
+    total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}").fetchone()[0]
     rows = con.execute(
         "SELECT id, name, project, location_name, country, score, confidence, loc_confidence, loc_method, "
         "n_layers, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file, reasons "
-        "FROM boreholes WHERE review_status = 'pending_review' ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
+        f"FROM boreholes WHERE {where} ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
         (limit, offset),
     ).fetchall()
     items = [{**{k: r[k] for k in r.keys() if k != "reasons"}, "reasons": json.loads(r["reasons"] or "[]")}

@@ -30,6 +30,7 @@ export default function App() {
   const [detail, setDetail] = useState<Detail | null>(null)
   const [refresh, setRefresh] = useState(0) // bump after a review decision
   const [sectionIds, setSectionIds] = useState<string[]>(initial.sectionIds)
+  const [blockingOnly, setBlockingOnly] = useState(initial.blockingOnly)
   const [uploadJobId, setUploadJobId] = useState<string | null>(null)
   const [uploadNote, setUploadNote] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -55,12 +56,12 @@ export default function App() {
 
   // Page and selection changes get a history entry, so Back closes a borehole or leaves the queue.
   useEffect(() => {
-    const url = writeUrl({ view, selectedId, sectionIds, filters })
+    const url = writeUrl({ view, selectedId, sectionIds, filters, blockingOnly })
     const shown = readUrl(window.location.search)
     if (url === (window.location.search || window.location.pathname)) return
     if (shown.view !== view || shown.selectedId !== selectedId) window.history.pushState(null, '', url)
     else window.history.replaceState(null, '', url)
-  }, [view, selectedId, sectionIds, filters])
+  }, [view, selectedId, sectionIds, filters, blockingOnly])
 
   useEffect(() => {
     const onPop = () => {
@@ -68,6 +69,7 @@ export default function App() {
       setView(s.view)
       setSelectedId(s.selectedId)
       setSectionIds(s.sectionIds)
+      setBlockingOnly(s.blockingOnly)
       setFilters(s.filters)
       setQuery(s.filters.q)
       restoreSection(s.sectionIds)
@@ -96,10 +98,10 @@ export default function App() {
 
   useEffect(() => {
     const ctrl = new AbortController()
-    fetchQueue(ctrl.signal).then(({ items, total }) => { setQueue(items); setQueueTotal(total) }).catch(() => undefined)
+    fetchQueue(blockingOnly, ctrl.signal).then(({ items, total }) => { setQueue(items); setQueueTotal(total) }).catch(() => undefined)
     fetchStats().then(setStats).catch(() => undefined)
     return () => ctrl.abort()
-  }, [refresh])
+  }, [refresh, blockingOnly])
 
   // Only the response for the currently selected borehole may land in state.
   useEffect(() => {
@@ -353,7 +355,8 @@ export default function App() {
           />
         )}
         {view === 'review' && (
-          <ReviewQueue items={queue} total={queueTotal} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9} onSelect={setSelectedId}
+          <ReviewQueue items={queue} total={queueTotal} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9}
+            blockingOnly={blockingOnly} onBlockingOnly={setBlockingOnly} onSelect={setSelectedId}
             onChanged={() => setRefresh((n) => n + 1)} />
         )}
       </main>

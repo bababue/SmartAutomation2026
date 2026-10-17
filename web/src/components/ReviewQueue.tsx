@@ -11,6 +11,8 @@ interface Props {
   loading: boolean
   selectedId: string | null
   threshold: number
+  blockingOnly: boolean
+  onBlockingOnly: (on: boolean) => void
   onSelect: (id: string) => void
   onChanged: () => void
 }
@@ -70,7 +72,7 @@ function CrsConfirmations({ refreshKey, onChanged }: { refreshKey: unknown; onCh
 }
 
 /** Everything that was not released automatically, weakest first. */
-export function ReviewQueue({ items, total, loading, selectedId, threshold, onSelect, onChanged }: Props) {
+export function ReviewQueue({ items, total, loading, selectedId, threshold, blockingOnly, onBlockingOnly, onSelect, onChanged }: Props) {
   return (
     <div className="queue">
       <header className="queue-head">
@@ -79,13 +81,19 @@ export function ReviewQueue({ items, total, loading, selectedId, threshold, onSe
           Records below a score of {scoreText(threshold)}, or with findings that need a person, wait here. Open one,
           compare it with the source page, then approve or reject it.
         </p>
+        <label className="check queue-filter">
+          <input type="checkbox" checked={blockingOnly} onChange={(e) => onBlockingOnly(e.target.checked)} />
+          Only records with blocking findings{blockingOnly && total != null ? ` (${total.toLocaleString('en')})` : ''}
+        </label>
       </header>
       <CrsConfirmations refreshKey={items} onChanged={onChanged} />
       {total != null && total > items.length && (
         <p className="muted">Showing the {items.length} weakest of {total.toLocaleString('en')} waiting records; approving them brings up the next.</p>
       )}
       {!loading && !items.length ? (
-        <p className="empty">Nothing waits for review. New extractions appear here when they are not released automatically.</p>
+        <p className="empty">{blockingOnly
+          ? 'No waiting record has a blocking finding.'
+          : 'Nothing waits for review. New extractions appear here when they are not released automatically.'}</p>
       ) : (
         <table className="queue-table" aria-busy={loading}>
           <thead>
