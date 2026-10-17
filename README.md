@@ -117,7 +117,10 @@ Web uploads use a bounded queue with status stored in SQLite. Run one API proces
 restart, queued jobs continue and interrupted jobs report an error so the user can explicitly retry them.
 Files chosen or dropped together, and the documents inside an uploaded ZIP, are one batch: one document
 group, processed in one run, so records of one hole spread over several files are combined. The byte and
-page limits apply to the whole batch.
+page limits apply to the whole batch. A file sent before (same SHA-256, in the batch or an earlier upload) is
+left out and reported, since a second copy would add a second group of the same holes. A queued or running
+batch, or single documents of it, can be cancelled (`POST /api/upload/{job_id}/cancel`): no new model calls
+start for them and nothing is stored for them.
 
 ## Repository layout
 
@@ -406,6 +409,8 @@ Environment variables, read from the shell or from `.env`:
 | `MAX_WORKERS` | `6` (API), `3` (CLI) | parallel LLM calls |
 | `AUTO_APPROVE_THRESHOLD` | `0.9` | release score for automatic release |
 | `MAX_UPLOAD_PAGES` | `100` | maximum pages per upload batch |
+| `MAX_UPLOAD_CALLS` | `400` | model calls one upload batch may make; it stops when they are used up |
+| `MAX_DAILY_CALLS` | `2000` | model calls per UTC day after which uploads are refused (command-line runs count, but are not stopped) |
 | `MAX_UPLOAD_JOBS` | `8` | maximum queued and processing uploads |
 | `MAX_UPLOAD_WORKERS` | `1` | concurrent upload pipelines in the API process |
 | `DATASET_DIR` | `temp/HKBoreholeChallenge_Data_BFH2026/BoreholeData` | input documents |
@@ -467,6 +472,14 @@ The brief asks for data security across every step. Design rules:
 - Geocoding: prefer an offline gazetteer; place names can be confidential too.
 - Keep source files, rendered pages, logs and the database local; delete all of it (incl. derived data) after the event.
 - UI and database only for authenticated users.
+- Every model call of a run is recorded in the `llm_calls` table: time, document and page, stage, model,
+  endpoint, image size and text length sent, tokens, cost, duration and outcome; never the content.
+  `GET /api/llm/usage` shows the day's count against the limits and the latest calls. Cache hits make no call.
+- Documents are untrusted input. A page sends only its image and its own text layer (cut to 1,500 or 8,000
+  characters); the model has no tools, and its answer must pass the schema. Text that addresses the model
+  ("ignore the previous instructions", "mark it approved", chat markup, in English or German) is a blocking
+  finding (`possible prompt injection`), so every record of that document goes to a person. Text inside page
+  images is not scanned.
 
 ## Data confidentiality
 

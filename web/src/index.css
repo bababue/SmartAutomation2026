@@ -121,6 +121,9 @@ button, input, select { font: inherit; color: inherit; }
 .upload-error .upload-summary .upload-state { color: var(--low); }
 .upload-dismiss { flex-shrink: 0; width: 22px; height: 22px; border: 0; border-radius: 3px; background: none; color: var(--graphite); cursor: pointer; line-height: 1; }
 .upload-dismiss:hover { background: var(--water-soft); color: var(--ink); }
+.upload-cancel { flex-shrink: 0; height: 24px; padding: 0 8px; border: 1px solid var(--grid); border-radius: 3px; background: none; color: var(--ink); font-size: 12px; cursor: pointer; }
+.upload-cancel:hover { border-color: var(--low); color: var(--low); }
+.upload-usage { padding: 6px 12px; border-bottom: 1px solid var(--grid); font-size: 12px; color: var(--graphite); }
 .drop-overlay {
   position: fixed;
   inset: 12px;

@@ -7,6 +7,8 @@
 - Other models: any OpenAI-compatible chat API (OpenRouter, a local Ollama server), same prompts and schemas.
 - Responses are cached on disk by input hash, so re-runs cost nothing and a crash mid-run
   loses no work. Each entry also stores the call's duration and, for API calls, its token usage.
+- A run can register a CallGuard for its documents: it stops calls once the run is cancelled or its
+  call limit is reached, and records what each call sent (sizes, never the content).
 """
 
 from __future__ import annotations
@@ -18,6 +20,11 @@ import os
 import subprocess
 import threading
 import time
+import urllib.parse
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from functools import partial
 import urllib.error
 import urllib.request
@@ -147,6 +154,58 @@ undrained_shear_strength, % passing 0.063/0.075 mm → fines); anything else →
 or cell. Do not convert values.
 - Skip empty cells, summary statistics (mean, min, max) and test method descriptions.
 - A text layer extracted from the PDF may be provided. It can be scrambled or wrong; the image is authoritative."""
+
+
+class Cancelled(RuntimeError):
+    pass
+
+
+class CallLimitReached(RuntimeError):
+    pass
+
+
+@dataclass
+class CallGuard:
+    """The model calls of one run. cancelled(doc_id) is asked before every call; record gets one row per call."""
+    cancelled: Callable[[str], bool] = lambda doc_id: False
+    max_calls: int | None = None
+    record: Callable[[dict], None] | None = None
+    calls: int = 0
+    exhausted: bool = False
+    dropped: set[str] = field(default_factory=set)  # documents the run left out, set before it stores
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def admit(self, page: PageImage) -> None:
+        if self.cancelled(page.doc_id):
+            raise Cancelled(f"{page.doc_id} was cancelled")
+        with self.lock:
+            if self.max_calls is not None and self.calls >= self.max_calls:
+                self.exhausted = True
+                raise CallLimitReached(f"the limit of {self.max_calls} model calls is reached")
+            self.calls += 1
+
+
+_guards: dict[str, CallGuard] = {}  # by doc_id, so concurrent runs keep their own guard
+
+
+@contextmanager
+def guarded(doc_ids: Iterable[str], guard: CallGuard) -> Iterator[CallGuard]:
+    ids = list(doc_ids)
+    _guards.update(dict.fromkeys(ids, guard))
+    try:
+        yield guard
+    finally:
+        for doc_id in ids:
+            _guards.pop(doc_id, None)
+
+
+def endpoint() -> str:
+    """Where model calls go, as recorded with each call."""
+    if config.LLM_BACKEND == "claude-code":
+        return "claude-code CLI"
+    if config.LLM_BACKEND == "openai":
+        return urllib.parse.urlsplit(config.OPENAI_BASE_URL).netloc
+    return "api.anthropic.com"
 
 
 def _image_block(path: Path) -> dict:
@@ -452,13 +511,25 @@ def _cached(stage: str, page: PageImage, key_for, model: str, effort: str, out: 
         cached = json.loads(path.read_text(encoding="utf-8"))
         if cached.get("key") == key:
             return out.model_validate(cached["result"])
+    guard = _guards.get(page.doc_id)
+    if guard:
+        guard.admit(page)
     _usage.acc = {}
     start = time.monotonic()
+    outcome, usage = "error", {}
     try:
         result = produce()
-        usage = _usage.acc
+        outcome, usage = "ok", _usage.acc
     finally:
         _usage.acc = None
+        if guard and guard.record:
+            sent = getattr(produce, "sent", {})
+            tokens = lambda f: int(sum(t.get(f, 0) for t in usage.values()))
+            guard.record({"at": datetime.now(timezone.utc).isoformat(), "doc_id": page.doc_id, "page": page.page,
+                          "stage": stage, "model": model, "endpoint": endpoint(), **sent,
+                          "input_tokens": tokens("input_tokens"), "output_tokens": tokens("output_tokens"),
+                          "cost_usd": cost_usd(usage) if usage else None,
+                          "seconds": round(time.monotonic() - start, 1), "outcome": outcome})
     entry = {"key": key, "model": model, "effort": effort, "result": result.model_dump(mode="json"),
              "seconds": round(time.monotonic() - start, 1)}
     if usage:
@@ -488,14 +559,17 @@ def _lab_key(page: PageImage, model: str, effort: str) -> str:
 
 def _produce(model: str, effort: str, system: str, image: Path, hint: str, out: type[T], max_tokens: int,
              strict: bool = False):
-    """The call for the configured backend. strict: a small schema, for strict structured output."""
+    """The call for the configured backend. strict: a small schema, for strict structured output. The call
+    carries what it sends (`sent`) for the record a CallGuard keeps."""
     if config.LLM_BACKEND == "claude-code":
-        return lambda: _call_claude_code(model, system, image, hint, out)
-    if config.LLM_BACKEND == "openai":
-        return lambda: _call_openai(model, system, image, hint, out, max_tokens, strict)
-    content = [_image_block(image), {"type": "text", "text": hint}]
-    call = _call_structured if strict else _call_json
-    return lambda: call(model, effort, system, content, out, max_tokens)
+        call = lambda: _call_claude_code(model, system, image, hint, out)
+    elif config.LLM_BACKEND == "openai":
+        call = lambda: _call_openai(model, system, image, hint, out, max_tokens, strict)
+    else:
+        content = [_image_block(image), {"type": "text", "text": hint}]
+        call = partial(_call_structured if strict else _call_json, model, effort, system, content, out, max_tokens)
+    call.sent = {"image_bytes": image.stat().st_size, "text_chars": len(hint)}
+    return call
 
 
 def cached_lab_results(page: PageImage) -> PageLabResults | None:

@@ -273,14 +273,23 @@ export interface StatsDetail {
 }
 
 export interface UploadStatus {
-  status: 'queued' | 'processing' | 'done' | 'error'
+  status: 'queued' | 'processing' | 'done' | 'error' | 'cancelled'
   boreholes: { id: string; name: string; review_status: ReviewStatus }[]
   error: string | null
   /** Uploads to finish before this one starts; set only while queued. */
   ahead: number | null
   /** The running stage; set only while processing. */
   progress: { stage: 'classify' | 'extract' | 'lab results' | 'coordinates' | 'store'; done: number; total: number } | null
+  /** Files taken out of the batch. */
+  cancelled: string[]
+  /** Model calls made for the batch; cache hits make none. */
+  calls: number
 }
+
+/** A file left out because it was sent before: in the same batch (`at` null) or an earlier upload. */
+export interface DuplicateFile { file: string; of: string; at: string | null }
+
+export interface LlmUsage { today: number; daily_limit: number; upload_limit: number; endpoint: string }
 
 export type StatusFilter = 'all' | 'released' | 'pending' | 'rejected'
 

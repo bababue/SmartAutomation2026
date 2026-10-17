@@ -1,5 +1,5 @@
 import { encodeRange } from './url'
-import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadStatus } from './types'
+import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadStatus, DuplicateFile, LlmUsage } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -95,7 +95,16 @@ export function postReview(id: string, decision: ReviewStatus, reviewer: string,
 export function postUpload(files: File[]) {
   const body = new FormData()
   files.forEach((f) => body.append('files', f))
-  return request<{ job_id: string; pages: number; files: string[]; skipped: string[] }>('/api/upload', { method: 'POST', body })
+  return request<{ job_id: string; pages: number; files: string[]; skipped: string[]; duplicates: DuplicateFile[] }>(
+    '/api/upload', { method: 'POST', body })
 }
+
+/** files: paths as the upload reported them; none cancels the whole batch. */
+export const cancelUpload = (jobId: string, files?: string[]) =>
+  request<UploadStatus>(`/api/upload/${enc(jobId)}/cancel`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: files ?? null }),
+  })
+
+export const fetchLlmUsage = () => request<LlmUsage>('/api/llm/usage?limit=1')
 
 export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/upload/${enc(jobId)}`)

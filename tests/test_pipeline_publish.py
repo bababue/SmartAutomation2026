@@ -280,3 +280,24 @@ def test_last_sheet_with_notes_only_is_not_a_lost_log(con):
     extractions[("report", 2)] = PageExtraction(logs=[end_sheet], coordinate_rows=[])
     assert cli._store(con, docs, rendered, classes, extractions) == {"report"}
     assert not any(i.startswith("log not extracted") for i in store.load_borehole(con, "report:BH1").issues)
+
+
+def test_a_document_cancelled_during_a_run_leaves_nothing_behind(con, monkeypatch):
+    docs, rendered, classes, extractions = inputs("upload-x__a")
+    other = inputs("upload-x__b")
+    docs += other[0]
+    rendered.update(other[1])
+    classes.update(other[2])
+    extractions.update(other[3])
+    for d in docs:
+        store.save_document(con, d.doc_id, d.path, d.kind, [])  # registered when the run ingested it
+    monkeypatch.setattr(cli, "_missing_credentials", lambda: None)
+    monkeypatch.setattr(cli, "_ingest", lambda *args: rendered)
+    monkeypatch.setattr(cli, "_parallel", lambda fn, pages, label, progress=None: classes if label == "classify" else {})
+    monkeypatch.setattr(cli, "_extract", lambda *args, **kwargs: (extractions, 0))
+    monkeypatch.setattr(cli.coordcheck, "readings", lambda *args: {})
+    cli.run(docs, guard=cli.llm.CallGuard(cancelled=lambda doc_id: doc_id == "upload-x__b"))
+    assert [r[0] for r in con.execute("SELECT DISTINCT doc_id FROM boreholes")] == ["upload-x__a"]
+    assert [r[0] for r in con.execute("SELECT doc_id FROM documents")] == ["upload-x__a"]
+    with pytest.raises(cli.llm.Cancelled):
+        cli.run(docs, guard=cli.llm.CallGuard(cancelled=lambda doc_id: True))

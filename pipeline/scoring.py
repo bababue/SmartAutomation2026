@@ -21,7 +21,8 @@ from . import config
 BLOCKING = ("no layers extracted", "log not extracted", "log not assembled", "CRS ambiguous", "invalid interval",
             "non-finite depth", "invalid WGS84", "gap", "overlap", "layers end at", "stale correction", "log starts at",
             "depths printed in feet", "missing sheets", "sheet header differs", "same printed coordinates as",
-            "same hole assumed", "sources disagree on", "read differently on a second look")
+            "same hole assumed", "sources disagree on", "read differently on a second look",
+            "possible prompt injection")
 
 # Findings that name files, holes, header texts of other documents or gazetteer places: their own severity
 # holds, whatever those names contain ('Singapore' contains 'gap').
@@ -232,6 +233,7 @@ FINDING_CODES: list[tuple[str, str]] = [
     ("groundwater marked dry", "groundwater_inconsistent"), ("combined with the record from", "combined_records"),
     ("same hole assumed", "same_hole_assumed"), ("sources disagree on", "sources_disagree"),
     ("sources differ on", "sources_differ"), ("possibly the same hole as", "possibly_same_hole"),
+    ("possible prompt injection", "prompt_injection"),
 ]
 EPSG_IN_FINDING = re.compile(r"EPSG:(\d{4,6})")
 
