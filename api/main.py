@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import threading
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -59,8 +60,13 @@ def db() -> Iterator[sqlite3.Connection]:
 
 DB = Annotated[sqlite3.Connection, Depends(db)]
 
+# A hole's group in the result list: its document group (the document, or the folder of single images), as
+# store.document_group derives it. The extracted project name varies from sheet to sheet (cut off, spelt
+# otherwise), so it labels a group but does not form one.
+GROUP = "CASE WHEN instr(doc_id, '__') > 0 THEN substr(doc_id, 1, instr(doc_id, '__') - 1) ELSE doc_id END"
+
 LIGHT_COLUMNS = (
-    "id, name, project, location_name, country, lat, lon, depth, elevation, investigation_type, "
+    f"id, name, project, {GROUP} AS grp, location_name, country, lat, lon, depth, elevation, investigation_type, "
     "confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues, lithologies, strip, ground, "
     + "(SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file"
 )
@@ -79,6 +85,13 @@ def _fts_query(q: str) -> str:
 
 def _like_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _group_facet(r: sqlite3.Row, projects: Counter) -> dict:
+    """A document group among the matches, labelled with the project name its holes give most often."""
+    return {"group": r["grp"], "project": projects.most_common(1)[0][0] if projects else None,
+            "project_names": len(projects), "count": r["total"], "released": r["released"],
+            "bbox": [r["west"], r["south"], r["east"], r["north"]]}
 
 
 def _feature(r: sqlite3.Row) -> dict:
@@ -125,8 +138,12 @@ def _conditions(values: list[str], name: str) -> list[tuple[str, float | None, f
     return out
 
 
-def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, ids) -> tuple[list[str], list]:
+def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, ids,
+             group=None) -> tuple[list[str], list]:
     where, params = ["lat IS NOT NULL"], []
+    if group:
+        where.append(f"{GROUP} = ?")
+        params.append(group)
     if ids:
         where.append(f"id IN ({','.join('?' * len(ids))})")
         params += ids
@@ -193,16 +210,18 @@ def list_boreholes(
     min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
     status: Literal["all", "released", "pending", "rejected"] = "all",
     id: list[str] = Query(default_factory=list, max_length=500, description="only these borehole ids"),
+    group: str | None = Query(None, description="only this document group (see the 'groups' facet)"),
     fields: Literal["list", "map", "layers"] = Query("list", description="'map': slim points; 'layers': depth strips for visible columns"),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
 ):
     """Filtered boreholes. 'map' returns slim GeoJSON points; 'layers' returns strips in a bbox;
-    'list' returns a GeoJSON page with the total and lithology counts of all matches."""
+    'list' returns a GeoJSON page with the total, lithology counts and groups (document groups with their most
+    frequent project name, count, released count and bounding box) of all matches, ordered by group."""
     if fields == "layers" and not bbox:
         raise HTTPException(422, "bbox is required for layer strips")
     where, params = _filters(q, bbox, _conditions(lithology, "lithology"), _conditions(lab, "lab"), country,
-                             min_depth, min_position, status, id)
+                             min_depth, min_position, status, id, group)
     sql_where = " AND ".join(where)
     if fields == "layers":
         rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {sql_where}", params).fetchall()
@@ -215,13 +234,22 @@ def list_boreholes(
                             "review_status": r["review_status"], "score": r["score"], "loc_method": r["loc_method"]}}
             for r in rows]}
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {sql_where}", params).fetchone()[0]
-    rows = con.execute(f"SELECT {LIGHT_COLUMNS} FROM boreholes WHERE {sql_where} ORDER BY project, name, id "
+    rows = con.execute(f"SELECT {LIGHT_COLUMNS} FROM boreholes WHERE {sql_where} ORDER BY grp, name, id "
                        "LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
     facets = con.execute(
         f"SELECT primary_code, COUNT(DISTINCT rid) n FROM layers WHERE rid IN (SELECT rid FROM boreholes WHERE {sql_where}) "
         "GROUP BY primary_code ORDER BY n DESC", params).fetchall()
+    groups = con.execute(
+        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM(review_status IN ('approved', 'auto_approved')) released, "
+        f"MIN(lon) west, MIN(lat) south, MAX(lon) east, MAX(lat) north FROM boreholes WHERE {sql_where} "
+        "GROUP BY grp ORDER BY grp", params).fetchall()
+    projects: dict[str, Counter] = {}
+    for r in con.execute(f"SELECT {GROUP} AS grp, TRIM(project) AS project, COUNT(*) n FROM boreholes "
+                         f"WHERE {sql_where} AND NULLIF(TRIM(project), '') IS NOT NULL GROUP BY grp, project", params):
+        projects.setdefault(r["grp"], Counter())[r["project"]] = r["n"]
     return {"type": "FeatureCollection", "total": total, "offset": offset, "limit": limit,
-            "facets": {"lithologies": [[r["primary_code"], r["n"]] for r in facets]},
+            "facets": {"lithologies": [[r["primary_code"], r["n"]] for r in facets],
+                       "groups": [_group_facet(r, projects.get(r["grp"], Counter())) for r in groups]},
             "features": [_feature(r) for r in rows]}
 
 

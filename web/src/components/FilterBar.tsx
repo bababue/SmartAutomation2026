@@ -77,10 +77,12 @@ interface Props {
   setFilters: Dispatch<SetStateAction<Filters>>
   /** Lithology keys with match counts, most frequent first. */
   lithologies: [string, number][]
+  /** Name of the document group the filter narrows to: its project, else the group itself. */
+  groupLabel: string | null
 }
 
 /** Filter pills; each opens a dropdown below the row. */
-export function FilterBar({ filters, setFilters, lithologies }: Props) {
+export function FilterBar({ filters, setFilters, lithologies, groupLabel }: Props) {
   const [open, setOpen] = useState<Menu | null>(null)
   const [top, setTop] = useState(0)
   const root = useRef<HTMLDivElement>(null)
@@ -97,7 +99,8 @@ export function FilterBar({ filters, setFilters, lithologies }: Props) {
 
   const { lithology: liths, lab } = filters
   const lithName = (key: string) => lithStyle(key).label
-  const active = filters.status !== 'all' || filters.minPosition != null || liths.length > 0 || lab.length > 0
+  const active = filters.status !== 'all' || filters.minPosition != null || liths.length > 0 || lab.length > 0 ||
+    filters.group != null
 
   function pill(menu: Menu, label: string, on: boolean) {
     return (
@@ -139,9 +142,15 @@ export function FilterBar({ filters, setFilters, lithologies }: Props) {
         {pill('position', filters.minPosition == null ? 'Position' : `Position: ${POSITION.find(([p]) => p === filters.minPosition)?.[1] ?? filters.minPosition}`, filters.minPosition != null)}
         {lithologies.length > 0 && pill('lithology', liths.length ? summary(liths, lithName, false) : 'Lithology', liths.length > 0)}
         {pill('lab', lab.length ? summary(lab, labName, true) : 'Lab value', lab.length > 0)}
+        {filters.group != null && (
+          <button className="pill pill-on" onClick={() => set({ group: null })} aria-label={`Show all projects, not only ${groupLabel}`}
+            title="Show all projects">
+            Project: {groupLabel} <span aria-hidden="true">×</span>
+          </button>
+        )}
         {active && (
           <button className="pill-reset" onClick={() => {
-            set({ status: 'all', minPosition: null, lithology: [], lab: [] })
+            set({ status: 'all', minPosition: null, lithology: [], lab: [], group: null })
             setOpen(null)
           }}>Reset</button>
         )}

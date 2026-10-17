@@ -231,6 +231,23 @@ button, input, select { font: inherit; color: inherit; }
 .flag-rejected { background: var(--rejected-soft); color: var(--low); }
 .flag-score { font-weight: 600; margin-left: 3px; }
 
+/* Result groups: one project (or document) per heading ------------------- */
+.group-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding-right: 12px;
+  background: var(--paper); border-bottom: 1px solid var(--grid); }
+.group-toggle { flex: 1; min-width: 0; display: grid; grid-template-columns: 12px 1fr; gap: 0 6px; align-items: center;
+  padding: 8px 0 8px 16px; border: 0; background: none; text-align: left; cursor: pointer; color: var(--ink); }
+.group-toggle svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+  color: var(--graphite); transform: rotate(-90deg); transition: transform 120ms; }
+.group-toggle[aria-expanded="true"] svg { transform: none; }
+.group-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.group-meta { grid-column: 2; font-size: 12px; color: var(--graphite); }
+.group-share { grid-column: 2; display: block; height: 3px; margin-top: 4px; background: var(--grid-soft); }
+.group-share span { display: block; height: 100%; background: var(--high); }
+.group-show { flex: none; border: 1px solid var(--grid); border-radius: 3px; background: var(--panel); padding: 2px 8px;
+  font: inherit; font-size: 12px; color: var(--water); cursor: pointer; }
+.group-show:hover { border-color: var(--water); }
+.group-items { list-style: none; margin: 0; padding: 0; }
+
 /* Map legend -------------------------------------------------------------- */
 .legend {
   position: absolute; left: 12px; bottom: 36px;

@@ -131,3 +131,19 @@ def test_required_name_cannot_be_cleared(client, value):
                             "payload": {"field": "borehole_name", "value": value}})
     assert response.status_code == 422
     assert client.get("/api/boreholes/q:A/detail").json()["borehole"]["borehole_name"] == "A"
+
+
+def test_holes_group_by_document_labelled_with_their_most_frequent_project(client):
+    con = store.connect()
+    for bid, project in (("folder__a:D", "Harbour tunnel"), ("folder__b:E", "Harbour tunnel"),
+                         ("folder__b:F", "Harbour tunnel, lot"), ("folder__b:G", " ")):
+        bh = hole(bid, 47.0, 7.0, [(0, 9, "gravel")])
+        bh.project_name = project
+        store.save_borehole(con, bh)
+    con.close()
+    groups = {g["group"]: g for g in client.get("/api/boreholes").json()["facets"]["groups"]}
+    assert {g: (v["count"], v["project"], v["project_names"]) for g, v in groups.items()} == {
+        "folder": (4, "Harbour tunnel", 2), "q": (3, None, 0)}
+    assert groups["q"]["bbox"] == [-179.5, 10.0, 179.5, 48.0]
+    assert ids(client.get("/api/boreholes", params={"group": "folder"})) == ["folder__a:D", "folder__b:E",
+                                                                             "folder__b:F", "folder__b:G"]

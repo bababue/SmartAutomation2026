@@ -158,6 +158,8 @@ export interface BoreholeSummary {
   id: string
   name: string
   project: string | null
+  /** The hole's group in the list: its document group (the document, or a folder of single images). */
+  grp: string
   location_name: string | null
   country: string | null
   depth: number | null
@@ -187,7 +189,19 @@ export interface FeatureCollection {
   features: Feature[]
   /** All matches (the features may be one page of them). */
   total?: number
-  facets?: { lithologies: [string, number][] }
+  facets?: { lithologies: [string, number][]; groups: GroupFacet[] }
+}
+
+/** A document group among all matches: its project, how many holes, how many released, where. */
+export interface GroupFacet {
+  group: string
+  /** The project name its holes give most often; null: none gives one. */
+  project: string | null
+  /** How many different project names its holes give (sheets spell them differently). */
+  project_names: number
+  count: number
+  released: number
+  bbox: [number, number, number, number]
 }
 
 export type CorrectionKind = 'crs' | 'position' | 'layer' | 'layer_add' | 'field' | 'groundwater' | 'test'
@@ -257,6 +271,8 @@ export interface Filters {
   lab: RangeFilter[]
   minPosition: number | null
   status: StatusFilter
+  /** Only the holes of this document group. */
+  group: string | null
 }
 
 export interface SimilarHole {

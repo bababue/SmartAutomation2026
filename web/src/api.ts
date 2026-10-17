@@ -22,6 +22,7 @@ function filterParams(f: Filters): URLSearchParams {
   f.lab.forEach((l) => params.append('lab', encodeRange(l)))
   if (f.minPosition != null) params.set('min_position', String(f.minPosition))
   if (f.status !== 'all') params.set('status', f.status)
+  if (f.group) params.set('group', f.group)
   return params
 }
 

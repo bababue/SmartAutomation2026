@@ -45,6 +45,7 @@ export function readUrl(search: string): UrlState {
       lab: p.getAll('lab').filter(Boolean).map(decodeRange),
       minPosition: num(p.get('position')),
       status: status && STATUSES.includes(status) ? status : 'all',
+      group: p.get('group'),
     },
   }
 }
@@ -62,6 +63,7 @@ export function writeUrl(s: UrlState): string {
   f.lab.forEach((l) => p.append('lab', encodeRange(l)))
   if (f.minPosition != null) p.set('position', String(f.minPosition))
   if (f.status !== 'all') p.set('status', f.status)
+  if (f.group) p.set('group', f.group)
   const qs = p.toString()
   return qs ? `?${qs}` : window.location.pathname
 }

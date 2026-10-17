@@ -330,12 +330,15 @@ export default function App() {
         {listOpen ? '‹' : '›'}
       </button>
       <aside className="sidebar" id="sidebar" inert={!listOpen}>
-        <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies} />
+        <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies}
+          groupLabel={filters.group && (data.facets?.groups.find((g) => g.group === filters.group)?.project ?? filters.group)} />
         <div className="result-head">
           <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
         </div>
         {error && <p className="error" role="alert">{error}</p>}
-        <ResultList features={data.features} selectedId={selectedId} onSelect={setSelectedId} loading={loading} sectionIds={sectionIds} onToggleSection={toggleSection} />
+        <ResultList features={data.features} groups={data.facets?.groups ?? []} activeGroup={filters.group}
+          onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })) }}
+          selectedId={selectedId} onSelect={setSelectedId} loading={loading} sectionIds={sectionIds} onToggleSection={toggleSection} />
         {!loading && data.total != null && data.features.length < data.total && (
           <button className="btn load-more" onClick={loadMore} disabled={loadingMore}>
             {loadingMore ? 'Loading…' : `Show ${Math.min(200, data.total - data.features.length)} more of ${(data.total - data.features.length).toLocaleString('en')}`}
