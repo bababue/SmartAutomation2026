@@ -265,32 +265,54 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
     previous = _delete(con, bh.borehole_id) or previous
     extracted_json = as_json(extracted) if extracted is not None else (previous or {}).get("extracted")
     revision = (previous or {}).get("review_revision") or 0
-    if previous and previous.get("data"):
-        old = Borehole.model_validate_json(previous["data"])
-        old_digest = content_hash(old)
-        if old.review_status in HUMAN:
-            new_blocking = _new_blocking(old, bh) if old.review_status == ReviewStatus.approved else []
-            if old_digest == digest and not new_blocking:
-                # Same content: the human decision stands.
-                bh.review_status, bh.reviewed_by = old.review_status, old.reviewed_by
-                bh.reviewed_at, bh.review_comment = old.reviewed_at, old.review_comment
-            elif old_digest == digest:
-                revision += 1  # same hash: only the revision stops a review screen opened before from approving
-                bh.review_status = ReviewStatus.pending_review
-                bh.score_reasons = [f"New blocking finding since the approval by {old.reviewed_by or 'a reviewer'}: "
-                                    + "; ".join(new_blocking)] + bh.score_reasons
-            else:
-                bh.review_status = ReviewStatus.pending_review
-                bh.score_reasons = [f"Data changed since the {old.review_status.value} decision by "
-                                    f"{old.reviewed_by or 'a reviewer'}"] + bh.score_reasons
     uid = (previous or {}).get("uid") or _resolve_uid(con, bh) or uuid.uuid4().hex
     if con.execute("SELECT 1 FROM boreholes WHERE uid = ? AND id != ?", (uid, bh.borehole_id)).fetchone():
         uid = uuid.uuid4().hex  # another current record is that hole: never share an identity
+    if previous and previous.get("data"):
+        old = Borehole.model_validate_json(previous["data"])
+        decision = (old, content_hash(old))
+    else:  # stored under another id before: the decision follows the uid, as corrections do
+        decision = _logged_decision(con, uid)
+    if decision and decision[0].review_status in HUMAN:
+        revision = _carry_decision(bh, *decision, digest, revision)
     version_id = _version(con, uid, digest, bh.model_dump_json())
     _insert(con, bh, digest, extracted_json, uid, version_id, revision)
     _remember_aliases(con, bh, uid)
     if commit:
         con.commit()
+
+
+def _logged_decision(con: sqlite3.Connection, uid: str) -> tuple[Borehole, str] | None:
+    """The latest review of this hole as (record as reviewed, its content hash). Without a stored version
+    (decisions logged before versions existed) the reviewer counts as having seen no findings."""
+    event = con.execute("SELECT decision, reviewer, comment, at, content_hash, version_id FROM review_events "
+                        "WHERE uid = ? ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
+    if not event:
+        return None
+    version = con.execute("SELECT data FROM record_versions WHERE id = ?", (event["version_id"],)).fetchone()
+    old = Borehole.model_validate_json(version["data"]) if version else Borehole.model_construct(issues=[])
+    old.review_status, old.reviewed_by = ReviewStatus(event["decision"]), event["reviewer"]
+    old.reviewed_at = datetime.fromisoformat(event["at"]) if event["at"] else None
+    old.review_comment = event["comment"]
+    return old, event["content_hash"]
+
+
+def _carry_decision(bh: Borehole, old: Borehole, old_digest: str, digest: str, revision: int) -> int:
+    """Carry the human decision on `old` over to `bh`; returns the review revision."""
+    new_blocking = _new_blocking(old, bh) if old.review_status == ReviewStatus.approved else []
+    if old_digest == digest and not new_blocking:
+        bh.review_status, bh.reviewed_by = old.review_status, old.reviewed_by
+        bh.reviewed_at, bh.review_comment = old.reviewed_at, old.review_comment
+    elif old_digest == digest:
+        revision += 1  # same hash: only the revision stops a review screen opened before from approving
+        bh.review_status = ReviewStatus.pending_review
+        bh.score_reasons = [f"New blocking finding since the approval by {old.reviewed_by or 'a reviewer'}: "
+                            + "; ".join(new_blocking)] + bh.score_reasons
+    else:
+        bh.review_status = ReviewStatus.pending_review
+        bh.score_reasons = [f"Data changed since the {old.review_status.value} decision by "
+                            f"{old.reviewed_by or 'a reviewer'}"] + bh.score_reasons
+    return revision
 
 
 def _new_blocking(old: Borehole, bh: Borehole) -> list[str]:

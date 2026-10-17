@@ -67,6 +67,29 @@ def test_id_change_keeps_uid_corrections_and_review_history(con):
     assert con.execute("SELECT uid FROM boreholes WHERE id = 'rep:BH1'").fetchone()[0] == uid
     assert [e["decision"] for e in store.review_log(con, "rep:BH1")] == ["rejected"]
     assert store.orphan_corrections(con) == []
+    bh = store.load_borehole(con, "rep:BH1")  # the correction changed what the reviewer rejected
+    assert bh.review_status == ReviewStatus.pending_review
+    assert bh.score_reasons[0] == "Data changed since the rejected decision by Ana"
+
+
+@pytest.mark.parametrize("decision", [ReviewStatus.approved, ReviewStatus.rejected])
+def test_id_change_keeps_the_decision_on_unchanged_content(con, decision):
+    store.save_borehole(con, record())
+    store.record_review(con, "rep:BH01", decision, "Ana", "checked")
+    store.delete_document_boreholes(con, "rep")
+    store.save_borehole(con, record(bid="rep:BH1"))
+    bh = store.load_borehole(con, "rep:BH1")
+    assert (bh.review_status, bh.reviewed_by, bh.review_comment) == (decision, "Ana", "checked")
+    assert bh.reviewed_at is not None
+
+
+def test_id_change_keeps_a_reopened_record_open(con):
+    store.save_borehole(con, record())
+    store.record_review(con, "rep:BH01", ReviewStatus.rejected, "Ana", None)
+    store.record_review(con, "rep:BH01", ReviewStatus.pending_review, "Ben", None)
+    store.delete_document_boreholes(con, "rep")
+    store.save_borehole(con, record(bid="rep:BH1"))
+    assert store.load_borehole(con, "rep:BH1").review_status != ReviewStatus.rejected
 
 
 def test_versions_only_for_changed_content_and_review_revision(con):
