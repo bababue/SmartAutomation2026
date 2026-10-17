@@ -192,6 +192,7 @@ def _remove_files(task: UploadTask, doc_ids: list[str], whole: bool) -> None:
         shutil.rmtree(config.PAGES_DIR / doc_id, ignore_errors=True)
     if whole:
         shutil.rmtree(config.UPLOADS_DIR / task.folder, ignore_errors=True)
+        shutil.rmtree(ingest.converted_dir(config.UPLOADS_DIR / task.folder), ignore_errors=True)
 
 
 def result(con: sqlite3.Connection, job_id: str) -> UploadResult | None:

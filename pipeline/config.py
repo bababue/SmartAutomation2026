@@ -26,8 +26,9 @@ MAX_UPLOAD_WORKERS = int(os.getenv("MAX_UPLOAD_WORKERS", "1"))
 MAX_UPLOAD_CALLS = int(os.getenv("MAX_UPLOAD_CALLS", "400"))  # model calls one upload batch may make
 # Model calls per UTC day after which uploads are refused; command-line runs count, but are not stopped.
 MAX_DAILY_CALLS = int(os.getenv("MAX_DAILY_CALLS", "2000"))
-# PDF exports of DOCX files (e.g. saved from Word), same relative path as in the dataset. DOCX logs are
-# often laid out from several image strips in table cells; only a rendered page shows them together.
+# PDF renderings of DOCX files, converted with LibreOffice, same relative path as in the dataset (uploads
+# under uploads/<folder>/). DOCX logs are often laid out from several image strips in table cells; only a
+# rendered page shows them together. A PDF placed here by hand is used instead of converting.
 CONVERTED_DIR = DATA_DIR / "converted"
 DB_PATH = Path(os.getenv("DB_PATH", DATA_DIR / "boreholes.sqlite"))
 

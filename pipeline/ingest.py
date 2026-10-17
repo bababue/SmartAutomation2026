@@ -11,7 +11,10 @@ import html
 import io
 import json
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -47,16 +50,11 @@ def doc_id_for(rel: Path) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", slug)
 
 
-def _docx_export(path: Path) -> bool:
-    """A PDF saved next to a DOCX of the same name is that DOCX's export, not a document of its own."""
-    return path.suffix.lower() == ".pdf" and any(path.with_suffix(ext).exists() for ext in (".docx", ".DOCX"))
-
-
 def discover(dataset_dir: Path | None = None) -> list[SourceDoc]:
     dataset_dir = dataset_dir or config.DATASET_DIR
     docs, used = [], set()
     for path in sorted(dataset_dir.rglob("*")):
-        if path.is_file() and path.suffix.lower() in SUPPORTED and not _docx_export(path):
+        if path.is_file() and path.suffix.lower() in SUPPORTED:
             rel = path.relative_to(dataset_dir)
             kind = {".pdf": "pdf", ".docx": "docx", ".txt": "text", ".xlsx": "sheet", ".xlsm": "sheet"}.get(
                 path.suffix.lower(), "image")
@@ -99,15 +97,40 @@ def _docx_images(path: Path) -> list[tuple[bytes, str]]:
     return images
 
 
+def converted_dir(dataset_dir: Path) -> Path:
+    """Where the PDF renderings of a folder's DOCX files go. Each upload gets its own subfolder, so its relative
+    paths cannot collide with the dataset's or another upload's."""
+    try:
+        return config.CONVERTED_DIR / "uploads" / dataset_dir.resolve().relative_to(config.UPLOADS_DIR.resolve())
+    except ValueError:
+        return config.CONVERTED_DIR
+
+
 def converted_pdf(doc: SourceDoc, dataset_dir: Path | None = None) -> Path | None:
-    """PDF export of a DOCX: under CONVERTED_DIR, or saved next to the DOCX with the same name."""
+    """PDF rendering of a DOCX, converted with LibreOffice on first use. None if that is not possible."""
     if doc.kind != "docx":
         return None
     dataset_dir = dataset_dir or config.DATASET_DIR
-    for path in (config.CONVERTED_DIR / Path(doc.path).with_suffix(".pdf"), (dataset_dir / doc.path).with_suffix(".pdf")):
-        if path.exists():
-            return path
-    return None
+    pdf = converted_dir(dataset_dir) / Path(doc.path).with_suffix(".pdf")
+    if not pdf.exists():
+        _convert(dataset_dir / doc.path, pdf.parent)
+    return pdf if pdf.exists() else None
+
+
+def _convert(src: Path, out_dir: Path) -> None:
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        print(f"  ! {src.name}: LibreOffice (soffice) not found, cannot render the DOCX", file=sys.stderr)
+        return
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Its own profile, so a LibreOffice instance the user has open does not take over the conversion.
+    with tempfile.TemporaryDirectory() as profile:
+        try:
+            subprocess.run([soffice, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless",
+                            "--convert-to", "pdf", "--outdir", str(out_dir), str(src)],
+                           check=True, capture_output=True, timeout=180)
+        except (subprocess.SubprocessError, OSError) as exc:
+            print(f"  ! {src.name}: LibreOffice conversion failed: {exc}", file=sys.stderr)
 
 
 def text_pdf(path: Path) -> pymupdf.Document:
@@ -162,7 +185,7 @@ def render(doc: SourceDoc, dataset_dir: Path | None = None) -> list[PageImage]:
     manifest = out_dir / "manifest.json"
     src = dataset_dir / doc.path
     converted = converted_pdf(doc, dataset_dir)
-    source = str(converted or src)  # rendered from; a new PDF export of a DOCX triggers a re-render
+    source = str(converted or src)  # rendered from; a new PDF rendering of a DOCX triggers a re-render
     origin = Path(source)
     stat = origin.stat() if origin.exists() else None
     # Replacing a file at the same path, or other render settings, must re-render too.
@@ -184,8 +207,8 @@ def render(doc: SourceDoc, dataset_dir: Path | None = None) -> list[PageImage]:
         d = pymupdf.open(converted)
         pdf_pages = [(p, p.get_text()) for p in d]
     elif doc.kind == "docx":
-        print(f"  ! {doc.path}: no PDF export in {config.CONVERTED_DIR}; using embedded images only, which can split "
-              "logs laid out from several images", file=sys.stderr)
+        print(f"  ! {doc.path}: no PDF rendering; using embedded images only, which can split logs laid out from "
+              "several images", file=sys.stderr)
         sources = [pymupdf.open(stream=blob, filetype=ext) for blob, ext in _docx_images(src)]
         pdf_pages = [(d[0], "") for d in sources]
     else:

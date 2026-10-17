@@ -10,6 +10,9 @@ RUN npm run lint && npm test && npm run build
 
 FROM python:3.13-slim
 WORKDIR /app
+# Renders DOCX files to PDF before their pages are rendered.
+RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-writer-nogui \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY pytest.ini ./
