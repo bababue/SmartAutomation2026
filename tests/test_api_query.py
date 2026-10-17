@@ -311,3 +311,41 @@ def test_inferred_crs_without_a_code_is_left_out_of_document_confirmations(clien
     assert groups.status_code == 200 and [(g["group"], g["epsg"]) for g in groups.json()] == [("r", 25832)]
     detail = client.get("/api/boreholes/q:A")
     assert detail.status_code == 200 and detail.json()["crs_group"] is None
+
+
+@pytest.mark.parametrize("kind, payload", [
+    ("layer_add", '{"top": 30, "bottom": 1e999, "primary": "clay"}'),
+    ("groundwater", '{"depth_m": Infinity}'),
+])
+def test_non_finite_correction_is_rejected_and_the_record_stays_readable(client, kind, payload):
+    body = f'{{"kind": "{kind}", "reviewer": "Ana", "payload": {payload}}}'
+    response = client.post("/api/boreholes/q:A/corrections", content=body, headers={"content-type": "application/json"})
+    assert response.status_code == 422
+    detail = client.get("/api/boreholes/q:A")
+    assert detail.status_code == 200
+    assert [layer["bottom_m"] for layer in detail.json()["borehole"]["layers"]] == [12.0, 30.0]
+    assert detail.json()["borehole"]["groundwater"] == []
+
+
+def test_search_words_and_condition_lists_are_bounded(client):
+    assert client.get("/api/boreholes", params={"q": " ".join(f"w{i}" for i in range(400))}).status_code == 422
+    assert client.get("/api/stats/detail", params={"q": " ".join(f"w{i}" for i in range(400))}).status_code == 422
+    assert client.get("/api/boreholes", params={"q": " ".join(["clay"] * 400)}).status_code == 200  # one word
+    clay = [f"clay:{i}:{i + 1}" for i in range(51)]
+    assert client.get("/api/boreholes", params={"lithology": clay}).status_code == 422
+    assert client.get("/api/boreholes", params={"lithology": clay[:50]}).status_code == 200
+
+
+def test_numbers_beyond_sqlite_integers_are_rejected(client):
+    huge = "99999999999999999999"
+    assert client.get(f"/api/boreholes?offset={huge}").status_code == 422
+    assert client.get(f"/api/review-queue?offset={huge}").status_code == 422
+    assert client.get(f"/api/pages/q/{huge}").status_code == 422
+
+
+def test_page_without_its_image_file_is_not_found(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PAGES_DIR", tmp_path / "pages")
+    con = store.connect()
+    store.save_document(con, "q", "q.pdf", [(1, "q/p1.jpg")])
+    con.close()
+    assert client.get("/api/pages/q/1").status_code == 404

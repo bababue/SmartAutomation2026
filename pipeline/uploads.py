@@ -101,17 +101,18 @@ class UploadQueue:
             con.close()
         self.executor.submit(self._work, task.job_id)
 
-    def cancel(self, job_id: str, doc_ids: list[str] | None = None) -> bool:
+    def cancel(self, job_id: str, doc_ids: list[str] | None = None) -> None:
         """Takes documents (all when doc_ids is None) out of a queued or running batch. A running batch stops
-        calling the model for them at once and stores nothing for them. False: no such job."""
+        calling the model for them at once and stores nothing for them."""
         con = store.connect(self.db_path)
         try:
             with self.lock:
                 row = con.execute("SELECT status, task FROM upload_jobs WHERE id = ?", (job_id,)).fetchone()
                 if row is None:
-                    return False
+                    return
                 if row["status"] not in ("queued", "processing"):
-                    raise NotCancellable(f"the upload is already {row['status']}")
+                    raise NotCancellable("the upload was already cancelled" if row["status"] == "cancelled"
+                                         else "the upload has already finished")
                 task = UploadTask.model_validate_json(row["task"])
                 ids = {d.doc_id for d in task.docs}
                 task.cancelled = sorted(set(task.cancelled) | (ids if doc_ids is None else ids & set(doc_ids)))
@@ -121,12 +122,11 @@ class UploadQueue:
                         con.execute("UPDATE upload_jobs SET status = 'cancelled', task = ?, result = ? WHERE id = ?",
                                     (task.model_dump_json(), result.model_dump_json(), job_id))
                     _remove_files(task, task.cancelled, whole=True)
-                    return True
+                    return
                 with con:
                     con.execute("UPDATE upload_jobs SET task = ? WHERE id = ?", (task.model_dump_json(), job_id))
                 if row["status"] == "processing":
                     self.cancelled[job_id] = set(task.cancelled)
-                return True
         finally:
             con.close()
 

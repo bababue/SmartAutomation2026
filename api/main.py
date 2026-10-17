@@ -27,13 +27,13 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from datetime import date as date_type
 
-from pydantic import BaseModel, Field, StringConstraints, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 import pymupdf
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
 from pipeline import assemble, config, corrections, evaluate, export, ingest, llm, quality, scoring, store, uploads
-from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
+from schema.borehole import Borehole, LabParameter, Lithology, ReviewStatus
 
 from . import models, similar
 
@@ -78,10 +78,18 @@ STATUS_GROUPS = {
 }
 RELEASED = f"review_status IN ({', '.join(repr(s) for s in STATUS_GROUPS['released'])})"
 
+# Every search word and every list condition deepens the WHERE expression; SQLite refuses a tree deeper than 1000.
+MAX_SEARCH_WORDS = 32
+MAX_CONDITIONS = 50
 
-def _fts_query(q: str) -> str:
-    tokens = re.findall(r"\w+", q, flags=re.UNICODE)
-    return " AND ".join(f'"{t}"*' for t in tokens)
+SQLITE_MAX_INT = 2**63 - 1  # larger ints overflow the parameter binding
+
+
+def _search_words(q: str) -> list[str]:
+    words = list(dict.fromkeys(re.findall(r"\w+", q, flags=re.UNICODE)))
+    if len(words) > MAX_SEARCH_WORDS:
+        raise HTTPException(422, f"a search can hold at most {MAX_SEARCH_WORDS} different words")
+    return words
 
 
 def _like_escape(value: str) -> str:
@@ -153,14 +161,16 @@ class Where(NamedTuple):
 
 def list_filters(
     q: str | None = None,
-    lithology: list[str] = Query(default_factory=list,
+    lithology: list[str] = Query(default_factory=list, max_length=MAX_CONDITIONS,
                                  description="code[:from_m:to_m], e.g. clay:10:20 (a clay layer between 10 and 20 m)"),
-    lab: list[str] = Query(default_factory=list, description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
+    lab: list[str] = Query(default_factory=list, max_length=MAX_CONDITIONS,
+                           description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
     status: StatusFilter = "all",
     group: str | None = Query(None, description="only this document group (see the 'groups' facet)"),
     rock_head_max: float | None = Query(None, description="rock head at most this deep (m)"),
     groundwater_max: float | None = Query(None, description="groundwater at most this deep (m)"),
-    material: list[str] = Query(default_factory=list, description="group:from_m:to_m:metres, e.g. sand:0:20:5"),
+    material: list[str] = Query(default_factory=list, max_length=MAX_CONDITIONS,
+                                description="group:from_m:to_m:metres, e.g. sand:0:20:5"),
     score_min: float | None = Query(None, ge=0, le=1, description="lowest release score"),
     score_max: float | None = Query(None, ge=0, le=1, description="highest release score"),
 ) -> Where:
@@ -176,13 +186,12 @@ def list_filters(
     if group:
         where.append("grp = ?")
         params.append(group)
-    if q and (fq := _fts_query(q)):
+    if q and (tokens := _search_words(q)):
         # Text match, or every search word appears in the source document's file path (e.g. 'report').
-        tokens = re.findall(r"\w+", q, flags=re.UNICODE)
         path_match = " AND ".join("path LIKE ? ESCAPE '\\'" for _ in tokens)
         where.append("(rid IN (SELECT rowid FROM boreholes_fts WHERE boreholes_fts MATCH ?) "
                      f"OR doc_id IN (SELECT doc_id FROM documents WHERE {path_match}))")
-        params += [fq, *(f"%{_like_escape(t)}%" for t in tokens)]
+        params += [" AND ".join(f'"{t}"*' for t in tokens), *(f"%{_like_escape(t)}%" for t in tokens)]
     # Set lookups through the (code, depth) and (parameter, value) indexes. A correlated EXISTS per hole
     # would make SQLite scan every matching layer for every hole (171 s at 50,000 holes).
     for code, depth_from, depth_to in _conditions(lithology, "lithology"):  # each within its depth range
@@ -242,7 +251,7 @@ def list_boreholes(
     id: list[str] = Query(default_factory=list, max_length=500, description="only these borehole ids"),
     fields: Literal["list", "map"] = Query("list", description="'map': slim points of every match"),
     limit: int = Query(1000, ge=1, le=10000),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=SQLITE_MAX_INT),
 ) -> models.ListPage | models.MapPoints:
     """Filtered boreholes with a position. 'map' returns slim GeoJSON points of every match; 'list' returns a
     GeoJSON page with the total, lithology counts and groups (document groups with their most frequent project
@@ -312,7 +321,8 @@ def _queue_filters(finding: str | None, position: QueuePosition | None, status: 
 
 
 @app.get("/api/review-queue")
-def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
+def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000),
+                 offset: int = Query(0, ge=0, le=SQLITE_MAX_INT),
                  finding: str | None = Query(None, description="a finding code, or a severity: 'blocking', 'needs_look'"),
                  position: QueuePosition | None = Query(None, description="where the position comes from"),
                  status: StatusFilter = "pending",
@@ -407,7 +417,12 @@ def _severity(bh: Borehole) -> dict[str, str]:
 Reviewer = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
 
 
-class Review(BaseModel):
+class Body(BaseModel):
+    # A non-finite number would be stored as JSON null, which the record then refuses on every read.
+    model_config = ConfigDict(allow_inf_nan=False)
+
+
+class Review(Body):
     decision: Literal["approved", "rejected", "pending_review"]
     reviewer: Reviewer
     comment: str | None = Field(None, max_length=2000)
@@ -438,17 +453,17 @@ def review(borehole_id: str, body: Review, con: DB) -> models.ReviewResult:
     return models.ReviewResult.model_validate(_record(con, borehole_id))
 
 
-class CrsFix(BaseModel):
+class CrsFix(Body):
     epsg: int
 
 
-class PositionFix(BaseModel):
+class PositionFix(Body):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
     accuracy_m: float | None = Field(None, gt=0)
 
 
-class LayerFix(BaseModel):
+class LayerFix(Body):
     orig_top: float
     orig_bottom: float
     top: float | None = None
@@ -472,7 +487,7 @@ class LayerFix(BaseModel):
         return self
 
 
-class LayerAddFix(BaseModel):
+class LayerAddFix(Body):
     top: float = Field(ge=0)
     bottom: float
     primary: Lithology
@@ -485,7 +500,7 @@ class LayerAddFix(BaseModel):
         return self
 
 
-class FieldFix(BaseModel):
+class FieldFix(Body):
     field: Literal[tuple(corrections.FIELDS)]  # type: ignore[valid-type]
     value: str | float | None
 
@@ -507,7 +522,7 @@ class FieldFix(BaseModel):
         return self
 
 
-class GroundwaterFix(BaseModel):
+class GroundwaterFix(Body):
     depth_m: float | None = Field(None, ge=0)
     dry: bool = False
 
@@ -518,7 +533,7 @@ class GroundwaterFix(BaseModel):
         return self
 
 
-class ResultFix(BaseModel):
+class ResultFix(Body):
     test: Literal["spt", "core", "lab"]
     orig_depth: float
     parameter: LabParameter | None = None
@@ -543,7 +558,7 @@ FIXES = {"crs": CrsFix, "position": PositionFix, "layer": LayerFix, "layer_add":
          "groundwater": GroundwaterFix, "test": ResultFix}
 
 
-class Correction(BaseModel):
+class Correction(Body):
     kind: Literal["crs", "position", "layer", "layer_add", "field", "groundwater", "test"]
     scope: Literal["borehole", "document"] = "borehole"
     payload: dict
@@ -838,7 +853,7 @@ def upload_status(job_id: str, con: DB) -> uploads.UploadResult:
     return job
 
 
-class CancelBody(BaseModel):
+class CancelBody(Body):
     files: list[str] | None = None  # paths as the upload reported them; none: the whole batch
 
 
@@ -870,13 +885,15 @@ def llm_usage(con: DB):
 
 
 @app.get("/api/pages/{doc_id}/{page}")
-def page_image(doc_id: str, page: int, con: DB):
+def page_image(doc_id: str, page: Annotated[int, Field(ge=1, le=SQLITE_MAX_INT)], con: DB):
     row = con.execute("SELECT image FROM pages WHERE doc_id = ? AND page = ?", (doc_id, page)).fetchone()
     if row is None:
         raise HTTPException(404, "page not found")
     path = (config.PAGES_DIR / row["image"]).resolve()
     if config.PAGES_DIR.resolve() not in path.parents:
         raise HTTPException(400, "invalid path")
+    if not path.is_file():
+        raise HTTPException(404, "page image not found")
     return FileResponse(path, media_type="image/jpeg")
 
 
