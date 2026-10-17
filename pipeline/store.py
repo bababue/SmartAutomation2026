@@ -298,6 +298,8 @@ def _new_blocking(old: Borehole, bh: Borehole) -> list[str]:
     rule rather than the text, which carries depths and partner names that vary between runs; the code alone
     would lump distinct rules together under 'other'."""
     def rules(issue: str) -> set[tuple[str, str]]:
+        if not scoring.is_blocking(issue):
+            return set()
         return {(scoring.finding_code(issue), rule) for rule in scoring.BLOCKING if rule in issue}
     seen = set().union(*(rules(i) for i in old.issues))
     return [i for i in bh.issues if rules(i) - seen]

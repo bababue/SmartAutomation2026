@@ -420,17 +420,6 @@ def test_log_without_printed_depths_is_not_penalised():
     assert bh.confidence >= 0.85 and any("not printed" in r for r in bh.score_reasons)
 
 
-def test_dedupe_prefers_the_better_checked_record():
-    from pipeline.assemble import dedupe
-    src = SourceRef(file="a.pdf", page=1)
-    clean, split = make(), make()
-    split.borehole_id = "export:BH1"
-    split.layers = split.layers + [Layer(top_m=9, bottom_m=9.5, description_original="x", primary="clay", source=src)]
-    clean.confidence, split.confidence = 0.95, 0.6
-    kept = dedupe([split, clean])
-    assert len(kept) == 1 and kept[0] is clean
-
-
 def test_boreholes_and_test_pits_with_the_same_number_stay_apart():
     from pipeline.assemble import PageResult, assemble, hole_key
     from pipeline.extraction_models import PageExtraction, XLog

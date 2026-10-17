@@ -25,7 +25,7 @@ from schema.borehole import Borehole, GeorefMethod, GroundwaterObservation, Laye
 
 from . import config
 from .georef import _apply, resolve_with
-from .scoring import counts_against, score
+from .scoring import SOURCE_CONFLICTS, counts_against, score
 
 # Findings about the position that a reviewer's CRS or position correction settles.
 GEOREF_ISSUES = (
@@ -190,7 +190,7 @@ def apply(bh: Borehole, items: list[dict]) -> list[bool]:
     results = []
     existing = list(bh.issues)
     before = bh.validate_log()  # note: also overwrites bh.issues
-    notes, georef_fixed = [], False
+    notes, georef_fixed, fields_fixed = [], False, set()
     overlapping = _overlapping_fixes(bh, items)
     for n, c in enumerate(items):
         kind, p = c["kind"], c["payload"]
@@ -212,12 +212,18 @@ def apply(bh: Borehole, items: list[dict]) -> list[bool]:
             ok = _layer(bh, p)
         results.append(ok)
         georef_fixed |= ok and kind in ("crs", "position")
+        if ok and kind == "field":
+            fields_fixed.add(p["field"])
         who = c.get("reviewer") or "a reviewer"
         notes.append(f"corrected by {who}: {describe(kind, p)}" if ok
                      else f"stale correction by {who}: {describe(kind, p)} no longer fits the extraction")
     kept = [i for i in existing if i not in before]
     if georef_fixed:
         kept = [i for i in kept if not i.startswith(GEOREF_ISSUES) and not GEOREF_UNREADABLE.search(i)]
+    # A reviewer's value settles a disagreement between the documents of the hole.
+    settled = tuple(f"{rule} {what}:" for field, (rule, what, _) in SOURCE_CONFLICTS.items() if field in fields_fixed)
+    if settled:
+        kept = [i for i in kept if not i.startswith(settled)]
     bh.issues = list(dict.fromkeys(bh.validate_log() + kept + notes))
     rescore(bh)
     return results
