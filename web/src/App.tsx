@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { fetchBoreholes, fetchBoreholesById, fetchDetail, fetchMapPoints, fetchQueue, fetchStats, fetchUploadStatus, postUpload } from './api'
-import { LithologyPatterns, lithStyle, patternId } from './lithology'
+import { LithologyPatterns } from './lithology'
 import { DetailPanel } from './components/DetailPanel'
 import { MapView } from './components/MapView'
 import { ResultList } from './components/ResultList'
@@ -8,8 +8,10 @@ import { ReviewQueue } from './components/ReviewQueue'
 import { SectionView, orderAlongLine } from './components/SectionView'
 import { STATUS_LABEL } from './review'
 import type { QueueNav } from './components/ReviewBox'
-import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats, StatusFilter } from './types'
+import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats } from './types'
 import { readUrl, writeUrl, type View } from './url'
+import { SheetResizer } from './components/SheetResizer'
+import { FilterBar } from './components/FilterBar'
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
 
@@ -34,6 +36,22 @@ export default function App() {
   const [blockingOnly, setBlockingOnly] = useState(initial.blockingOnly)
   const [uploadJob, setUploadJob] = useState<{ id: string; label: string } | null>(null)
   const [uploading, setUploading] = useState(false) // from the first byte sent until the job is done or failed
+  const [listOpen, setListOpen] = useState(initial.listOpen)
+  const [sheetWidth, setSheetWidth] = useState<number | null>(null)  // null: default split; a reload resets it
+  const beforeSource = useRef<{ listOpen: boolean; sheetWidth: number | null }>({ listOpen: true, sheetWidth: null })
+  // The source page needs the room: opening it hides the list and widens the sheet so the record
+  // keeps a readable width; closing it restores both.
+  const onSourceToggle = useCallback((open: boolean) => {
+    if (open) {
+      beforeSource.current = { listOpen, sheetWidth }
+      const current = document.querySelector('.detail')?.getBoundingClientRect().width ?? 0
+      setListOpen(false)
+      setSheetWidth(Math.round(Math.max(current, Math.min(window.innerWidth * 0.75, window.innerWidth - 200))))
+    } else {
+      if (beforeSource.current.listOpen) setListOpen(true)
+      setSheetWidth(beforeSource.current.sheetWidth)
+    }
+  }, [listOpen, sheetWidth])
   const [uploadNote, setUploadNote] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -59,12 +77,12 @@ export default function App() {
 
   // Page and selection changes get a history entry, so Back closes a borehole or leaves the queue.
   useEffect(() => {
-    const url = writeUrl({ view, selectedId, sectionIds, filters, blockingOnly })
+    const url = writeUrl({ view, selectedId, sectionIds, listOpen, filters, blockingOnly })
     const shown = readUrl(window.location.search)
     if (url === (window.location.search || window.location.pathname)) return
     if (shown.view !== view || shown.selectedId !== selectedId) window.history.pushState(null, '', url)
     else window.history.replaceState(null, '', url)
-  }, [view, selectedId, sectionIds, filters, blockingOnly])
+  }, [view, selectedId, sectionIds, listOpen, filters, blockingOnly])
 
   useEffect(() => {
     const onPop = () => {
@@ -73,6 +91,7 @@ export default function App() {
       setSelectedId(s.selectedId)
       setSectionIds(s.sectionIds)
       setBlockingOnly(s.blockingOnly)
+      setListOpen(s.listOpen)
       setFilters(s.filters)
       setQuery(s.filters.q)
       restoreSection(s.sectionIds)
@@ -119,7 +138,7 @@ export default function App() {
   // Counts over all matches, from the server (the list may be one page).
   const lithologies = useMemo(() => {
     const counts = new Map<string, number>(data.facets?.lithologies ?? [])
-    filters.lithology.forEach((l) => counts.set(l, counts.get(l) ?? 0))
+    filters.lithology.forEach(({ key }) => counts.set(key, counts.get(key) ?? 0))
     return [...counts.entries()].sort((a, b) => b[1] - a[1])
   }, [data, filters.lithology])
 
@@ -131,9 +150,6 @@ export default function App() {
     return { lat: loc.lat, lon: loc.lon, accuracy_m: loc.accuracy_m,
       approximate: loc.method === 'geocoded_place', hasDepth: depth > 0 }
   }, [detail])
-
-  const toggleLith = (key: string) =>
-    setFilters((f) => ({ ...f, lithology: f.lithology.includes(key) ? f.lithology.filter((l) => l !== key) : [...f.lithology, key] }))
 
   const onReviewChange = useCallback((update: DetailUpdate) => {
     setDetail((d) => (d && d.borehole.borehole_id === update.borehole.borehole_id ? { ...d, ...update } : d))
@@ -233,7 +249,8 @@ export default function App() {
 
   return (
     <div
-      className="app"
+      className={`app${listOpen ? '' : ' list-closed'}`}
+      style={sheetWidth ? { '--sheet-w': `${sheetWidth}px` } as CSSProperties : undefined}
       onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }}
       onDragLeave={(e) => { if (!e.relatedTarget) setDragging(false) }}
       onDrop={onDrop}
@@ -278,76 +295,12 @@ export default function App() {
         )}
       </header>
 
-      <aside className="sidebar">
-        <div className="filters">
-          <div className="filter-row">
-            <label>
-              Release state
-              <select value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value as StatusFilter }))}>
-                <option value="all">All</option>
-                <option value="released">Released</option>
-                <option value="pending">Waiting for review</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </label>
-            <label>
-              Position quality
-              <select
-                value={filters.minPosition ?? ''}
-                onChange={(e) => setFilters((f) => ({ ...f, minPosition: e.target.value ? Number(e.target.value) : null }))}
-              >
-                <option value="">Any</option>
-                <option value="0.4">Medium or better</option>
-                <option value="0.7">High only</option>
-              </select>
-            </label>
-          </div>
-          {lithologies.length > 0 && (
-            <div className="chips" role="group" aria-label="Filter by lithology">
-              {lithologies.map(([key, n]) => (
-                <button key={key} className={`chip${filters.lithology.includes(key) ? ' chip-on' : ''}`} onClick={() => toggleLith(key)} aria-pressed={filters.lithology.includes(key)}>
-                  <svg width={12} height={12} aria-hidden="true"><rect width={12} height={12} fill={`url(#${patternId(key)})`} /></svg>
-                  {lithStyle(key).label}
-                  <span className="chip-n">{n}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {filters.lithology.length > 0 && (
-            <div className="filter-row filter-depth">
-              <label>
-                Between (m)
-                <input inputMode="decimal" placeholder="0" value={filters.depthFrom ?? ''}
-                  onChange={(e) => setFilters((f) => ({ ...f, depthFrom: e.target.value === '' ? null : Number(e.target.value.replace(',', '.')) }))} />
-              </label>
-              <label>
-                and (m)
-                <input inputMode="decimal" placeholder="any" value={filters.depthTo ?? ''}
-                  onChange={(e) => setFilters((f) => ({ ...f, depthTo: e.target.value === '' ? null : Number(e.target.value.replace(',', '.')) }))} />
-              </label>
-            </div>
-          )}
-          <div className="filter-row filter-lab">
-            <label>
-              Lab value
-              <select value={filters.lab ?? ''} onChange={(e) => setFilters((f) => ({ ...f, lab: e.target.value || null }))}>
-                <option value="">Any</option>
-                <option value="ucs">UCS (MPa)</option>
-                <option value="cai">CAI</option>
-                <option value="tensile_strength">Tensile strength (MPa)</option>
-                <option value="point_load_index">Point load Is50 (MPa)</option>
-                <option value="water_content">Water content (%)</option>
-              </select>
-            </label>
-            {filters.lab && (
-              <label>
-                at least
-                <input inputMode="decimal" placeholder="e.g. 80" value={filters.labMin ?? ''}
-                  onChange={(e) => setFilters((f) => ({ ...f, labMin: e.target.value === '' ? null : Number(e.target.value.replace(',', '.')) }))} />
-              </label>
-            )}
-          </div>
-        </div>
+      <button className="edge-tab list-toggle" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} aria-controls="sidebar"
+        aria-label={listOpen ? 'Hide filters and results' : 'Show filters and results'} title={listOpen ? 'Hide list' : 'Show list'}>
+        {listOpen ? '‹' : '›'}
+      </button>
+      <aside className="sidebar" id="sidebar" inert={!listOpen}>
+        <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies} />
         <div className="result-head">
           <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
           <span className="export-links">
@@ -367,7 +320,7 @@ export default function App() {
       </aside>
 
       <main className={`map-wrap${sectionFeatures.length ? ' map-wrap-section' : ''}`}>
-        <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} />
+        <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} sheetWidth={detail ? sheetWidth : null} />
         <div className="legend" aria-label="Map legend">
           <span><i className="dot dot-high" /> released</span>
           <span><i className="dot dot-medium" /> waiting for review</span>
@@ -391,6 +344,7 @@ export default function App() {
         )}
       </main>
 
+      {detail && <SheetResizer onResize={setSheetWidth} />}
       {detail && (
         <DetailPanel
           key={detail.borehole.borehole_id}
@@ -400,6 +354,7 @@ export default function App() {
           nav={nav}
           inSection={sectionIds.includes(detail.borehole.borehole_id)}
           onToggleSection={() => toggleSection(detail.borehole.borehole_id)}
+          onSourceToggle={onSourceToggle}
         />
       )}
     </div>

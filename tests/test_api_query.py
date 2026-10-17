@@ -43,12 +43,24 @@ def ids(r):
 
 def test_lithology_within_a_depth_range(client):
     assert ids(client.get("/api/boreholes?lithology=clay")) == ["q:A", "q:B"]
-    assert ids(client.get("/api/boreholes?lithology=clay&depth_from=10&depth_to=20")) == ["q:A"]
+    assert ids(client.get("/api/boreholes?lithology=clay:10:20")) == ["q:A"]
+    assert ids(client.get("/api/boreholes?lithology=clay::5")) == ["q:B"]
+
+
+def test_each_lithology_has_its_own_depth_range(client):
+    assert ids(client.get("/api/boreholes?lithology=clay::5&lithology=limestone:10:")) == ["q:B"]
+    assert ids(client.get("/api/boreholes?lithology=clay:10:&lithology=limestone")) == []
 
 
 def test_lab_value_range(client):
-    assert ids(client.get("/api/boreholes?lab=ucs&lab_min=100")) == ["q:A"]
-    assert ids(client.get("/api/boreholes?lab=ucs&lab_max=50")) == ["q:B"]
+    assert ids(client.get("/api/boreholes?lab=ucs:100:")) == ["q:A"]
+    assert ids(client.get("/api/boreholes?lab=ucs::50")) == ["q:B"]
+    assert ids(client.get("/api/boreholes?lab=ucs&lab=cai")) == []  # every parameter must be measured
+
+
+def test_malformed_conditions_are_rejected(client):
+    assert client.get("/api/boreholes?lab=ucs:abc").status_code == 422
+    assert client.get("/api/boreholes?lithology=clay:1:2:3").status_code == 422
 
 
 def test_bbox_across_the_antimeridian_and_on_its_edge(client):
