@@ -125,10 +125,10 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
   const section = useRef<HTMLElement>(null)
   const box = useRef<HTMLDivElement>(null)
   const tooltip = useRef<HTMLDivElement>(null)
+  const helpDialog = useRef<HTMLDialogElement>(null)
   const [width, setWidth] = useState(900)
   const [viewport, setViewport] = useState<Viewport | null>(null)
   const [correlate, setCorrelate] = useState(true)
-  const [helpOpen, setHelpOpen] = useState(false)  // phones only: the text hides behind '?'
   useEffect(() => {
     const el = box.current
     if (!el) return
@@ -159,7 +159,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     correlateBoundaries(ordered[j].properties.strip ?? [], f.properties.strip ?? [],
       routeLength([ordered[j].geometry.coordinates, f.geometry.coordinates])),
   ), [ordered])
-  const byElevation = ordered.every((f) => f.properties.elevation != null)
+  const byElevation = ordered.length > 0 && ordered.every((f) => f.properties.elevation != null)
 
   const layout = useMemo(() => {
     const positions = ordered.map((feature) => routePositions.get(feature.properties.id)?.chainageM ?? 0)
@@ -184,7 +184,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     const tunnelValues = tunnel?.map(([, value]) => value) ?? []
     const vMax = byElevation ? Math.max(...tops, ...tunnelValues.map((value) => value + diameter / 2)) : 0
     const vMin = byElevation ? Math.min(...bottoms, ...tunnelValues.map((value) => value - diameter / 2))
-      : Math.max(...bottoms, ...tunnelValues.map((value) => value + diameter / 2))
+      : Math.max(ordered.length ? 0 : 20, ...bottoms, ...tunnelValues.map((value) => value + diameter / 2))
     return { gaps, total, positions, plotWidth, svgWidth: MARGIN.left + plotWidth + COL + MARGIN.right, tops, vMax, vMin, tunnel, diameter }
   }, [ordered, route, routePositions, width, byElevation])
 
@@ -312,27 +312,29 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
   return (
     <section ref={section} className="section" aria-label="Section view">
       <header className="section-head">
-        <h2>{`${route.name || 'Tunnel route'} · ${ordered.length} borehole${ordered.length === 1 ? '' : 's'}`}</h2>
-        <button className="btn btn-small section-help-toggle" onClick={() => setHelpOpen(!helpOpen)}
-          aria-expanded={helpOpen} aria-controls="section-help" aria-label="How to read the section">?</button>
-        <p id="section-help" className={`muted section-help${helpOpen ? ' section-help-open' : ''}`}>
-          {byElevation ? 'Levels in m above datum as printed on each log.' : 'Depth below ground: not every log states its ground level.'}
-          {` Stations follow the tunnel route (${fmtDistance(layout.total)}); borehole offsets appear on hover.`}
-          {' '}Rock head (dashed) and groundwater (blue) are joined between holes up to {MAX_JOIN_GAP_M} m apart,
-          with a band of ±{UNCERTAINTY * 100} % of the distance to the nearest hole
-          {byElevation ? '' : ', assuming level ground'}. Coloured layers connect adjacent logs along the route;
-          longer spans are shown with a lighter pattern because their geology is less certain.
-          {route.tunnelMode === 'elevation' && !byElevation && route.startElevationM != null &&
-            ' Tunnel elevations need a ground level on every selected log.'}
-          {correlate && ' Dotted lines join matching layer boundaries; ambiguous units stay open.'}
-          {' '}Drag across an area to zoom both axes.
-        </p>
+        <h2>{route.name || 'Tunnel route'}</h2>
+        <button className="btn btn-small" onClick={() => helpDialog.current?.showModal()}>More info</button>
         <label className="section-correlate">
-          <input type="checkbox" checked={correlate} onChange={(e) => setCorrelate(e.target.checked)} /> Correlate layers
+          <input type="checkbox" checked={correlate} disabled={ordered.length < 2} onChange={(e) => setCorrelate(e.target.checked)} /> Correlate layers
         </label>
         <button className="btn" onClick={() => setViewport(null)} disabled={!active}>Reset zoom</button>
-        <button className="btn" onClick={onClear}>Clear boreholes</button>
+        <button className="btn" onClick={onClear} disabled={!ordered.length}>Clear boreholes</button>
       </header>
+      <dialog ref={helpDialog} className="section-help-dialog" aria-labelledby="section-help-title">
+        <div className="section-help-head">
+          <h2 id="section-help-title">How to read the tunnel profile</h2>
+          <button className="btn btn-icon" onClick={() => helpDialog.current?.close()} aria-label="Close information">×</button>
+        </div>
+        <p>Boreholes are placed at their stations along the route ({fmtDistance(layout.total)}). Hover a borehole to see its distance from the route and the measured layers.</p>
+        <p>{byElevation ? 'The vertical axis shows levels above the datum printed on the borehole logs.'
+          : ordered.length ? 'The vertical axis shows depth below ground because at least one borehole has no ground level.'
+            : 'The vertical axis shows depth below ground until boreholes with ground levels are selected.'}</p>
+        <p>Patterned columns are borehole measurements. The coloured areas between them are estimates; lighter areas span more than {MAX_JOIN_GAP_M} m and are less certain.</p>
+        <p>Dashed lines show estimated rock head, blue markers show groundwater, and the solid blue line shows the planned tunnel axis. The shaded band shows its diameter when set. Dotted lines show correlated layer boundaries when enabled.</p>
+        <p>Drag a rectangle over the profile to zoom. Use Reset zoom to return to the full view. Edit the route, borehole selection, and tunnel profile in the tunnel details on the right.</p>
+        {route.tunnelMode === 'elevation' && !byElevation && route.startElevationM != null &&
+          <p className="section-help-warning">A tunnel axis specified by elevation needs a ground level on every selected borehole.</p>}
+      </dialog>
       <div ref={box} className="section-plot">
         <svg width={layout.svgWidth} height={HEIGHT} role="img" aria-label={`Section with ${ordered.length} boreholes over ${fmtDistance(layout.total)}`}
           {...boxZoom.handlers}>

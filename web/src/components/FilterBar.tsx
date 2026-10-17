@@ -94,10 +94,11 @@ interface Props {
   lithologies: [string, number][]
   /** Name of the document group the filter narrows to: its project, else the group itself. */
   groupLabel: string | null
+  onShowTunnels: () => void
 }
 
 /** Filter pills; each opens a dropdown below the row. */
-export function FilterBar({ filters, setFilters, lithologies, groupLabel }: Props) {
+export function FilterBar({ filters, setFilters, lithologies, groupLabel, onShowTunnels }: Props) {
   const [open, setOpen] = useState<Menu | null>(null)
   const [top, setTop] = useState(0)
   const root = useRef<HTMLDivElement>(null)
@@ -159,6 +160,7 @@ export function FilterBar({ filters, setFilters, lithologies, groupLabel }: Prop
         {lithologies.length > 0 && pill('lithology', liths.length ? summary(liths, lithName, false) : 'Lithology', liths.length > 0)}
         {pill('lab', lab.length ? summary(lab, labName, true) : 'Lab value', lab.length > 0)}
         {pill('ground', 'Ground', ground)}
+        <button className="pill" onClick={onShowTunnels}>Tunnels</button>
         {filters.rockMax != null && (
           <button className="pill pill-on" onClick={() => set({ rockMax: null })} aria-label={`Remove rock head at most ${filters.rockMax} m`}>
             Rock head ≤ {filters.rockMax} m <span aria-hidden="true">×</span>

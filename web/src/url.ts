@@ -6,8 +6,8 @@ export type View = 'map' | 'review' | 'stats'
 export interface UrlState {
   view: View
   routeActive: boolean
+  tunnelId: string | null
   selectedId: string | null
-  routeHoleIds: string[]
   listOpen: boolean
   filters: Filters
   /** Review queue: only records with a blocking finding. */
@@ -47,8 +47,8 @@ export function readUrl(search: string): UrlState {
   return {
     view: VIEWS.includes(p.get('view') as View) ? (p.get('view') as View) : 'map',
     routeActive: p.get('route') === '1',
+    tunnelId: p.get('tunnel'),
     selectedId: p.get('borehole'),
-    routeHoleIds: p.getAll('routeHole'),
     blockingOnly: p.get('blocking') === '1',
     auditOnly: p.get('audit') === '1',
     listOpen: p.get('list') !== 'closed',
@@ -71,8 +71,8 @@ export function writeUrl(s: UrlState): string {
   const f = s.filters
   if (s.view !== 'map') p.set('view', s.view)
   if (s.routeActive) p.set('route', '1')
+  if (s.routeActive && s.tunnelId) p.set('tunnel', s.tunnelId)
   if (s.selectedId) p.set('borehole', s.selectedId)
-  s.routeHoleIds.forEach((id) => p.append('routeHole', id))
   if (s.blockingOnly) p.set('blocking', '1')
   if (s.auditOnly) p.set('audit', '1')
   if (!s.listOpen) p.set('list', 'closed')

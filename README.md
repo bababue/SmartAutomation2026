@@ -182,9 +182,12 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
   original page; hovering a value outlines where it was read. Similar holes by ground profile.
 - **Review queue:** approve with `A`, reject with `R`, `←`/`→` to move, `Esc` to close; the next record opens
   automatically.
-- **Tunnel route:** draw an alignment or import a GeoJSON LineString, pick holes in a corridor and get a
-  longitudinal section with estimated layers between holes. Spans over 150 m are drawn lighter as less certain.
-  The demo data contains a route to try.
+- **Tunnel routes:** choose **Tunnels** beside the borehole filters. The sidebar groups saved tunnels by the
+  project shared by the most selected boreholes; tunnels without a project appear first. Choose **New tunnel**
+  from the menu to create one. Its settings open on the right. Draw an alignment or import a WGS84 GeoJSON
+  LineString, select boreholes in the corridor, and view the longitudinal section below the map. Spans over
+  150 m are drawn lighter as less certain. Tunnels and selected boreholes are saved in this browser, and the
+  selected tunnel reopens from its URL after a reload.
 - **Statistics:** lithology, depth and release distributions and recurring findings for the current filter.
 - **Export:** released records as BoreholeDataFormat workbook or CSV, one row per layer.
 
