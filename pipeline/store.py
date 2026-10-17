@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS record_versions (
     id INTEGER PRIMARY KEY, uid TEXT NOT NULL, content_hash TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS versions_uid ON record_versions (uid, id);
+CREATE INDEX IF NOT EXISTS boreholes_queue ON boreholes (review_status, score, name, id);
 """
 
 
@@ -115,6 +116,8 @@ def _migrate_v3(con: sqlite3.Connection) -> None:
                                         "review_revision": "INTEGER NOT NULL DEFAULT 0"})
         _add_columns(con, "corrections", {"uid": "TEXT"})
         _add_columns(con, "review_events", {"uid": "TEXT", "version_id": "INTEGER"})
+        for table in ("layers", "lab_values", "findings", "record_sources"):  # derived: always rebuilt
+            con.execute(f"DROP TABLE IF EXISTS {table}")
         for statement in SCHEMA_V3.split(";"):  # executescript would commit the open transaction
             if statement.strip():
                 con.execute(statement)
@@ -172,6 +175,7 @@ def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
                 con.execute("UPDATE boreholes SET ground = ? WHERE rid = ?", (summary, row["rid"]))
     if con.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
         _migrate_v3(con)
+    con.execute("CREATE INDEX IF NOT EXISTS boreholes_queue ON boreholes (review_status, score, name, id)")
     return con
 
 

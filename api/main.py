@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from datetime import date as date_type
@@ -25,6 +26,7 @@ from pipeline import config, corrections, export, ingest, knowledge, scoring, st
 from schema.borehole import DIN4023_LABEL_DE, Borehole, Lithology, ReviewStatus
 
 app = FastAPI(title="Borehole Atlas API")
+app.add_middleware(GZipMiddleware, minimum_size=2000)  # map points and lists compress about 6:1
 
 
 def db() -> Iterator[sqlite3.Connection]:
@@ -97,24 +99,26 @@ def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, co
         clause, values = _bbox_clause(bbox)
         where.append(clause)
         params += values
+    # Set lookups through the (code, depth) and (parameter, value) indexes. A correlated EXISTS per hole
+    # would make SQLite scan every matching layer for every hole (171 s at 50,000 holes).
     for lith in lithology:  # each lithology somewhere in the hole, within the depth range if one is given
-        clause = "EXISTS (SELECT 1 FROM layers l WHERE l.rid = boreholes.rid AND l.primary_code = ?"
+        clause = "rid IN (SELECT rid FROM layers WHERE primary_code = ?"
         params.append(lith)
         if depth_to is not None:
-            clause += " AND l.top_m < ?"
+            clause += " AND top_m < ?"
             params.append(depth_to)
         if depth_from is not None:
-            clause += " AND l.bottom_m > ?"
+            clause += " AND bottom_m > ?"
             params.append(depth_from)
         where.append(clause + ")")
     if lab:
-        clause = "EXISTS (SELECT 1 FROM lab_values v WHERE v.rid = boreholes.rid AND v.parameter = ?"
+        clause = "rid IN (SELECT rid FROM lab_values WHERE parameter = ?"
         params.append(lab)
         if lab_min is not None:
-            clause += " AND v.value >= ?"
+            clause += " AND value >= ?"
             params.append(lab_min)
         if lab_max is not None:
-            clause += " AND v.value <= ?"
+            clause += " AND value <= ?"
             params.append(lab_max)
         where.append(clause + ")")
     if country:
