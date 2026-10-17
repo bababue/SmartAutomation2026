@@ -202,7 +202,7 @@ def result(con: sqlite3.Connection, job_id: str) -> UploadResult | None:
     if row["result"]:
         return UploadResult.model_validate_json(row["result"])
     task = json.loads(row["task"])
-    cancelled = [d["path"] for d in task["docs"] if d["doc_id"] in task.get("cancelled", [])]
+    cancelled = [d["path"] for d in task.get("docs", []) if d["doc_id"] in task.get("cancelled", [])]
     if row["status"] == "queued":
         ahead = con.execute("SELECT COUNT(*) FROM upload_jobs WHERE status IN ('queued', 'processing') "
                             "AND (created_at, id) < (?, ?)", (row["created_at"], job_id)).fetchone()[0]
@@ -218,7 +218,7 @@ def uploaded_files(con: sqlite3.Connection) -> dict[str, tuple[str, str]]:
     for row in con.execute("SELECT task, created_at FROM upload_jobs WHERE status IN ('queued', 'processing', 'done') "
                            "ORDER BY created_at"):
         task = json.loads(row["task"])
-        for d in task["docs"]:
+        for d in task.get("docs", []):  # a task stored in another shape names no files to compare
             if d.get("sha256") and d["doc_id"] not in task.get("cancelled", []):
                 out.setdefault(d["sha256"], (d["path"], row["created_at"]))
     return out

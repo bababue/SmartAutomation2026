@@ -829,7 +829,7 @@ def cancel_upload(job_id: str, body: CancelBody, con: DB) -> uploads.UploadResul
         raise HTTPException(404, "upload job not found")
     doc_ids = None
     if body.files is not None:
-        by_path = {Path(d["path"]).as_posix(): d["doc_id"] for d in json.loads(row["task"])["docs"]}
+        by_path = {Path(d["path"]).as_posix(): d["doc_id"] for d in json.loads(row["task"]).get("docs", [])}
         if unknown := [f for f in body.files if f not in by_path]:
             raise HTTPException(422, f"not in this upload: {', '.join(unknown)}")
         doc_ids = [by_path[f] for f in body.files]
