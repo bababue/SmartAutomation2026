@@ -22,6 +22,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, replace
 from datetime import date
 from itertools import combinations
+from typing import TypeVar
 
 from schema.borehole import (
     SPT,
@@ -40,13 +41,14 @@ from schema.borehole import (
     SourceRef,
 )
 
-from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLog
+from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLab, XLabRow, XLog
 from . import corrections, store
 from .georef import candidates, crs_from_hint, georeference, haversine_km, is_precise
 from .knowledge import printed_pair
 from .scoring import SOURCE_CONFLICTS, STRUCTURAL, counts_against, finding_severity, score
 
 LOG_KINDS = {"borehole_log", "test_pit_log", "probe_log"}
+T = TypeVar("T")
 
 
 @dataclass
@@ -100,7 +102,7 @@ _HOLE_WORDS = re.compile(r"^\s*(?:bore\s*hole|boring|bh|sondeo|drill\s*hole|borh
 # Probings are other investigations than boreholes with the same number ('CPT 1' is not 'BH 1').
 _PROBE_WORDS = re.compile(r"^\s*(?:cptu?|dpsh|dpl|dph|dp|totalsondering|trykksondering|dreiesondering|sondering|"
                           r"rammsondierung|sondierung|sonda)(?![a-z])\.?\s*(?:no\.?|nr\.?)?\s*", re.I)
-_KINDS = {"test_pit_log": "test_pit", "probe_log": "probe", "borehole_log": "borehole"}
+_HOLE_KIND_OF_PAGE = {"test_pit_log": "test_pit", "probe_log": "probe", "borehole_log": "borehole"}
 
 
 def hole_key(name: str, kind: str | None) -> tuple[str | None, str]:
@@ -113,7 +115,7 @@ def hole_key(name: str, kind: str | None) -> tuple[str | None, str]:
     return (kind if kind in ("borehole", "test_pit", "probe") else None), norm_name(name)
 
 
-def lookup(index: dict[tuple[str | None, str], object], key: tuple[str | None, str]):
+def lookup_hole(index: dict[tuple[str | None, str], T], key: tuple[str | None, str]) -> T | None:
     """Exact (type, number) match; without a known type only a number that is unique across types."""
     if key in index:
         return index[key]
@@ -154,14 +156,15 @@ def _date(raw: str | None) -> date | None:
         return None
 
 
-# Unit conversion for lab values: (parameter, unit pattern) → factor to the target unit.
+_STRENGTH = {LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}
+_SHEAR = {LabParameter.cohesion, LabParameter.undrained_shear_strength}
+_WEIGHT = {LabParameter.unit_weight, LabParameter.dry_unit_weight}
 # Units each parameter is stored in, as printed without conversion (see LAB_UNITS); a value with any
 # other unit that has no factor below is dropped rather than published in the wrong unit.
-_STRENGTH = {LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}
 _LAB_NATIVE: list[tuple[set[LabParameter], str]] = [
     (_STRENGTH, r"^(mpa|n/mm2)$"),
-    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^(kpa|kn/m2)$"),
-    ({LabParameter.unit_weight, LabParameter.dry_unit_weight}, r"^kn/m3$"),
+    (_SHEAR, r"^(kpa|kn/m2)$"),
+    (_WEIGHT, r"^kn/m3$"),
     ({LabParameter.water_content, LabParameter.consistency, LabParameter.fines, LabParameter.sand, LabParameter.gravel,
       LabParameter.liquid_limit, LabParameter.plastic_limit}, r"^(%|percent)$"),
     ({LabParameter.friction_angle}, r"^(°|deg|degrees?)$"),
@@ -170,22 +173,25 @@ _LAB_NATIVE: list[tuple[set[LabParameter], str]] = [
 _DIMENSIONLESS = {LabParameter.cai, LabParameter.rmr, LabParameter.q, LabParameter.gsi, LabParameter.plasticity_index,
                   LabParameter.consistency_index, LabParameter.poissons_ratio, LabParameter.other}
 
+# (parameters, unit pattern, factor to the target unit); the first match converts.
 _LAB_FACTORS: list[tuple[set[LabParameter], str, float]] = [
     (_STRENGTH, r"^psi$", 0.00689476),
     (_STRENGTH, r"^ksi$", 6.89476),
     (_STRENGTH, r"^kn/m2$", 0.001),
-    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^psi$", 6.89476),
-    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^t/?m2$", 9.80665),
-    ({LabParameter.unit_weight, LabParameter.dry_unit_weight}, r"^pcf$|^lb/ft3$", 0.157087),
-    ({LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}, r"^kpa$", 0.001),
-    ({LabParameter.ucs, LabParameter.tensile_strength, LabParameter.point_load_index, LabParameter.e_modulus}, r"^kg/?cm2|kgf/cm", 0.0980665),
+    (_SHEAR, r"^psi$", 6.89476),
+    (_SHEAR, r"^t/?m2$", 9.80665),
+    (_WEIGHT, r"^pcf$|^lb/ft3$", 0.157087),
+    (_STRENGTH, r"^kpa$", 0.001),
+    (_STRENGTH, r"^kg/?cm2|kgf/cm", 0.0980665),
     ({LabParameter.ucs, LabParameter.tensile_strength, LabParameter.e_modulus}, r"^gpa$", 1000.0),
-    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^kg/?cm2|kgf/cm", 98.0665),
-    ({LabParameter.cohesion, LabParameter.undrained_shear_strength}, r"^mpa$", 1000.0),
-    ({LabParameter.unit_weight, LabParameter.dry_unit_weight}, r"^t/?m3|tn/?m3|g/?cm3|mg/m3", 9.80665),
+    (_SHEAR, r"^kg/?cm2|kgf/cm", 98.0665),
+    (_SHEAR, r"^mpa$", 1000.0),
+    (_WEIGHT, r"^t/?m3|tn/?m3|g/?cm3|mg/m3", 9.80665),
     ({LabParameter.hydraulic_conductivity}, r"^cm/s", 0.01),
     ({LabParameter.hydraulic_conductivity}, r"^m/d(ay)?$", 1 / 86400),
 ]
+
+_NUMBER = r"[-+]?\d+(?:[.,]\d+)?(?:\s*(?:[eE]|[x×*]\s*10\^?)\s*[-+−]?\d+)?"
 
 
 def lab_qualifier(value_raw: str) -> str | None:
@@ -214,6 +220,14 @@ def _lab_value(parameter: LabParameter, value_raw: str, unit_raw: str | None) ->
 def lab_upper(parameter: LabParameter, value_raw: str, unit_raw: str | None) -> float | None:
     match = re.fullmatch(rf"\s*{_NUMBER}\s*[-–~]\s*({_NUMBER})\s*", value_raw)
     return _lab_value(parameter, match.group(1), unit_raw) if match else None
+
+
+def _lab_result(row: XLab | XLabRow, value: float, top_m: float | None, bottom_m: float | None,
+                source: SourceRef) -> LabResult:
+    return LabResult(parameter=row.parameter, parameter_raw=row.parameter_raw, value=value,
+                     value_raw=f"{row.value_raw} {row.unit_raw or ''}".strip(), top_m=top_m, bottom_m=bottom_m,
+                     sample_name=row.sample_name, source=source, qualifier=lab_qualifier(row.value_raw),
+                     value_upper=lab_upper(row.parameter, row.value_raw, row.unit_raw))
 
 
 def _bbox(raw: list[float] | None) -> tuple[float, float, float, float] | None:
@@ -308,6 +322,12 @@ def _sheet_join(prev: Layer, nxt: Layer) -> str | None:
 SHEET = re.compile(r"(\d{1,2})\s*(?:of|de|von|aus|di|sur|af|av|/)\s*(\d{1,2})", re.IGNORECASE)
 
 
+def _sheet_number(log: XLog) -> tuple[int, int] | None:
+    """(k, n) of a sheet indicator 'k of n'."""
+    m = SHEET.search(log.sheet or "")
+    return (int(m.group(1)), int(m.group(2))) if m and 1 <= int(m.group(1)) <= int(m.group(2)) <= 50 else None
+
+
 def missing_sheets(logs: list[tuple[XLog, SourceRef]]) -> list[str]:
     """'missing sheets: 2 of 3' when the printed sheet indicators ('1 of 3', 'Hoja 3 de 3') leave a hole.
     Only numbering that plausibly counts this hole's sheets is checked (a total of at most 5, or at most as
@@ -315,10 +335,9 @@ def missing_sheets(logs: list[tuple[XLog, SourceRef]]) -> list[str]:
     seen: set[int] = set()
     totals: Counter[int] = Counter()
     for log, _ in logs:
-        m = SHEET.search(log.sheet or "")
-        if m and 1 <= int(m.group(1)) <= int(m.group(2)) <= 50:
-            seen.add(int(m.group(1)))
-            totals[int(m.group(2))] += 1
+        if sheet := _sheet_number(log):
+            seen.add(sheet[0])
+            totals[sheet[1]] += 1
     if not totals:
         return []
     total = totals.most_common(1)[0][0]
@@ -780,7 +799,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     coords_raw = _first(x.coords_raw for x in xs)
     crs_raw = _first(x.crs_raw for x in xs)
     method = GeorefMethod.stated_coordinates
-    row = lookup(coord_rows, key)
+    row = lookup_hole(coord_rows, key)
     # A surveyor's coordinate table can name another system than the log template prints: both are
     # tried and the named place decides.
     table_crs = row.crs_raw if row and coords_raw and row.crs_raw and row.crs_raw != crs_raw else None
@@ -854,11 +873,7 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
             GroundwaterObservation(depth_m=g.depth_m, kind=g.kind, observed_on=_date(g.date), dry=g.dry,
                                    reference=g.reference, raw=g.raw, source=src)
             for x, src in logs for g in x.groundwater),
-        lab_results=[LabResult(parameter=lab.parameter, parameter_raw=lab.parameter_raw, value=v,
-                               value_raw=f"{lab.value_raw} {lab.unit_raw or ''}".strip(), top_m=lab.top_m,
-                               bottom_m=lab.bottom_m, sample_name=lab.sample_name, source=src,
-                               qualifier=lab_qualifier(lab.value_raw),
-                               value_upper=lab_upper(lab.parameter, lab.value_raw, lab.unit_raw))
+        lab_results=[_lab_result(lab, v, lab.top_m, lab.bottom_m, src)
                      for x, src in logs for lab in x.lab_results
                      if (v := _lab_value(lab.parameter, lab.value_raw, lab.unit_raw)) is not None],
         sources=[src for _, src in logs],
@@ -889,12 +904,7 @@ def placeholder(doc_id: str, source_file: str, page: int | None, issue: str, nam
 
 def _log_key(log: XLog, page_kind: str) -> tuple[str | None, str]:
     return hole_key(log.name, log.investigation_type if log.investigation_type in ("borehole", "test_pit", "probe")
-                    else _KINDS.get(page_kind))
-
-
-def _sheet_number(log: XLog) -> tuple[int, int] | None:
-    m = SHEET.search(log.sheet or "")
-    return (int(m.group(1)), int(m.group(2))) if m and 1 <= int(m.group(1)) <= int(m.group(2)) <= 50 else None
+                    else _HOLE_KIND_OF_PAGE.get(page_kind))
 
 
 def _file_order(doc_id: str) -> list:
@@ -1343,7 +1353,7 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
 
     def find_hole(name: str, page_kind: str | None, depth: float | None) -> Borehole | None:
         kind, number = hole_key(name, page_kind)
-        bh = lookup(by_name, (kind, number))
+        bh = lookup_hole(by_name, (kind, number))
         if bh is None and kind is None:  # same number for a borehole and a pit: the depth decides
             fits = [b for (k, n), b in by_name.items() if n == number and deep_enough(b, depth)]
             bh = fits[0] if len(fits) == 1 else None
@@ -1398,17 +1408,11 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
                 continue
             top = row.top_m if row.top_m is not None else (sample.top_m if sample else None)
             bottom = row.bottom_m if row.bottom_m is not None else (sample.bottom_m if sample and row.top_m is None else None)
-            result = LabResult(parameter=row.parameter, parameter_raw=row.parameter_raw, value=value,
-                               value_raw=f"{row.value_raw} {row.unit_raw or ''}".strip(), top_m=top, bottom_m=bottom,
-                               sample_name=row.sample_name, source=SourceRef(file=r.source_file, page=r.page),
-                               qualifier=lab_qualifier(row.value_raw),
-                               value_upper=lab_upper(row.parameter, row.value_raw, row.unit_raw))
-            add_lab_result(bh, result)
+            add_lab_result(bh, _lab_result(row, value, top, bottom, SourceRef(file=r.source_file, page=r.page)))
             linked += 1
     return linked, unmatched, implausible
 
 
-_NUMBER = r"[-+]?\d+(?:[.,]\d+)?(?:\s*(?:[eE]|[x×*]\s*10\^?)\s*[-+−]?\d+)?"
 _LEADING_VALUE = re.compile(rf"^\s*[<>≤≥~]?\s*{_NUMBER}(?:\s*[-–~]\s*{_NUMBER})?\s*")
 
 
