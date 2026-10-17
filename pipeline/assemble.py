@@ -854,7 +854,8 @@ def build_borehole(doc_id: str, logs: list[tuple[XLog, SourceRef]],
         location.crs_raw = None  # not printed on this log
         if resolved in crs_from_hint(doc_crs[0]):
             geo.issues.append(f"coordinate system taken from page {doc_crs[1]} of the document: {doc_crs[0]}")
-            location.confidence = min(location.confidence or 0.0, 0.9)  # stated, but not on this log
+            # Stated in the document, only not on this log: still releasable, just not above the threshold.
+            location.confidence = min(location.confidence or 0.0, 0.9)
     coords_log = next(((x, src) for x, src in logs if x.coords_raw), None)
     location.source = SourceRef(file=coords_log[1].file, page=coords_log[1].page, bbox=_bbox(coords_log[0].coords_bbox)) \
         if coords_log else logs[0][1]
