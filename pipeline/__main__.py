@@ -124,7 +124,7 @@ def cmd_share(args) -> None:
     try:
         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
                                 cwd=config.ROOT).stdout.strip() or "unknown"
-    except OSError:  # git not installed
+    except OSError:  # no git installed, e.g. in the Docker image
         commit = "unknown"
     (out / "README.md").write_text(SHARE_README.format(
         commit=commit, created=datetime.date.today().isoformat(), source=config.DB_PATH.name,
