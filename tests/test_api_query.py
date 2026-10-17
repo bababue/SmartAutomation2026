@@ -147,3 +147,21 @@ def test_holes_group_by_document_labelled_with_their_most_frequent_project(clien
     assert groups["q"]["bbox"] == [-179.5, 10.0, 179.5, 48.0]
     assert ids(client.get("/api/boreholes", params={"group": "folder"})) == ["folder__a:D", "folder__b:E",
                                                                              "folder__b:F", "folder__b:G"]
+
+
+def test_statistics_aggregate_the_filtered_records_including_those_without_a_position(client):
+    from pipeline.assemble import placeholder
+    con = store.connect()
+    store.save_borehole(con, placeholder("q", "q.pdf", 4, "log not extracted: page 4 shows 2 logs, 1 came back"))
+    con.close()
+    s = client.get("/api/stats/detail").json()
+    assert (s["boreholes"], s["layers"], s["documents"]) == (4, 5, 1)
+    assert s["position"] == {"exact": 3, "approximate": 0, "none": 1}
+    assert dict(s["lithology_m"]) == {"clay": 23.0, "limestone": 15.0, "sand": 12.0, "gravel": 9.0}
+    assert s["depths"][1] == 1 and s["depths"][4] == 1 and s["depths"][6] == 1 and sum(s["depths"]) == 3
+    assert s["findings"][0]["severity"] == "blocking"  # the lost log first
+    assert s["funnel"]["records"] == 4 and s["funnel"]["without_blocking"] <= 3
+    assert s["groups"] == [{"group": "q", "count": 4, "released": s["status"]["auto_approved"],
+                            "top_finding": s["groups"][0]["top_finding"]}]
+    clay = client.get("/api/stats/detail?lithology=clay:10:").json()
+    assert clay["boreholes"] == 1 and dict(clay["lithology_m"])["clay"] == 18.0

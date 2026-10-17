@@ -139,8 +139,9 @@ def _conditions(values: list[str], name: str) -> list[tuple[str, float | None, f
 
 
 def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, ids,
-             group=None) -> tuple[list[str], list]:
-    where, params = ["lat IS NOT NULL"], []
+             group=None, located=True) -> tuple[list[str], list]:
+    """WHERE clauses of the list filters; `located`: only holes with a position (the map and the list)."""
+    where, params = ["lat IS NOT NULL"] if located else ["1"], []
     if group:
         where.append(f"{GROUP} = ?")
         params.append(group)
@@ -638,6 +639,83 @@ def stats(con: DB):
         "status": {s.value: by_status.get(s.value, 0) for s in ReviewStatus},
         "threshold": config.AUTO_APPROVE_THRESHOLD,
         "demo": config.DB_PATH.name.startswith("demo"),  # synthetic fixtures, no source pages
+    }
+
+
+# Final depths in the histogram: 5 m bins up to 50 m, everything deeper in one.
+DEPTH_BIN_M, DEPTH_BINS = 5, 10
+SEVERITY_ORDER = ("blocking", "needs_look", "warning", "info")
+
+
+@app.get("/api/stats/detail")
+def stats_detail(
+    con: DB,
+    q: str | None = None,
+    lithology: list[str] = Query(default_factory=list),
+    lab: list[str] = Query(default_factory=list),
+    min_position: float | None = None,
+    status: Literal["all", "released", "pending", "rejected"] = "all",
+    group: str | None = None,
+):
+    """Aggregates for the statistics view over the records the list filters select, holes without a position
+    included: key figures, release funnel, findings, logged metres per lithology, final depths and groups."""
+    where, params = _filters(q, None, _conditions(lithology, "lithology"), _conditions(lab, "lab"), None, None,
+                             min_position, status, [], group, located=False)
+    scope = f"SELECT rid FROM boreholes WHERE {' AND '.join(where)}"
+
+    def rows(sql: str) -> list[sqlite3.Row]:
+        return con.execute(sql.replace("{scope}", scope), params).fetchall()
+
+    totals, = rows(
+        "SELECT COUNT(*) boreholes, COALESCE(SUM(n_layers), 0) layers, COUNT(DISTINCT doc_id) documents, "
+        "COUNT(DISTINCT country) countries, "
+        "SUM(loc_method IN ('stated_coordinates', 'linked_table', 'manual')) exact, "
+        "SUM(loc_method = 'geocoded_place') approximate, SUM(lat IS NULL) unlocated, "
+        "SUM(NOT EXISTS (SELECT 1 FROM findings f WHERE f.rid = b.rid AND f.severity = 'blocking')) unblocked "
+        "FROM boreholes b WHERE rid IN ({scope})")
+    (pages,), = rows("SELECT COALESCE(SUM(pages), 0) FROM documents WHERE doc_id IN "
+                     "(SELECT doc_id FROM boreholes WHERE rid IN ({scope}))")
+    by_status = {r["review_status"]: r["n"] for r in rows(
+        "SELECT review_status, COUNT(*) n FROM boreholes WHERE rid IN ({scope}) GROUP BY review_status")}
+    findings = sorted(rows(
+        "SELECT code, severity, COUNT(DISTINCT rid) records, COUNT(*) n FROM findings WHERE rid IN ({scope}) "
+        "GROUP BY code, severity"),
+        key=lambda r: (SEVERITY_ORDER.index(r["severity"]) if r["severity"] in SEVERITY_ORDER else 9, -r["records"]))
+    metres = rows("SELECT primary_code, SUM(bottom_m - top_m) m FROM layers WHERE rid IN ({scope}) "
+                  "GROUP BY primary_code ORDER BY m DESC")
+    depths = [0] * (DEPTH_BINS + 1)
+    for r in rows(f"SELECT MIN(CAST(depth / {DEPTH_BIN_M} AS INTEGER), {DEPTH_BINS}) bin, COUNT(*) n "
+                  "FROM boreholes WHERE rid IN ({scope}) AND depth IS NOT NULL GROUP BY bin"):
+        depths[r["bin"]] = r["n"]
+    group_rows = rows(
+        f"SELECT {GROUP} grp, COUNT(*) n, SUM(review_status IN ('approved', 'auto_approved')) released "
+        "FROM boreholes WHERE rid IN ({scope}) GROUP BY grp ORDER BY n DESC")
+    top_finding: dict[str, dict] = {}  # most frequent finding that is no mere note, per group
+    for r in rows(f"SELECT {GROUP} grp, f.code, COUNT(DISTINCT f.rid) n FROM findings f "
+                  "JOIN boreholes b ON b.rid = f.rid WHERE f.rid IN ({scope}) "
+                  "AND f.severity IN ('blocking', 'needs_look', 'warning') GROUP BY grp, f.code ORDER BY n DESC"):
+        top_finding.setdefault(r["grp"], {"code": r["code"], "records": r["n"]})
+    crs = rows("SELECT json_extract(data, '$.location.crs_epsg') epsg, COUNT(*) n FROM boreholes "
+               "WHERE rid IN ({scope}) AND json_extract(data, '$.location.crs_epsg') IS NOT NULL GROUP BY epsg "
+               "ORDER BY n DESC")
+    return {
+        "documents": totals["documents"], "pages": pages, "boreholes": totals["boreholes"], "layers": totals["layers"],
+        "countries": totals["countries"],
+        "status": {s.value: by_status.get(s.value, 0) for s in ReviewStatus},
+        "position": {"exact": totals["exact"] or 0, "approximate": totals["approximate"] or 0,
+                     "none": totals["unlocated"] or 0},
+        "funnel": {"records": totals["boreholes"], "without_blocking": totals["unblocked"] or 0,
+                   "released_automatically": by_status.get("auto_approved", 0),
+                   "released": by_status.get("auto_approved", 0) + by_status.get("approved", 0)},
+        "threshold": config.AUTO_APPROVE_THRESHOLD,
+        "findings": [{"code": r["code"], "severity": r["severity"], "records": r["records"], "count": r["n"]}
+                     for r in findings],
+        "lithology_m": [[r["primary_code"], round(r["m"], 2)] for r in metres],
+        "depth_bin_m": DEPTH_BIN_M,
+        "depths": depths,
+        "groups": [{"group": r["grp"], "count": r["n"], "released": r["released"],
+                    "top_finding": top_finding.get(r["grp"])} for r in group_rows],
+        "crs": [[r["epsg"], r["n"]] for r in crs],
     }
 
 

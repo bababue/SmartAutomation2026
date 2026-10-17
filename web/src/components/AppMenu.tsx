@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 
 interface Props {
   inReview: boolean
+  inStats: boolean
   uploading: boolean
   dark: boolean
   onToggleReview: () => void
+  onToggleStats: () => void
   onUpload: () => void
   onToggleDark: () => void
 }
@@ -20,13 +22,14 @@ const ICON = {
   table: 'M3 4h12v10H3zM3 7.5h12M3 11h12M7.5 4v10',
   file: 'M5 2.5h5.5l3 3v10H5zM10.5 2.5v3h3',
   chevron: 'M7 4.5 11.5 9 7 13.5',
+  stats: 'M3 15V9.5M7.5 15V4M12 15v-7M16 15H2',
 }
 
 function Icon({ d }: { d: string }) {
   return <svg className="menu-icon" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d={d} /></svg>
 }
 
-export function AppMenu({ inReview, uploading, dark, onToggleReview, onUpload, onToggleDark }: Props) {
+export function AppMenu({ inReview, inStats, uploading, dark, onToggleReview, onToggleStats, onUpload, onToggleDark }: Props) {
   const [open, setOpen] = useState(false)
   const [sub, setSub] = useState<Sub | null>(null)
   const root = useRef<HTMLDivElement>(null)
@@ -95,6 +98,9 @@ export function AppMenu({ inReview, uploading, dark, onToggleReview, onUpload, o
         <div className="app-menu-list" role="menu" aria-label="Menu">
           <button role="menuitem" className="app-menu-item" onClick={pick(onToggleReview)} onMouseEnter={() => setSub(null)}>
             <Icon d={inReview ? ICON.map : ICON.review} /><span className="menu-text">{inReview ? 'Back to map' : 'Review queue'}</span>
+          </button>
+          <button role="menuitem" className="app-menu-item" onClick={pick(onToggleStats)} onMouseEnter={() => setSub(null)}>
+            <Icon d={inStats ? ICON.map : ICON.stats} /><span className="menu-text">{inStats ? 'Back to map' : 'Statistics'}</span>
           </button>
           <button role="menuitem" className="app-menu-item" onClick={pick(onUpload)} disabled={uploading}
             onMouseEnter={() => setSub(null)} title="Or drop a file anywhere on the page">

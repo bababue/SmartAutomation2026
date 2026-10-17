@@ -248,6 +248,28 @@ export interface Stats {
   demo: boolean
 }
 
+/** Aggregates over the records the list filters select (holes without a position included). */
+export interface StatsDetail {
+  documents: number
+  pages: number
+  boreholes: number
+  layers: number
+  countries: number
+  status: Record<ReviewStatus, number>
+  position: { exact: number; approximate: number; none: number }
+  funnel: { records: number; without_blocking: number; released_automatically: number; released: number }
+  threshold: number
+  /** Blocking first, then needs a look, warnings and notes; most records first within each. */
+  findings: { code: string; severity: 'blocking' | 'needs_look' | 'warning' | 'info'; records: number; count: number }[]
+  /** Logged metres per lithology, most first. */
+  lithology_m: [string, number][]
+  depth_bin_m: number
+  /** Holes per final-depth bin of depth_bin_m metres; the last bin holds everything deeper. */
+  depths: number[]
+  groups: { group: string; count: number; released: number; top_finding: { code: string; records: number } | null }[]
+  crs: [number, number][]
+}
+
 export interface UploadStatus {
   status: 'processing' | 'done' | 'error'
   boreholes: { id: string; name: string; review_status: ReviewStatus }[]

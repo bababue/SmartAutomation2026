@@ -1,6 +1,6 @@
 import type { Filters, RangeFilter, StatusFilter } from './types'
 
-export type View = 'map' | 'review'
+export type View = 'map' | 'review' | 'stats'
 
 export interface UrlState {
   view: View
@@ -13,6 +13,7 @@ export interface UrlState {
 }
 
 const STATUSES: StatusFilter[] = ['all', 'released', 'pending', 'rejected']
+const VIEWS: View[] = ['map', 'review', 'stats']
 
 function num(v: string | null): number | null {
   if (v == null || v === '') return null
@@ -34,7 +35,7 @@ export function readUrl(search: string): UrlState {
   const p = new URLSearchParams(search)
   const status = p.get('status') as StatusFilter | null
   return {
-    view: p.get('view') === 'review' ? 'review' : 'map',
+    view: VIEWS.includes(p.get('view') as View) ? (p.get('view') as View) : 'map',
     selectedId: p.get('borehole'),
     sectionIds: p.getAll('section'),
     blockingOnly: p.get('blocking') === '1',

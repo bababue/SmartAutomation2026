@@ -6,6 +6,7 @@ import { DetailPanel } from './components/DetailPanel'
 import { MapView } from './components/MapView'
 import { ResultList } from './components/ResultList'
 import { ReviewQueue } from './components/ReviewQueue'
+import { StatsView } from './components/StatsView'
 import { SectionView, orderAlongLine } from './components/SectionView'
 import { STATUS_LABEL } from './review'
 import type { QueueNav } from './components/ReviewBox'
@@ -319,8 +320,9 @@ export default function App() {
               )}
             </p>
           )}
-          <AppMenu inReview={view === 'review'} uploading={uploading} dark={dark}
+          <AppMenu inReview={view === 'review'} inStats={view === 'stats'} uploading={uploading} dark={dark}
             onToggleReview={() => setView(view === 'review' ? 'map' : 'review')}
+            onToggleStats={() => setView(view === 'stats' ? 'map' : 'stats')}
             onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} />
         </div>
       </header>
@@ -367,6 +369,10 @@ export default function App() {
           <ReviewQueue items={queue} total={queueTotal} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9}
             blockingOnly={blockingOnly} onBlockingOnly={setBlockingOnly} onSelect={setSelectedId}
             onChanged={() => setRefresh((n) => n + 1)} onClose={() => setView('map')} />
+        )}
+        {view === 'stats' && (
+          <StatsView filters={filters} onClose={() => setView('map')}
+            onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })); setView('map') }} />
         )}
       </main>
 
