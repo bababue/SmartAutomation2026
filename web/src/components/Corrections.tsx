@@ -47,6 +47,47 @@ interface EditState {
   onCancel: () => void
 }
 
+/** The detail header as fields: hole name, project and location. */
+export function HeaderEditor({ borehole, onChange, onDone }: {
+  borehole: Borehole
+  onChange: (update: DetailUpdate) => void
+  onDone: () => void
+}) {
+  const initial = { borehole_name: str(borehole.borehole_name), project_name: str(borehole.project_name),
+    location_name: str(borehole.location_name) }
+  type Key = keyof typeof initial
+  const [v, setV] = useState(initial)
+  const { send, busy, error } = useCorrection(borehole.borehole_id, onChange)
+  const canSave = !busy && v.borehole_name.trim() !== ''
+
+  async function save() {
+    if (!canSave) return
+    const items: Item[] = (Object.keys(initial) as Key[]).filter((k) => v[k].trim() !== initial[k]).map((k) => ({
+      kind: 'field', payload: { field: k, value: v[k].trim() || null },
+    }))
+    if (await send(items)) onDone()
+  }
+  const field = (key: Key, label: string, className = 'field') => (
+    <input className={className} value={v[key]} placeholder={label} aria-label={label} autoFocus={key === 'borehole_name'}
+      onChange={(e) => setV({ ...v, [key]: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && save()} />
+  )
+
+  return (
+    <div className="head-edit">
+      {field('borehole_name', 'Hole name', 'field head-edit-name')}
+      <div className="head-edit-row">
+        {field('project_name', 'Project')}
+        {field('location_name', 'Location')}
+        <span className="card-actions">
+          <button className="btn btn-small btn-ghost" onClick={onDone} disabled={busy}>Cancel</button>
+          <button className="btn btn-small btn-primary" onClick={save} disabled={!canSave}>{busy ? 'Saving…' : 'Save'}</button>
+        </span>
+      </div>
+      {error && <p className="error" role="alert">{error}</p>}
+    </div>
+  )
+}
+
 /** Card title with either the Edit button or, while editing, Cancel and Save. */
 export function CardHead({ title, id, onEdit, edit }: { title: ReactNode; id?: string; onEdit?: () => void; edit?: EditState }) {
   return (
