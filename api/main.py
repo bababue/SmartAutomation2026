@@ -5,12 +5,14 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import re
 import shutil
 import sqlite3
 import threading
 import uuid
 from collections.abc import Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -18,16 +20,29 @@ from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from datetime import date as date_type
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
+import pymupdf
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, export, ingest, scoring, store
+from pipeline import config, corrections, export, ingest, scoring, store, uploads
 from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
-app = FastAPI(title="Borehole Atlas API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    queue = uploads.UploadQueue(config.DB_PATH)
+    app.state.upload_queue = queue
+    try:
+        yield
+    finally:
+        await run_in_threadpool(queue.close)
+
+
+app = FastAPI(title="Borehole Atlas API", lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=2000)  # map points and lists compress about 6:1
 
 
@@ -77,7 +92,13 @@ MAP_COLUMNS = "id, name, location_name, lat, lon, depth, review_status, score, l
 def _bbox_clause(bbox: str) -> tuple[str, list]:
     """R-tree candidates by overlap (its coordinates are rounded outwards), then the exact position. A box
     crossing the antimeridian (min lon > max lon) is split in two."""
-    min_lon, min_lat, max_lon, max_lat = (float(v) for v in bbox.split(","))
+    try:
+        min_lon, min_lat, max_lon, max_lat = (float(v) for v in bbox.split(","))
+    except ValueError:
+        raise HTTPException(422, "bbox must contain four numbers: minLon,minLat,maxLon,maxLat")
+    if not (all(math.isfinite(v) for v in (min_lon, min_lat, max_lon, max_lat))
+            and -180 <= min_lon <= 180 and -180 <= max_lon <= 180 and -90 <= min_lat <= max_lat <= 90):
+        raise HTTPException(422, "bbox must have valid longitude and latitude bounds, with minLat <= maxLat")
     spans = [(min_lon, max_lon)] if min_lon <= max_lon else [(min_lon, 180.0), (-180.0, max_lon)]
     parts, params = [], []
     for lo, hi in spans:
@@ -87,11 +108,28 @@ def _bbox_clause(bbox: str) -> tuple[str, list]:
     return "(" + " OR ".join(parts) + ")", params
 
 
-def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, country, min_depth, min_position,
-             status) -> tuple[list[str], list]:
+def _conditions(values: list[str], name: str) -> list[tuple[str, float | None, float | None]]:
+    """'key', 'key:min:max', 'key:min:' or 'key::max' -> (key, min, max)."""
+    out = []
+    for value in values:
+        key, *bounds = value.split(":")
+        if not key or len(bounds) > 2:
+            raise HTTPException(422, f"{name}: expected key or key:min:max, got {value!r}")
+        try:
+            lo, hi = [float(b) if b else None for b in [*bounds, "", ""][:2]]
+        except ValueError:
+            raise HTTPException(422, f"{name}: bounds must be numbers, got {value!r}") from None
+        out.append((key, lo, hi))
+    return out
+
+
+def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, ids) -> tuple[list[str], list]:
     where, params = ["lat IS NOT NULL"], []
+    if ids:
+        where.append(f"id IN ({','.join('?' * len(ids))})")
+        params += ids
     if q and (fq := _fts_query(q)):
-        # Text match, or every search word appears in the source document's file path (e.g. 'AUS01').
+        # Text match, or every search word appears in the source document's file path (e.g. 'report').
         tokens = re.findall(r"\w+", q, flags=re.UNICODE)
         path_match = " AND ".join("path LIKE ? ESCAPE '\\'" for _ in tokens)
         where.append("(rid IN (SELECT rowid FROM boreholes_fts WHERE boreholes_fts MATCH ?) "
@@ -103,9 +141,9 @@ def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, co
         params += values
     # Set lookups through the (code, depth) and (parameter, value) indexes. A correlated EXISTS per hole
     # would make SQLite scan every matching layer for every hole (171 s at 50,000 holes).
-    for lith in lithology:  # each lithology somewhere in the hole, within the depth range if one is given
+    for code, depth_from, depth_to in lithology:  # each lithology somewhere in the hole, within its depth range
         clause = "rid IN (SELECT rid FROM layers WHERE primary_code = ?"
-        params.append(lith)
+        params.append(code)
         if depth_to is not None:
             clause += " AND top_m < ?"
             params.append(depth_to)
@@ -113,15 +151,16 @@ def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, co
             clause += " AND bottom_m > ?"
             params.append(depth_from)
         where.append(clause + ")")
-    if lab:
+    for parameter, lab_min, lab_max in lab:  # each parameter measured at least once within its range
         clause = "rid IN (SELECT rid FROM lab_values WHERE parameter = ?"
-        params.append(lab)
+        params.append(parameter)
         if lab_min is not None:
-            clause += " AND value >= ?"
+            clause += " AND (qualifier IS NULL OR qualifier IN ('>', '≥', '>=', 'range')) AND value >= ?"
             params.append(lab_min)
         if lab_max is not None:
-            clause += " AND value <= ?"
-            params.append(lab_max)
+            clause += (" AND ((qualifier IS NULL OR qualifier IN ('<', '≤', '<=')) AND value <= ? "
+                       "OR qualifier = 'range' AND value_upper >= value AND value_upper <= ?)")
+            params += [lab_max, lab_max]
         where.append(clause + ")")
     if country:
         where.append("country = ?")
@@ -144,16 +183,14 @@ def list_boreholes(
     con: DB,
     q: str | None = None,
     bbox: str | None = Query(None, description="minLon,minLat,maxLon,maxLat (min > max crosses the antimeridian)"),
-    lithology: list[str] = Query(default_factory=list),
-    depth_from: float | None = Query(None, description="lithology filter: layer below this depth (m)"),
-    depth_to: float | None = Query(None, description="lithology filter: layer above this depth (m)"),
-    lab: str | None = Query(None, description="lab parameter, e.g. ucs, cai"),
-    lab_min: float | None = None,
-    lab_max: float | None = None,
+    lithology: list[str] = Query(default_factory=list,
+                                 description="code[:from_m:to_m], e.g. clay:10:20 (a clay layer between 10 and 20 m)"),
+    lab: list[str] = Query(default_factory=list, description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
     country: str | None = None,
     min_depth: float | None = None,
     min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
     status: Literal["all", "released", "pending", "rejected"] = "all",
+    id: list[str] = Query(default_factory=list, max_length=500, description="only these borehole ids"),
     fields: Literal["list", "map", "layers"] = Query("list", description="'map': slim points; 'layers': depth strips for visible columns"),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
@@ -162,8 +199,8 @@ def list_boreholes(
     'list' returns a GeoJSON page with the total and lithology counts of all matches."""
     if fields == "layers" and not bbox:
         raise HTTPException(422, "bbox is required for layer strips")
-    where, params = _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, country, min_depth,
-                             min_position, status)
+    where, params = _filters(q, bbox, _conditions(lithology, "lithology"), _conditions(lab, "lab"), country,
+                             min_depth, min_position, status, id)
     sql_where = " AND ".join(where)
     if fields == "layers":
         rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {sql_where}", params).fetchall()
@@ -187,14 +224,18 @@ def list_boreholes(
 
 
 @app.get("/api/review-queue")
-def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0)):
+def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
+                 blocking: bool = Query(False, description="only records with a blocking finding")):
     """Everything waiting for a human, weakest first (also records without a position), a page at a time.
     The total is in the X-Total-Count header so the response stays a plain list."""
-    total = con.execute("SELECT COUNT(*) FROM boreholes WHERE review_status = 'pending_review'").fetchone()[0]
+    where = "review_status = 'pending_review'" + (
+        " AND EXISTS (SELECT 1 FROM findings f WHERE f.rid = boreholes.rid AND f.severity = 'blocking')"
+        if blocking else "")
+    total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}").fetchone()[0]
     rows = con.execute(
         "SELECT id, name, project, location_name, country, score, confidence, loc_confidence, loc_method, "
         "n_layers, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file, reasons "
-        "FROM boreholes WHERE review_status = 'pending_review' ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
+        f"FROM boreholes WHERE {where} ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
         (limit, offset),
     ).fetchall()
     items = [{**{k: r[k] for k in r.keys() if k != "reasons"}, "reasons": json.loads(r["reasons"] or "[]")}
@@ -262,7 +303,7 @@ def get_borehole(borehole_id: str, con: DB):
 
 def _blocking(bh: Borehole) -> list[str]:
     """Findings that keep a record in the queue whatever its score."""
-    return [i for i in bh.issues if any(b in i for b in scoring.BLOCKING)]
+    return [i for i in bh.issues if scoring.finding_severity(i) == "blocking"]
 
 
 class Review(BaseModel):
@@ -355,6 +396,10 @@ class FieldFix(BaseModel):
             self.value = date_type.fromisoformat(str(self.value)).isoformat()
         else:
             self.value = str(self.value).strip()[:4000 if self.field == "notes" else 300]
+        if self.field == "borehole_name" and not self.value:
+            raise ValueError("a borehole name cannot be empty")
+        if kind is float and self.value is not None and not math.isfinite(self.value):
+            raise ValueError("numeric fields must be finite")
         return self
 
 
@@ -449,11 +494,6 @@ def correct(borehole_id: str, body: Correction, con: DB):
             "content_hash": _content_hash(con, borehole_id)}
 
 
-# --- upload ------------------------------------------------------------------------------------------
-
-UPLOADS: dict[str, dict] = {}  # job_id -> {status: processing|done|error, boreholes: [...], error}
-
-
 @app.post("/api/upload")
 async def upload_document(file: UploadFile = File(...)):
     # Only the final path component: a client-supplied name must never place the file outside upload_dir.
@@ -461,6 +501,9 @@ async def upload_document(file: UploadFile = File(...)):
     suffix = Path(filename).suffix.lower()
     if suffix not in ingest.SUPPORTED:
         raise HTTPException(415, f"unsupported file type {suffix or '(none)'}; use PDF, JPG, PNG, TIFF or DOCX")
+    from pipeline.__main__ import _missing_credentials
+    if msg := _missing_credentials():
+        raise HTTPException(503, msg)
     job_id = uuid.uuid4().hex[:12]
     doc_id = f"upload-{job_id}"
     upload_dir = config.UPLOADS_DIR / doc_id
@@ -478,35 +521,46 @@ async def upload_document(file: UploadFile = File(...)):
 
     kind = "pdf" if suffix == ".pdf" else "docx" if suffix == ".docx" else "image"
     doc = ingest.SourceDoc(doc_id=doc_id, path=filename, kind=kind)
-    pages = ingest.render(doc, upload_dir)
-    if len(pages) > config.MAX_UPLOAD_PAGES:
+    try:
+        pages = await run_in_threadpool(_render_upload, doc, upload_dir, dest)
+    except Exception as exc:
         shutil.rmtree(upload_dir, ignore_errors=True)
-        raise HTTPException(413, f"{len(pages)} pages exceeds the {config.MAX_UPLOAD_PAGES}-page upload limit")
+        shutil.rmtree(config.PAGES_DIR / doc_id, ignore_errors=True)
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(422, f"could not read {filename}: is it a valid {suffix.lstrip('.').upper()} file?") from exc
 
-    UPLOADS[job_id] = {"status": "processing", "boreholes": [], "error": None}
-
-    def work():
-        from pipeline.__main__ import run
-        try:
-            run([doc], dataset_dir=upload_dir)
-            con = store.connect()
-            try:
-                rows = con.execute(
-                    "SELECT id, name, review_status FROM boreholes WHERE doc_id = ?", (doc_id,)
-                ).fetchall()
-            finally:
-                con.close()
-            UPLOADS[job_id] = {"status": "done", "boreholes": [dict(r) for r in rows], "error": None}
-        except Exception as exc:  # reported via /api/upload/{job_id}
-            UPLOADS[job_id] = {"status": "error", "boreholes": [], "error": f"{type(exc).__name__}: {exc}"}
-
-    threading.Thread(target=work, daemon=True).start()
+    try:
+        await run_in_threadpool(app.state.upload_queue.submit, uploads.UploadTask(
+            job_id=job_id, doc_id=doc_id, filename=filename, kind=kind))
+    except uploads.QueueFull:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        shutil.rmtree(config.PAGES_DIR / doc_id, ignore_errors=True)
+        raise HTTPException(503, "the upload queue is full; try again after a document finishes processing")
     return {"job_id": job_id, "pages": len(pages)}
 
 
+_MUPDF = threading.Lock()  # PyMuPDF is not thread-safe; concurrent uploads must not render at the same time
+
+
+def _render_upload(doc: ingest.SourceDoc, upload_dir: Path, dest: Path) -> list[ingest.PageImage]:
+    with _MUPDF:
+        if doc.kind == "pdf":  # count before rendering: a long PDF would take minutes to render only to be rejected
+            with pymupdf.open(dest) as pdf:
+                _check_page_count(pdf.page_count)
+        pages = ingest.render(doc, upload_dir)
+    _check_page_count(len(pages))
+    return pages
+
+
+def _check_page_count(pages: int) -> None:
+    if pages > config.MAX_UPLOAD_PAGES:
+        raise HTTPException(413, f"{pages} pages exceeds the {config.MAX_UPLOAD_PAGES}-page upload limit")
+
+
 @app.get("/api/upload/{job_id}")
-def upload_status(job_id: str):
-    job = UPLOADS.get(job_id)
+def upload_status(job_id: str, con: DB) -> uploads.UploadResult:
+    job = uploads.result(con, job_id)
     if job is None:
         raise HTTPException(404, "upload job not found")
     return job

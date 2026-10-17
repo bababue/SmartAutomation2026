@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Detail, DetailUpdate, Layer, SourceRef } from '../types'
 import { lithStyle, patternId } from '../lithology'
 import { CardHead, CorrectionList, LayersEditor, NotesEditor, RecordEditor, TestsEditor, type TestRow } from './Corrections'
 import { Profile } from './Profile'
 import { ReviewBox, type QueueNav } from './ReviewBox'
+import { withSuffix } from '../review'
 
 interface Props {
   detail: Detail
@@ -12,6 +13,7 @@ interface Props {
   nav?: QueueNav | null
   inSection?: boolean
   onToggleSection?: () => void
+  onSourceToggle?: (open: boolean) => void
 }
 
 const fmt = (v: number | null | undefined, digits = 2) =>
@@ -34,10 +36,16 @@ function Level({ value, label }: { value: number | null; label: string }) {
   )
 }
 
-export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, onToggleSection }: Props) {
+export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, onToggleSection, onSourceToggle }: Props) {
   const bh = detail.borehole
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
+  const layerRows = useRef<HTMLTableSectionElement>(null)
+  // Hovering the profile brings the matching table row into view; hovering the table itself must not scroll it.
+  const hoverProfile = (i: number | null) => {
+    setHovered(i)
+    if (i != null) layerRows.current?.children[i]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }
   const [coordsHovered, setCoordsHovered] = useState(false)
   const [editing, setEditing] = useState<'record' | 'layers' | 'tests' | 'notes' | null>(null)
   const done = () => setEditing(null)
@@ -108,7 +116,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
       <div className={`detail-body${sourceOpen ? '' : ' source-closed'}`}>
         <section className="card detail-profile">
           <h3 className="card-head">Profile <span className="muted card-unit">m</span></h3>
-          {bh.layers.length ? <Profile borehole={bh} hovered={hovered} onHover={setHovered} /> : <p className="muted">No layers extracted.</p>}
+          {bh.layers.length ? <Profile borehole={bh} hovered={hovered} onHover={hoverProfile} /> : <p className="muted">No layers extracted.</p>}
         </section>
 
         <section className="detail-data">
@@ -120,7 +128,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
           <dl className="record">
             <dt>Coordinates as printed</dt>
             <dd onMouseEnter={() => setCoordsHovered(true)} onMouseLeave={() => setCoordsHovered(false)}>
-              {loc.coords_raw ?? '–'}{loc.crs_raw ? ` (${loc.crs_raw})` : ''}
+              {withSuffix(loc.coords_raw ?? '–', loc.crs_raw, (x) => ` (${x})`)}
             </dd>
             <dt>Position (WGS84)</dt>
             <dd>
@@ -128,7 +136,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
               {loc.crs_epsg ? <span className="muted"> via EPSG:{loc.crs_epsg}</span> : null}
               {loc.crs_candidates.length > 1 && <span className="muted"> (also possible: {loc.crs_candidates.slice(1).join(', ')})</span>}
             </dd>
-            <dt>Ground level</dt><dd>{bh.surface_elevation_raw ?? fmt(bh.surface_elevation_m)}{bh.elevation_datum ? ` ${bh.elevation_datum}` : ''}</dd>
+            <dt>Ground level</dt><dd>{withSuffix(bh.surface_elevation_raw ?? fmt(bh.surface_elevation_m), bh.elevation_datum)}</dd>
             <dt>Final depth</dt><dd>{fmt(bh.depth_m)} m{bh.inclination_deg != null && bh.inclination_deg !== 90 && Math.abs(bh.inclination_deg) !== 90 ? `, inclined ${bh.inclination_deg}°` : ''}</dd>
             <dt>Drilled</dt><dd>{bh.start_date ?? '–'}{bh.end_date && bh.end_date !== bh.start_date ? ` to ${bh.end_date}` : ''}</dd>
             <dt>Method</dt><dd>{bh.drilling_method ?? '–'}</dd>
@@ -147,7 +155,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
             <thead>
               <tr><th>Depth</th><th>Lithology</th><th>Description</th><th>Stratigraphy</th></tr>
             </thead>
-            <tbody>
+            <tbody ref={layerRows}>
               {bh.layers.map((l: Layer, i) => (
                 <tr key={i} className={hovered === i ? 'row-active' : undefined} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}>
                   <td className="num depth">{fmt(l.top_m)}–{fmt(l.bottom_m)}</td>
@@ -183,16 +191,9 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
           )}
         </section>
 
-        {!sourceOpen ? (
-          <section className="detail-source detail-source-closed">
-            <button className="btn source-toggle" onClick={() => setSourceOpen(true)} aria-expanded={false} title="Show the source page">
-              ‹ <span>Source</span>
-            </button>
-          </section>
-        ) : (
-        <section className="card detail-source">
+        {sourceOpen && (
+        <section className="card detail-source" id="detail-source">
           <div className="card-head">
-            <button className="btn btn-small btn-icon" onClick={() => setSourceOpen(false)} aria-expanded title="Hide the source page">›</button>
             <h3 className="source-title">Source</h3>
             {pages.length > 0 && (
               <div className="page-tabs" role="tablist">
@@ -231,6 +232,10 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
         </section>
         )}
       </div>
+      <button className="edge-tab source-toggle" onClick={() => { setSourceOpen(!sourceOpen); onSourceToggle?.(!sourceOpen) }} aria-expanded={sourceOpen} aria-controls="detail-source"
+        title={sourceOpen ? 'Hide the source page' : 'Show the source page'}>
+        {sourceOpen ? '›' : '‹'} <span>Source</span>
+      </button>
     </aside>
   )
 }

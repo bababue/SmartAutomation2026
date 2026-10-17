@@ -59,6 +59,13 @@ depths that literally appear in that text.
   BoreholeDataFormat (sheets Metadata, Logdata, Samples, CoreRuns, SPT, Groundwater, TestResults; column
   names and units of the format), `/api/export.csv` has one row per layer. `?status=all` includes the queue.
 
+Laboratory filters return results whose complete reported range satisfies the requested bounds. A value
+`<5 MPa` therefore does not establish a minimum of `4.5 MPa`. Excel exports retain qualifiers and ranges
+as text in the value cells and preserve repeated measurements in separate rows.
+Spreadsheet importers must accept these qualified cells alongside numeric exact values. Database
+initialization migrates the laboratory projection to SQLite schema v4; use the matching application code
+when writing to that database.
+
 ## Learning from reviewers
 
 Local rules are kept as data, not code. Reviewers' corrections become knowledge items with a scope
@@ -89,6 +96,13 @@ size (some inputs are ~80 MB / 150 pages) does not matter for API limits:
 
 Every layer and the coordinates carry an approximate region on the source page (read by the vision model);
 the UI outlines it on the original page when a reviewer hovers the value.
+
+Incomplete extraction, assembly failures and a truncated `--max-pages` run preserve the previous records
+of the affected document group. Deduplication runs after corrections within a document group; records
+with human corrections or decisions keep their own identity.
+
+Web uploads use a bounded queue with status stored in SQLite. Run one API process per database. After a
+restart, queued jobs continue and interrupted jobs report an error so the user can explicitly retry them.
 
 ## Repository layout
 
@@ -155,7 +169,15 @@ A different location works too: set `DATASET_DIR` (see Configuration).
 
 ### 5. Choose how the pipeline talks to Claude
 
-**Option A – Anthropic API key (recommended).** Create a key in the Claude Console (platform.claude.com →
+**Team setup.** The team runs Claude Haiku 5.5 via OpenRouter (Option C below): in a comparison on the
+same log pages it matched Opus on every layer boundary at about 3% of the cost. Copy the settings and add
+the OpenRouter key (from Marvin, never committed):
+
+```bash
+cp .env.example .env   # then replace sk-or-... with the key
+```
+
+**Option A – Anthropic API key.** Create a key in the Claude Console (platform.claude.com →
 API Keys; it starts with `sk-ant-api03-`) and put it into `.env`, which is git-ignored:
 
 ```bash
@@ -193,26 +215,31 @@ Ollama's default context window can be smaller than the extraction needs: the pr
 10k plus the answer, hence `OLLAMA_CONTEXT_LENGTH`. A local server runs one request at a time, so
 `MAX_WORKERS=1` keeps the measured seconds per page free of queueing.
 
+On OpenRouter, requests go only to providers with zero data retention (`OPENROUTER_ZDR`). A model without
+such a provider fails with "no endpoints found"; run it with `OPENROUTER_ZDR=0` only if that is acceptable.
+
 ### 6. Process documents
 
 ```bash
 .venv/bin/python -m pipeline ingest                    # render all pages, list document ids (no API calls)
 .venv/bin/python -m pipeline estimate                  # page count, rough API cost, cost measured on cached pages
-.venv/bin/python -m pipeline run --doc profile01       # smoke test: one page
-.venv/bin/python -m pipeline run --doc MEA03-jpg --doc AUS01 --max-pages 6
+.venv/bin/python -m pipeline run --doc demo-log        # smoke test: one page
+.venv/bin/python -m pipeline run --doc scans-jpg --doc site-report --max-pages 6
 .venv/bin/python -m pipeline run --all --yes           # everything (~1,000 pages)
 ```
 
 - `--doc` takes a document id (relative path without extension, folders joined by `__`, e.g.
-  `SEA03-png__Report01`) or a folder prefix (`MEA03-jpg` = all images in that folder). Repeatable.
+  `scans-png__report-04`) or a folder prefix (`scans-jpg` = all images in that folder). Repeatable.
 - `--max-pages N` treats the first N pages of each document as the whole document (cheap demo runs).
 - Runs above ~$5 estimated cost ask for `--yes`.
 - Every LLM answer is cached per page in `data/cache/`. Interrupted runs resume; repeated runs are free.
+- Each cached answer records the model and effort that produced it. After a change of `EXTRACT_MODEL`,
+  `rebuild` still uses the pages extracted earlier; only `run` extracts them again with the new model.
 - `rebuild` re-runs assembly, georeferencing and scoring from the cache only – use it after code changes
   (pass the same `--doc` / `--max-pages` as the run):
 
 ```bash
-.venv/bin/python -m pipeline rebuild --doc MEA03-jpg --doc AUS01 --max-pages 6
+.venv/bin/python -m pipeline rebuild --doc scans-jpg --doc site-report --max-pages 6
 ```
 
 At the end of a run the pipeline prints how many boreholes were stored, how many were released
@@ -337,6 +364,7 @@ Environment variables, read from the shell or from `.env`:
 | `ANTHROPIC_API_KEY` | – | API key for `LLM_BACKEND=api` |
 | `LLM_BACKEND` | `api` | `api` (Anthropic API), `claude-code` (local `claude -p`) or `openai` (OpenAI-compatible API) |
 | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | `http://localhost:11434/v1` / – | server and key for `LLM_BACKEND=openai` (e.g. OpenRouter) |
+| `OPENROUTER_ZDR` | `1` | OpenRouter only: route to providers with zero data retention; `0` for a model without one |
 | `CLAUDE_CLI` | `claude` | path to the Claude Code CLI |
 | `CLAUDE_CONFIG_DIR` | CLI default | profile directory for another subscription (CLI backend) |
 | `CLAUDE_CLI_TOKEN_FILE` | – | token file for another subscription (CLI backend) |
@@ -344,6 +372,8 @@ Environment variables, read from the shell or from `.env`:
 | `EXTRACT_MODEL` / `EXTRACT_EFFORT` | `claude-opus-5-5` / `medium` | log extraction |
 | `MAX_WORKERS` | `6` (API), `3` (CLI) | parallel LLM calls |
 | `AUTO_APPROVE_THRESHOLD` | `0.9` | release score for automatic release |
+| `MAX_UPLOAD_JOBS` | `8` | maximum queued and processing uploads |
+| `MAX_UPLOAD_WORKERS` | `1` | concurrent upload pipelines in the API process |
 | `DATASET_DIR` | `temp/HKBoreholeChallenge_Data_BFH2026/BoreholeData` | input documents |
 | `DATA_DIR` | `data` | rendered pages, cache, database |
 | `DB_PATH` | `data/boreholes.sqlite` | database (`data/demo.sqlite` for synthetic data) |

@@ -189,3 +189,18 @@ def test_term_rule_reads_the_main_material_after_a_core_run_offset(con):
             "payload": {"term": "flint", "primary": "limestone"}}
     knowledge.apply(bh, [rule])
     assert [l.primary.value for l in bh.layers] == ["limestone", "chalk"]
+
+
+def test_confirmed_crs_preserves_independent_notation_doubts():
+    from pipeline.georef import georeference
+    geo = georeference("N 48,12,345 E 8,03,210", None, "DE", 48.20575, 8.0535, 3)
+    bh = hole("r:BH1", (48.20575, 8.0535), "N 48,12,345 E 8,03,210")
+    bh.location, bh.issues = geo.location, geo.issues
+    assert bh.location.confidence == 0.8
+    notes = knowledge.apply(bh, [{"kind": "crs", "scope_type": "region", "confirmations": 3,
+                                 "payload": {"epsg": 4326}}])
+    bh.issues += notes
+    score(bh, {}, 0)
+    assert bh.location.confidence == 0.8 and bh.location.accuracy_m > 400
+    assert bh.review_status.value == "pending_review"
+    assert any(i.startswith("coordinate notation or datum ambiguous") for i in bh.issues)

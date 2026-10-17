@@ -242,15 +242,19 @@ export interface UploadStatus {
 
 export type StatusFilter = 'all' | 'released' | 'pending' | 'rejected'
 
+/** A key with an optional range, e.g. clay between 10 and 20 m, or UCS of at least 80. */
+export interface RangeFilter {
+  key: string
+  min: number | null
+  max: number | null
+}
+
 export interface Filters {
   q: string
-  lithology: Lithology[]
-  /** Depth range (m) the chosen lithologies must occur in. */
-  depthFrom: number | null
-  depthTo: number | null
-  /** Lab parameter and minimum value, e.g. UCS ≥ 80 MPa. */
-  lab: string | null
-  labMin: number | null
+  /** Lithologies that must all occur, each within its depth range (m). */
+  lithology: RangeFilter[]
+  /** Lab parameters that must all be measured, each within its value range. */
+  lab: RangeFilter[]
   minPosition: number | null
   status: StatusFilter
 }

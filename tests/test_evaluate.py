@@ -186,3 +186,18 @@ def test_lithology_metres_counts_overlapping_layers_once():
     reference = [[0.0, 4.0, "clay"]]
     current = [[0.0, 3.0, "clay"], [2.0, 4.0, "clay"], [1.0, 2.0, "sand"]]
     assert evaluate.lithology_metres(reference, current) == 4.0
+
+
+def test_missing_record_counts_against_depth_groundwater_and_lab():
+    reference = {"DOC1:BH1": {**ref(), "depth_m": 9.0, "groundwater": [2.0], "lab": [["ucs", 40.0, 3.0]]}}
+    s = evaluate.total(evaluate.compare(reference, {}))
+    assert (s.depths, s.depths_ok, s.groundwater, s.groundwater_matched, s.lab, s.lab_matched) == (1, 0, 1, 0, 1, 0)
+
+
+def test_lab_evaluation_distinguishes_range_upper_bounds():
+    bh = Borehole(borehole_id="r:BH1", borehole_name="BH1", lab_results=[
+        LabResult(parameter="ucs", value=5, value_upper=10, qualifier="range", top_m=2)])
+    reference = store.extracted_summary(bh)["lab"]
+    assert evaluate.match_lab(reference, reference) == 1
+    bh.lab_results[0].value_upper = 20
+    assert evaluate.match_lab(reference, store.extracted_summary(bh)["lab"]) == 0

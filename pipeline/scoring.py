@@ -18,8 +18,8 @@ from schema.borehole import Borehole, GeorefMethod, ReviewStatus
 from . import config
 
 # Findings that always need a human, whatever the score: anything that suggests a misread.
-BLOCKING = ("no layers extracted", "CRS ambiguous", "invalid interval", "non-finite depth", "invalid WGS84",
-            "gap", "overlap", "layers end at", "stale correction", "log starts at", "depths printed in feet",
+BLOCKING = ("no layers extracted", "log not extracted", "CRS ambiguous", "invalid interval", "non-finite depth",
+            "invalid WGS84", "gap", "overlap", "layers end at", "stale correction", "log starts at", "depths printed in feet",
             "missing sheets", "sheet header differs", "same printed coordinates as", "same hole assumed",
             "sources disagree on")
 
@@ -86,6 +86,17 @@ def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) 
     None when the source has no usable text layer (scans, images, outlined vector PDFs)."""
     found, total, _, _ = text_check(bh, page_texts)
     return found / total if total >= 3 else None
+
+
+# The model names the field of each unreadable item ('header: ...', 'tests: ...'). Header fields and test values
+# do not decide the release; an item without a field name counts, and so does anything about the position or the
+# ground level, whatever field it is filed under.
+MINOR_UNREADABLE = re.compile(r"^(?:unreadable:\s*)?(?:header|tests)\s*:(?!.*\b(?:coordinat\w*|crs|datum|grid|zone|"
+                              r"easting|northing|latitude|longitude|elevation|level|epsg|utm)\b)", re.I)
+
+
+def counts_against(unreadable: str) -> bool:
+    return not MINOR_UNREADABLE.match(unreadable)
 
 
 # Findings that need a look before release, without blocking: they cap the extraction confidence.
@@ -164,7 +175,7 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
             extraction = UNCONFIRMED_CAP
             reasons.append("Nothing confirms the layer depths independently (PDF text layer missing, partial or not "
                            "matching, and no complete log from 0 m to a stated final depth on a scan)")
-    look = [i for i in bh.issues if i.startswith(NEEDS_LOOK) or NEEDS_LOOK_RE.match(i)]
+    look = [i for i in bh.issues if finding_severity(i) == "needs_look"]
     if look and extraction > UNCONFIRMED_CAP:
         extraction = UNCONFIRMED_CAP
         reasons.append(f"{len(look)} finding(s) need a look before release (inferred values or inconsistent core runs)")
@@ -185,7 +196,7 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
         reasons.append("Coordinate system ambiguous: " + ", ".join(loc.crs_candidates[:3]))
 
     bh.score = round(min(bh.confidence, position), 2)
-    blocking = [i for i in bh.issues if is_blocking(i)]
+    blocking = [i for i in bh.issues if finding_severity(i) == "blocking"]
     released = bh.score >= config.AUTO_APPROVE_THRESHOLD and not blocking
     bh.review_status = ReviewStatus.auto_approved if released else ReviewStatus.pending_review
     if not released and not reasons:
@@ -195,7 +206,7 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
 
 # Findings as data: a stable code and a severity per finding text, for queries and the review queue.
 FINDING_CODES: list[tuple[str, str]] = [
-    ("no layers extracted", "no_layers"), ("layer ", "invalid_interval"), ("gap", "gap"), ("overlap", "overlap"),
+    ("no layers extracted", "no_layers"), ("log not extracted", "log_not_extracted"), ("layer ", "invalid_interval"), ("gap", "gap"), ("overlap", "overlap"),
     ("minor discontinuity", "minor_discontinuity"), ("layers end at", "depth_mismatch"),
     ("log starts at", "log_starts_below_surface"), ("missing sheets", "missing_sheets"),
     ("sheet header differs", "sheet_header_differs"), ("same printed coordinates as", "coords_shared"),

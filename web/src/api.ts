@@ -1,10 +1,16 @@
+import { encodeRange } from './url'
 import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, Stats, UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    throw new Error(`${res.status} ${res.statusText}${body ? `: ${body.slice(0, 200)}` : ''}`)
+    let detail = body.slice(0, 200)
+    try {
+      const parsed = JSON.parse(body)
+      if (typeof parsed.detail === 'string') detail = parsed.detail // FastAPI's HTTPException message
+    } catch { /* not JSON: keep the raw text */ }
+    throw new Error(`${res.status} ${res.statusText}${detail ? `: ${detail}` : ''}`)
   }
   return res.json() as Promise<T>
 }
@@ -12,11 +18,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 function filterParams(f: Filters): URLSearchParams {
   const params = new URLSearchParams()
   if (f.q.trim()) params.set('q', f.q.trim())
-  f.lithology.forEach((l) => params.append('lithology', l))
-  if (f.lithology.length && f.depthFrom != null) params.set('depth_from', String(f.depthFrom))
-  if (f.lithology.length && f.depthTo != null) params.set('depth_to', String(f.depthTo))
-  if (f.lab) params.set('lab', f.lab)
-  if (f.lab && f.labMin != null) params.set('lab_min', String(f.labMin))
+  f.lithology.forEach((l) => params.append('lithology', encodeRange(l)))
+  f.lab.forEach((l) => params.append('lab', encodeRange(l)))
   if (f.minPosition != null) params.set('min_position', String(f.minPosition))
   if (f.status !== 'all') params.set('status', f.status)
   return params
@@ -37,6 +40,14 @@ export function fetchMapPoints(f: Filters, signal?: AbortSignal): Promise<Featur
   return request(`/api/boreholes?${params}`, { signal })
 }
 
+/** Summaries of the given boreholes regardless of the filters, e.g. a section restored from the URL. */
+export function fetchBoreholesById(ids: string[], signal?: AbortSignal): Promise<FeatureCollection> {
+  const params = new URLSearchParams()
+  ids.forEach((id) => params.append('id', id))
+  params.set('limit', String(ids.length))
+  return request(`/api/boreholes?${params}`, { signal })
+}
+
 export function fetchLayerStrips(bbox: string, signal?: AbortSignal): Promise<{ items: { id: string; strip: BoreholeSummary['strip'] }[] }> {
   const params = new URLSearchParams({ fields: 'layers', bbox })
   return request(`/api/boreholes?${params}`, { signal })
@@ -46,8 +57,8 @@ const enc = (id: string) => encodeURIComponent(id)
 
 export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>(`/api/boreholes/${enc(id)}/detail`, { signal })
 export const fetchStats = () => request<Stats>('/api/stats')
-export async function fetchQueue(signal?: AbortSignal, limit = 200): Promise<{ items: QueueItem[]; total: number }> {
-  const res = await fetch(`/api/review-queue?limit=${limit}`, { signal })
+export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200): Promise<{ items: QueueItem[]; total: number }> {
+  const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}`, { signal })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   const items = (await res.json()) as QueueItem[]
   return { items, total: Number(res.headers.get('X-Total-Count') ?? items.length) }

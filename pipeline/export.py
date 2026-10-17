@@ -19,7 +19,7 @@ from openpyxl.utils import get_column_letter
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter
+from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, LabResult
 
 # Test result columns of the format, in its order (names as in the format, units in brackets).
 TEST_COLUMNS: list[tuple[LabParameter, str]] = [
@@ -122,13 +122,19 @@ def workbook(records: list[tuple[Borehole, str | None]]) -> bytes:
         spts += [[bh.borehole_id, s.depth_m, "R" if s.refusal and s.n_value is None else s.n_value, s.raw] for s in bh.spt]
         water += [[bh.borehole_id, g.depth_m, g.kind, g.observed_on, "dry" if g.dry else None, g.reference, g.raw]
                   for g in bh.groundwater]
-        by_sample: dict[tuple, dict] = defaultdict(dict)
+        by_sample: dict[tuple, list[dict]] = defaultdict(list)
         for r in bh.lab_results:
-            by_sample[(r.sample_name, r.top_m, r.bottom_m)][r.parameter] = r
-        for (name, top, bottom), values in by_sample.items():
-            raw = "; ".join(f"{r.parameter_raw or r.parameter.value}: {r.value_raw}" for r in values.values())
-            tests.append([bh.borehole_id, name, top, bottom,
-                          *[values[p].value if p in values else None for p, _ in TEST_COLUMNS], raw])
+            rows = by_sample[(r.sample_name, r.top_m, r.bottom_m)]
+            slot = next((values for values in rows if r.parameter not in values), None)
+            if slot is None:
+                slot = {}
+                rows.append(slot)
+            slot[r.parameter] = r
+        for (name, top, bottom), rows in by_sample.items():
+            for values in rows:
+                raw = "; ".join(f"{r.parameter_raw or r.parameter.value}: {r.value_raw}" for r in values.values())
+                tests.append([bh.borehole_id, name, top, bottom,
+                              *[_test_value(values[p]) if p in values else None for p, _ in TEST_COLUMNS], raw])
 
     _sheet(wb, "Metadata", [
         "BoreholeID", "BoreholeName", "LocationName", "StartDate", "EndDate", "ProjectID", "ProjectName",
@@ -154,3 +160,9 @@ def workbook(records: list[tuple[Borehole, str | None]]) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _test_value(result: LabResult) -> float | str:
+    if result.qualifier == "range":
+        return f"{result.value:g}–{result.value_upper:g}" if result.value_upper is not None else result.value_raw or "range"
+    return f"{result.qualifier}{result.value:g}" if result.qualifier else result.value

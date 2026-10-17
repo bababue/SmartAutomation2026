@@ -65,6 +65,22 @@ def test_units_are_converted_or_the_value_is_dropped():
     assert lab_qualifier("<0.01") == "<" and lab_qualifier("5 - 10") == "range" and lab_qualifier("12.5") is None
 
 
+def test_lab_range_bounds_use_the_same_target_unit():
+    from pipeline.assemble import lab_upper
+    assert lab_upper("ucs", "5–10", "kPa") == pytest.approx(0.01)
+    assert lab_upper("ucs", "5", "kPa") is None
+    bh = hole("BH1")
+    link_lab_results([bh], [lab_page(row("BH1", None, "ucs", "5000–10000", "kPa", top=2))])
+    assert (bh.lab_results[0].value, bh.lab_results[0].value_upper) == (5, 10)
+
+
+@pytest.mark.parametrize("text", ["2 × 10-6", "2x10^-6", "2e-6", "2,0E-6"])
+def test_scientific_exponents_are_exact_values(text):
+    from pipeline.assemble import lab_qualifier, lab_upper
+    assert lab_qualifier(text) is None
+    assert lab_upper("hydraulic_conductivity", text, "m/s") is None
+
+
 
 def test_hole_id_in_sample_column_suffixes_and_implausible_values():
     holes = [hole("QX-10"), hole("QX-11"), hole("QX-01")]
@@ -118,7 +134,7 @@ def test_chemistry_rows_with_the_same_detection_limit_are_kept_apart():
 
 
 def test_duplicate_record_hands_its_lab_values_to_the_kept_one():
-    from pipeline.assemble import merge_documents
+    from pipeline.assemble import dedupe
     from schema.borehole import GeorefMethod, LabResult
     def located(doc: str, confidence: float, labs: list[tuple[float, float]]) -> Borehole:
         bh = hole("BH-4")
@@ -128,16 +144,16 @@ def test_duplicate_record_hands_its_lab_values_to_the_kept_one():
         return bh
     report = located("report", 0.5, [(1.0, 20.0), (2.0, 25.0)])  # only the report has the lab sheet
     image = located("report_png", 0.9, [(2.0, 25.0)])            # the image export of the log page wins
-    kept, = merge_documents([(report, 0, {}), (image, 0, {})])
+    kept, = dedupe([report, image])
     assert kept.borehole_id == image.borehole_id and sorted((r.top_m, r.value) for r in kept.lab_results) == [(1.0, 20.0), (2.0, 25.0)]
     # A test pit of the same name at the same place is another hole: nothing is merged.
     pit = located("pits", 0.4, [(0.5, 3.0)])
     pit.investigation_type = InvestigationType.test_pit
-    assert len(merge_documents([(pit, 0, {}), (located("report_png", 0.9, []), 0, {})])) == 2
+    assert len(dedupe([pit, located("report_png", 0.9, [])])) == 2
 
 
 def test_lab_values_from_a_log_in_feet_keep_the_kept_record_in_review():
-    from pipeline.assemble import merge_documents
+    from pipeline.assemble import dedupe
     from schema.borehole import GeorefMethod, LabResult, ReviewStatus
     def located(doc: str, confidence: float) -> Borehole:
         bh = hole("BH-4")
@@ -148,6 +164,6 @@ def test_lab_values_from_a_log_in_feet_keep_the_kept_record_in_review():
     report.issues = ["depths printed in feet (ft); check the conversion to metres"]
     report.lab_results = [LabResult(parameter="ucs", value=20.0, top_m=1.5)]
     image.review_status = ReviewStatus.auto_approved
-    kept, = merge_documents([(report, 0, {}), (image, 0, {})])
+    kept, = dedupe([report, image])
     assert kept.borehole_id == image.borehole_id and len(kept.lab_results) == 1
     assert kept.review_status == ReviewStatus.pending_review and report.issues[0] in kept.issues

@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from pipeline.assemble import merge_documents
+from pipeline.assemble import dedupe
 from pipeline.scoring import finding_severity
 from schema.borehole import Borehole, GeorefMethod, Layer, Location, ReviewStatus, SourceRef
 
@@ -23,7 +23,7 @@ def record(doc: str, layers: list[tuple[float, float]], position=None, **header)
 
 
 def merge(*records: Borehole) -> list[Borehole]:
-    return merge_documents([(bh, 0, {}) for bh in records])
+    return dedupe(list(records))
 
 
 def blocking(bh: Borehole) -> list[str]:

@@ -43,12 +43,24 @@ def ids(r):
 
 def test_lithology_within_a_depth_range(client):
     assert ids(client.get("/api/boreholes?lithology=clay")) == ["q:A", "q:B"]
-    assert ids(client.get("/api/boreholes?lithology=clay&depth_from=10&depth_to=20")) == ["q:A"]
+    assert ids(client.get("/api/boreholes?lithology=clay:10:20")) == ["q:A"]
+    assert ids(client.get("/api/boreholes?lithology=clay::5")) == ["q:B"]
+
+
+def test_each_lithology_has_its_own_depth_range(client):
+    assert ids(client.get("/api/boreholes?lithology=clay::5&lithology=limestone:10:")) == ["q:B"]
+    assert ids(client.get("/api/boreholes?lithology=clay:10:&lithology=limestone")) == []
 
 
 def test_lab_value_range(client):
-    assert ids(client.get("/api/boreholes?lab=ucs&lab_min=100")) == ["q:A"]
-    assert ids(client.get("/api/boreholes?lab=ucs&lab_max=50")) == ["q:B"]
+    assert ids(client.get("/api/boreholes?lab=ucs:100:")) == ["q:A"]
+    assert ids(client.get("/api/boreholes?lab=ucs::50")) == ["q:B"]
+    assert ids(client.get("/api/boreholes?lab=ucs&lab=cai")) == []  # every parameter must be measured
+
+
+def test_malformed_conditions_are_rejected(client):
+    assert client.get("/api/boreholes?lab=ucs:abc").status_code == 422
+    assert client.get("/api/boreholes?lithology=clay:1:2:3").status_code == 422
 
 
 def test_bbox_across_the_antimeridian_and_on_its_edge(client):
@@ -79,3 +91,43 @@ def test_review_queue_pages(client):
     r = client.get("/api/review-queue?limit=1")
     assert r.status_code == 200 and int(r.headers["X-Total-Count"]) >= len(r.json())
     assert client.get("/api/corrections/orphans").json() == []
+
+
+def test_review_queue_blocking_only(client):
+    con = store.connect()
+    store.save_borehole(con, hole("q:G", 47.0, 8.0, [(0, 5, "sand"), (7, 10, "clay")]))  # gap: blocking
+    con.close()
+    every = {item["id"] for item in client.get("/api/review-queue").json()}
+    r = client.get("/api/review-queue?blocking=true")
+    assert [item["id"] for item in r.json()] == ["q:G"] and r.headers["X-Total-Count"] == "1"
+    assert "q:G" in every
+
+
+@pytest.mark.parametrize("qualifier,value,upper,bounds,expected", [
+    ("<", 5, None, "4.5:", False), ("<", 5, None, ":5", True),
+    (">", 5, None, ":6", False), (">", 5, None, "5:", True),
+    ("range", 5, 10, "4:11", True),
+    ("range", 5, 10, "6:", False), ("range", 5, 10, ":9", False),
+    (None, 5, None, "5:5", True),
+])
+def test_lab_filters_require_the_whole_value_to_match(client, qualifier, value, upper, bounds, expected):
+    bh = hole("q:qualified", 48.0, 8.0, [(0, 9, "gravel")])
+    bh.lab_results = [LabResult(parameter="ucs", value=value, value_upper=upper, qualifier=qualifier, top_m=2)]
+    con = store.connect()
+    store.save_borehole(con, bh)
+    con.close()
+    response = client.get(f"/api/boreholes?id=q:qualified&lab=ucs:{bounds}")
+    assert ids(response) == (["q:qualified"] if expected else [])
+
+
+@pytest.mark.parametrize("bbox", ["bad", "1,2,3", "1,2,3,4,5", "nan,0,8,1", "0,5,8,1", "-181,0,8,1"])
+def test_invalid_bbox_returns_validation_error(client, bbox):
+    assert client.get("/api/boreholes", params={"bbox": bbox}).status_code == 422
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_required_name_cannot_be_cleared(client, value):
+    response = client.post("/api/boreholes/q:A/corrections", json={"kind": "field", "reviewer": "Ana",
+                            "payload": {"field": "borehole_name", "value": value}})
+    assert response.status_code == 422
+    assert client.get("/api/boreholes/q:A/detail").json()["borehole"]["borehole_name"] == "A"

@@ -151,7 +151,8 @@ def _same_lab(reference: list, current: list, tol: float) -> bool:
     # Entries stored before qualifier, name and unit were kept have three fields and are compared without them.
     if len(reference) == 3 or len(current) == 3:
         return True
-    return reference[3] == current[3] and (parameter != "other" or reference[4:6] == current[4:6])
+    same_upper = len(reference) < 7 or len(current) < 7 or reference[6] == current[6]
+    return reference[3] == current[3] and same_upper and (parameter != "other" or reference[4:6] == current[4:6])
 
 
 def match_lab(reference: list[list], current: list[list], tol: float = DEPTH_TOLERANCE_M) -> int:
@@ -226,6 +227,9 @@ def compare(reference: dict[str, dict], current: dict[str, dict],
         if match is None or match in used:
             s.missing.append(bid)
             s.no_position += ref.get("lat") is not None
+            s.depths += ref.get("depth_m") is not None
+            s.groundwater += len(ref.get("groundwater", []))
+            s.lab += len(ref.get("lab", []))
             continue
         used.add(match)
         cur = current[match]
@@ -282,7 +286,8 @@ LEGEND = [
     "lith: same primary lithology on layers whose top and bottom both match; lith m: share of the reference "
     "log length with the same lithology at the same depth.",
     "depth: final depth within the tolerance; gw: groundwater levels found; lab: lab values with the same "
-    "parameter, value, qualifier and sample depth (catch-all values also the same printed name and unit).",
+    "parameter, value, qualifier and sample depth (catch-all values also the same printed name and unit); "
+    "missing records count as wrong in all three.",
     "extra: records of the same documents that are not in the reference (often not yet reviewed).",
     "corr: compared records with reviewer corrections (with --corrected they match the reference by construction).",
 ]

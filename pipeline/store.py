@@ -59,11 +59,14 @@ CREATE TABLE IF NOT EXISTS knowledge (
     created_by TEXT, created_at TEXT, confirmations INTEGER DEFAULT 1, active INTEGER DEFAULT 1, evidence TEXT
 );
 CREATE INDEX IF NOT EXISTS knowledge_scope ON knowledge (scope_type, scope_value, kind);
+CREATE TABLE IF NOT EXISTS upload_jobs (
+    id TEXT PRIMARY KEY, task TEXT NOT NULL, status TEXT NOT NULL, result TEXT, error TEXT, created_at TEXT NOT NULL
+);
 """
 
 # Version 3: queryable projections (layers, lab values, findings, sources), stable borehole uids with
 # aliases, immutable record versions, review revision. Older databases are migrated in connect().
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_V3 = """
 -- Projections of the current records for queries, rebuilt from 'data' at any time.
@@ -74,7 +77,7 @@ CREATE TABLE IF NOT EXISTS layers (
 CREATE INDEX IF NOT EXISTS layers_lith ON layers (primary_code, top_m, bottom_m);
 CREATE TABLE IF NOT EXISTS lab_values (
     rid INTEGER NOT NULL, seq INTEGER NOT NULL, parameter TEXT, value REAL, qualifier TEXT, top_m REAL,
-    bottom_m REAL, sample TEXT, PRIMARY KEY (rid, seq)
+    bottom_m REAL, sample TEXT, value_upper REAL, PRIMARY KEY (rid, seq)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS lab_param ON lab_values (parameter, value);
 CREATE TABLE IF NOT EXISTS findings (
@@ -139,7 +142,20 @@ def _migrate_v3(con: sqlite3.Connection) -> None:
                        WHERE scope = 'borehole' AND uid IS NULL""")
         con.execute("""UPDATE review_events SET uid = (SELECT uid FROM boreholes b WHERE b.id = review_events.borehole_id)
                        WHERE uid IS NULL""")
-        con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        con.execute("PRAGMA user_version = 3")
+
+
+def _migrate_v4(con: sqlite3.Connection) -> None:
+    with con:
+        _add_columns(con, "lab_values", {"value_upper": "REAL"})
+        for row in con.execute("SELECT rid, data FROM boreholes").fetchall():
+            try:
+                bh = Borehole.model_validate_json(row["data"])
+            except ValidationError:
+                continue
+            con.execute("DELETE FROM lab_values WHERE rid = ?", (row["rid"],))
+            _write_lab_values(con, row["rid"], bh)
+        con.execute("PRAGMA user_version = 4")
 
 
 def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
@@ -173,8 +189,10 @@ def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
                 except ValidationError:
                     continue  # stays empty until the next rebuild
                 con.execute("UPDATE boreholes SET ground = ? WHERE rid = ?", (summary, row["rid"]))
-    if con.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+    if con.execute("PRAGMA user_version").fetchone()[0] < 3:
         _migrate_v3(con)
+    if con.execute("PRAGMA user_version").fetchone()[0] < 4:
+        _migrate_v4(con)
     con.execute("CREATE INDEX IF NOT EXISTS boreholes_queue ON boreholes (review_status, score, name, id)")
     return con
 
@@ -199,25 +217,23 @@ def save_document(con: sqlite3.Connection, doc_id: str, path: str, kind: str, pa
 def content_hash(bh: Borehole) -> str:
     """Hash of everything a reviewer judged and the export publishes (not review fields): an approval
     stays only while exactly this content is stored."""
-    payload = bh.model_dump(
-        mode="json",
-        include={"borehole_name", "location", "surface_elevation_m", "elevation_datum", "depth_m", "length_m",
-                 "inclination_deg", "layers", "spt", "groundwater", "core_runs", "samples", "lab_results"},
-    )
+    payload = bh.model_dump(mode="json", exclude={"borehole_id", "confidence", "issues", "score", "score_reasons",
+                                                  "review_status", "reviewed_by", "reviewed_at", "review_comment"})
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def extracted_summary(bh: Borehole) -> dict:
     """What the model produced, kept before reviewer corrections are applied, in the form `eval` compares.
     `key` (the natural key) matches the same hole when a variant names it differently. A lab value is
-    [parameter, value, top_m, qualifier, name, unit], name and unit as assembly tells chemistry rows apart."""
+    [parameter, value, top_m, qualifier, name, unit, value_upper]; name and unit tell chemistry rows apart."""
     from .assemble import _lab_name
     loc = bh.location
     return {"key": natural_key(bh),
             "layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
             "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg, "depth_m": bh.depth_m,
             "groundwater": sorted(gw.depth_m for gw in bh.groundwater if gw.depth_m is not None),
-            "lab": [[r.parameter.value, r.value, r.top_m, r.qualifier, *_lab_name(r)] for r in bh.lab_results]}
+            "lab": [[r.parameter.value, r.value, r.top_m, r.qualifier, *_lab_name(r), r.value_upper]
+                    for r in bh.lab_results]}
 
 
 def _delete(con: sqlite3.Connection, borehole_id: str) -> dict | None:
@@ -251,13 +267,14 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
     revision = (previous or {}).get("review_revision") or 0
     if previous and previous.get("data"):
         old = Borehole.model_validate_json(previous["data"])
+        old_digest = content_hash(old)
         if old.review_status in HUMAN:
             new_blocking = _new_blocking(old, bh) if old.review_status == ReviewStatus.approved else []
-            if previous.get("content_hash") == digest and not new_blocking:
+            if old_digest == digest and not new_blocking:
                 # Same content: the human decision stands.
                 bh.review_status, bh.reviewed_by = old.review_status, old.reviewed_by
                 bh.reviewed_at, bh.review_comment = old.reviewed_at, old.review_comment
-            elif previous.get("content_hash") == digest:
+            elif old_digest == digest:
                 revision += 1  # same hash: only the revision stops a review screen opened before from approving
                 bh.review_status = ReviewStatus.pending_review
                 bh.score_reasons = [f"New blocking finding since the approval by {old.reviewed_by or 'a reviewer'}: "
@@ -335,9 +352,7 @@ def _write_projections(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
     con.executemany("INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?)",
                     [(rid, i, l.top_m, l.bottom_m, l.primary.value, l.stratigraphic_code, l.geologic_age)
                      for i, l in enumerate(bh.layers)])
-    con.executemany("INSERT INTO lab_values VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    [(rid, i, r.parameter.value, r.value, r.qualifier, r.top_m, r.bottom_m, r.sample_name)
-                     for i, r in enumerate(bh.lab_results)])
+    _write_lab_values(con, rid, bh)
     con.executemany("INSERT INTO findings VALUES (?, ?, ?, ?, ?, ?)",
                     [(rid, i, finding_code(t), finding_severity(t),
                       int(m.group(1)) if (m := EPSG_IN_FINDING.search(t)) else None, t)
@@ -345,6 +360,13 @@ def _write_projections(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
     sources = {(s.file, s.page or 0, "log") for s in bh.sources}
     sources |= {(r.source.file, r.source.page or 0, "lab") for r in bh.lab_results if r.source}
     con.executemany("INSERT OR IGNORE INTO record_sources VALUES (?, ?, ?, ?)", [(rid, *src) for src in sources])
+
+
+def _write_lab_values(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
+    con.executemany("INSERT INTO lab_values (rid, seq, parameter, value, qualifier, top_m, bottom_m, sample, value_upper) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(rid, i, r.parameter.value, r.value, r.qualifier, r.top_m, r.bottom_m, r.sample_name, r.value_upper)
+                     for i, r in enumerate(bh.lab_results)])
 
 
 def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str | None = None, uid: str | None = None,

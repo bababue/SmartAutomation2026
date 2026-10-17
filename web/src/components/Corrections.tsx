@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { postCorrection } from '../api'
 import { LITHOLOGY, lithStyle } from '../lithology'
-import { fmtDateTime, loadReviewer } from '../review'
+import { fmtDateTime, loadReviewer, withSuffix } from '../review'
 import type { Borehole, CorrectionKind, CorrectionRecord, DetailUpdate, Layer } from '../types'
 
 type Item = { kind: CorrectionKind; payload: Record<string, unknown>; scope?: 'borehole' | 'document' }
@@ -122,7 +122,7 @@ export function RecordEditor({ borehole, onChange, onDone }: {
         <Row label="Project">{field('project_name', 'Project')}</Row>
         <Row label="Location">{field('location_name', 'Location')}</Row>
         <dt>Coordinates as printed</dt>
-        <dd>{loc.coords_raw ?? '–'}{loc.crs_raw ? ` (${loc.crs_raw})` : ''}</dd>
+        <dd>{withSuffix(loc.coords_raw ?? '–', loc.crs_raw, (x) => ` (${x})`)}</dd>
         {loc.coords_raw && (
           <Row label="Coordinate system">
             <span className="field-prefix">EPSG</span>

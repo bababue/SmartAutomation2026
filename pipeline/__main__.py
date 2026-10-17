@@ -2,10 +2,10 @@
 
     python -m pipeline ingest                 # render all pages (no API calls)
     python -m pipeline estimate               # page counts and rough API cost
-    python -m pipeline run --doc AUS01        # classify + extract + store selected documents
+    python -m pipeline run --doc site-report  # classify + extract + store selected documents
     python -m pipeline run --all --yes        # everything
     python -m pipeline rebuild                # re-assemble from cached extractions (no API calls)
-    python -m pipeline rebuild --doc SEA01 --max-pages 6   # same page limit as the run
+    python -m pipeline rebuild --doc site-report --max-pages 6   # same page limit as the run
     python -m pipeline eval snapshot          # approved records become the evaluation reference
     python -m pipeline eval                   # model output (before corrections) against that reference
     python -m pipeline eval --corrected       # final values, reviewer corrections included
@@ -18,15 +18,23 @@ import argparse
 from pathlib import Path
 import os
 import sys
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config, corrections, evaluate, experiment, ingest, knowledge, llm, store
-from .assemble import LOG_KINDS, PageResult, assemble, norm_name
+from .assemble import LOG_KINDS, PageResult, assemble, dedupe, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
 
-# Rough per-page API cost in USD (Opus 5.5 list price). `estimate` also shows the cost measured on cached pages.
+# Rough per-page API cost in USD at the Opus 5.5 list price; `estimate` also shows the cost measured on cached pages.
 COST_CLASSIFY, COST_EXTRACT = 0.008, 0.15
+
+
+def _page_cost(opus_cost: float, model: str) -> float:
+    """Scaled by the model's list price; models outside PRICES (other providers) are estimated at the Opus price."""
+    opus = llm.PRICES["claude-opus-5-5"]
+    price = llm.PRICES.get(model.removeprefix("anthropic/").replace(".", "-"), opus)
+    return opus_cost * price[1] / opus[1]
 
 
 def _select(args) -> list[ingest.SourceDoc]:
@@ -135,7 +143,7 @@ def _extract(todo, classes, con=None):
                 print(f"  extract: {done}/{len(todo)}", flush=True)
     for item, exc in failed:
         print(f"  ! extract failed {item.doc_id} p{item.page}: {type(exc).__name__}: {exc}", file=sys.stderr)
-    return results
+    return results, len(failed)
 
 
 def cmd_ingest(args) -> None:
@@ -148,7 +156,9 @@ def cmd_estimate(args) -> None:
     rendered = _ingest(_select(args), con)
     n = sum(len(p) for p in rendered.values())
     print(f"{len(rendered)} documents, {n} pages")
-    print(f"classification ≈ ${n * COST_CLASSIFY:.0f}; extraction of ~40% log pages ≈ ${n * 0.4 * COST_EXTRACT:.0f}")
+    print(f"classification with {config.CLASSIFY_MODEL} ≈ ${n * _page_cost(COST_CLASSIFY, config.CLASSIFY_MODEL):.2f}; "
+          f"extraction of ~40% log pages with {config.EXTRACT_MODEL} ≈ "
+          f"${n * 0.4 * _page_cost(COST_EXTRACT, config.EXTRACT_MODEL):.2f}")
     for stage, (pages, usd) in llm.measured_costs().items():
         print(f"measured {stage}: {pages} pages, ${usd:.2f} (${usd / pages:.4f} per page)")
 
@@ -156,35 +166,44 @@ def cmd_estimate(args) -> None:
 def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = True,
         dataset_dir: Path = config.DATASET_DIR) -> None:
     """Ingest, classify, extract and store the given documents (costs API calls)."""
+    if max_pages is not None and max_pages < 1:
+        raise ValueError("max_pages must be positive")
     if msg := _missing_credentials():
         raise RuntimeError(msg)
     con = store.connect()
-    print(f"Ingest {len(docs)} documents (LLM backend: {config.LLM_BACKEND})")
-    rendered = _ingest(docs, con, dataset_dir)
-    if max_pages:  # treat the first N pages as the whole document for this run
-        rendered = {doc_id: ps[:max_pages] for doc_id, ps in rendered.items()}
-    pages = [p for ps in rendered.values() for p in ps]
-    est = len(pages) * COST_CLASSIFY + len(pages) * 0.4 * COST_EXTRACT
-    if est > 5 and not yes:
-        raise RuntimeError(f"{len(pages)} pages, estimated ≈ ${est:.0f}. Re-run with --yes to proceed.")
+    try:
+        print(f"Ingest {len(docs)} documents (LLM backend: {config.LLM_BACKEND})")
+        rendered = _ingest(docs, con, dataset_dir)
+        truncated = {doc_id for doc_id, ps in rendered.items() if max_pages is not None and len(ps) > max_pages}
+        if max_pages is not None:
+            rendered = {doc_id: ps[:max_pages] for doc_id, ps in rendered.items()}
+        pages = [p for ps in rendered.values() for p in ps]
+        est = len(pages) * (_page_cost(COST_CLASSIFY, config.CLASSIFY_MODEL)
+                            + 0.4 * _page_cost(COST_EXTRACT, config.EXTRACT_MODEL))
+        if est > 5 and not yes:
+            raise RuntimeError(f"{len(pages)} pages, estimated ≈ ${est:.2f}. Re-run with --yes to proceed.")
 
-    print(f"Classify {len(pages)} pages")
-    classes = _parallel(llm.classify_page, pages, "classify")
-    for (doc_id, page_no), c in classes.items():
-        con.execute(
-            "UPDATE pages SET kind = ?, language = ?, logs = ? WHERE doc_id = ? AND page = ?",
-            (c.kind.value, c.language, store.as_json([log.model_dump() for log in c.logs]), doc_id, page_no),
-        )
-    con.commit()
+        print(f"Classify {len(pages)} pages")
+        classes = _parallel(llm.classify_page, pages, "classify")
+        for (doc_id, page_no), c in classes.items():
+            con.execute(
+                "UPDATE pages SET kind = ?, language = ?, logs = ? WHERE doc_id = ? AND page = ?",
+                (c.kind.value, c.language, store.as_json([log.model_dump() for log in c.logs]), doc_id, page_no),
+            )
+        con.commit()
 
-    todo = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
-    print(f"Extract {len(todo)} log/coordinate pages")
-    extractions = _extract(todo, classes, con)
-    lab_pages = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"]
-    if lab_pages:
-        print(f"Extract {len(lab_pages)} lab result pages")
-    labs = _parallel(llm.extract_lab_results, lab_pages, "lab results")
-    _store(con, docs, rendered, classes, extractions, labs)
+        todo = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
+        print(f"Extract {len(todo)} log/coordinate pages")
+        extractions, _ = _extract(todo, classes, con)
+        lab_pages = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"]
+        if lab_pages:
+            print(f"Extract {len(lab_pages)} lab result pages")
+        labs = _parallel(llm.extract_lab_results, lab_pages, "lab results")
+        published = _store(con, docs, rendered, classes, extractions, labs, incomplete_docs=truncated)
+        if set(rendered) != published:
+            raise RuntimeError("Some documents were incomplete; their previous records were preserved")
+    finally:
+        con.close()
 
 
 def cmd_run(args) -> None:
@@ -205,26 +224,56 @@ def _missing_credentials() -> str | None:
     if config.LLM_BACKEND == "api" and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
         return ("No Anthropic credentials: put ANTHROPIC_API_KEY=... into .env (git-ignored), "
                 "or set LLM_BACKEND=claude-code to use the local Claude Code login.")
+    local = urllib.parse.urlsplit(config.OPENAI_BASE_URL).hostname in ("localhost", "127.0.0.1")
+    if config.LLM_BACKEND == "openai" and not local and not os.getenv("OPENAI_API_KEY"):
+        return f"No key for {config.OPENAI_BASE_URL}: put OPENAI_API_KEY=... into .env (git-ignored)."
     return None
 
 
-def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool = False) -> None:
+def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool = False,
+           incomplete_docs: set[str] | None = None) -> set[str]:
     """Lab sheets are optional: a failed lab page does not hold back the document's logs.
     dry_run: assemble and report, but write nothing."""
     labs = labs or {}
     source_file = {d.doc_id: d.path for d in docs}
 
+    def lost_logs(doc_id: str) -> list[str]:
+        """Log pages that came back with fewer logs than the classification counted. Counted, not matched by
+        name: the classification reads the thumbnail and often writes a hole's name differently. A log without
+        layers counts: a last sheet often holds only notes or the end-of-hole statement. Probe records (dynamic
+        probe, CPT) are left out, they often carry blow counts only."""
+        lost = []
+        for p in rendered[doc_id]:
+            c = classes[(doc_id, p.page)]
+            if c.kind.value in LOG_KINDS - {"probe_log"}:
+                found = len(extractions[(doc_id, p.page)].logs)
+                if found < max(len(c.logs), 1):
+                    lost.append(f"log not extracted: page {p.page} shows {max(len(c.logs), 1)} logs, "
+                                f"{found} came back")
+        return lost
+
     def complete(doc_id: str) -> bool:
+        if doc_id in (incomplete_docs or set()):
+            return False
         pages = rendered[doc_id]
-        return all((p.doc_id, p.page) in classes for p in pages) and all(
+        available = all((p.doc_id, p.page) in classes for p in pages) and all(
             (p.doc_id, p.page) in extractions
             for p in pages
             if classes[(p.doc_id, p.page)].kind.value in EXTRACT_KINDS
         )
+        if not available:
+            return False
+        # Earlier records of the document stay rather than lose a hole; without any, the document is stored
+        # with a blocking finding, so a fresh database does not silently miss it.
+        return not (lost_logs(doc_id) and con.execute("SELECT 1 FROM boreholes WHERE doc_id = ? LIMIT 1",
+                                                      (doc_id,)).fetchone())
 
     done = [doc_id for doc_id in rendered if complete(doc_id)]
     if dry_run:  # nothing is written, so show what is there so far
         done = [doc_id for doc_id in rendered if all((p.doc_id, p.page) in classes for p in rendered[doc_id])]
+    else:
+        incomplete_groups = {d.split("__")[0] for d in set(rendered) - set(done)}
+        done = [d for d in done if d.split("__")[0] not in incomplete_groups]
     skipped = sorted(set(rendered) - set(done))
     partial = sorted(d for d in done if not complete(d))
     if partial:
@@ -237,8 +286,21 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
                    labs.get((p.doc_id, p.page)))
         for doc_id in done for p in rendered[doc_id]
     ]
-    boreholes = assemble(results)
-    extracted = {bh.borehole_id: store.extracted_summary(bh) for bh in boreholes}  # before fixes, for `eval`
+    failed_docs: set[str] = set()
+    boreholes = assemble(results, deduplicate=False, failed_docs=failed_docs)
+    if failed_docs and not dry_run:
+        failed_groups = {d.split("__")[0] for d in failed_docs}
+        done = [d for d in done if d.split("__")[0] not in failed_groups]
+        boreholes = [bh for bh in boreholes if store.document_group(bh.borehole_id) not in failed_groups]
+        print(f"  ! kept previous results for {len(failed_groups)} groups with assembly errors", file=sys.stderr)
+    if not dry_run:
+        lost = {doc_id: notes for doc_id in done if (notes := lost_logs(doc_id))}
+        for bh in boreholes:
+            if notes := lost.get(bh.borehole_id.split(":", 1)[0]):
+                bh.issues += notes
+                corrections.rescore(bh)
+        for doc_id, notes in lost.items():
+            print(f"  ! {doc_id}: {len(notes)} classified logs came back without layers", file=sys.stderr)
     # Per document group: read knowledge and corrections and replace the group's records in one short write
     # transaction. A correction saved meanwhile cannot be lost, and reviewers wait for one group at most.
     groups: dict[str, list] = {}
@@ -246,12 +308,31 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
         groups.setdefault(doc_id.split("__")[0], [])
     for bh in boreholes:
         groups.setdefault(store.document_group(bh.borehole_id), []).append(bh)
+    stored, extracted = [], {}
     for group, records in groups.items():
         con.execute("BEGIN IMMEDIATE")
         try:
+            fixes, protected = {}, {}
+            for bh in records:
+                uid = store.uid_for(con, bh)
+                fixes[bh.borehole_id] = store.corrections_for(con, bh.borehole_id, uid)
+                previous_status = con.execute("SELECT review_status FROM boreholes WHERE id = ? OR uid = ?",
+                                              (bh.borehole_id, uid)).fetchone()
+                if fixes[bh.borehole_id] or previous_status and previous_status[0] in {s.value for s in store.HUMAN}:
+                    decided_here = con.execute("SELECT review_status FROM boreholes WHERE id = ?",
+                                               (bh.borehole_id,)).fetchone()
+                    reviewed_as = (decided_here and decided_here[0] in {s.value for s in store.HUMAN}) or any(
+                        f["target"] == bh.borehole_id for f in fixes[bh.borehole_id])
+                    protected[bh.borehole_id] = {uid} | {f["id"] for f in fixes[bh.borehole_id]} | (
+                        {bh.borehole_id} if reviewed_as else set())
+            # Independent groups do not share an identity scope; coincident positions alone cannot join them.
+            records = dedupe(records, protected)
+            # The model's output for `eval`: after merging duplicates, which moves lab values, before reviewer input.
+            extracted.update({bh.borehole_id: store.extracted_summary(bh) for bh in records})
             knowledge.apply_all(con, records)  # what reviewers taught beyond single records
             for bh in records:  # reviewer fixes survive re-extraction, and win over learned knowledge
-                corrections.apply(bh, store.corrections_for(con, bh.borehole_id, store.uid_for(con, bh)))
+                corrections.apply(bh, fixes[bh.borehole_id])
+            stored.extend(records)
             if dry_run:
                 con.rollback()
                 continue
@@ -267,8 +348,9 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
             con.rollback()
             raise
     if dry_run:
-        _report(boreholes, len(done))
-        return
+        _report(stored, len(done))
+        return set(done)
+    boreholes = stored
     orphans = store.orphan_corrections(con)
     if orphans:
         print(f"  ! {len(orphans)} reviewer corrections belong to holes no current record carries "
@@ -278,6 +360,7 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
     print(f"Stored {len(boreholes)} boreholes ({located} georeferenced) from {len(done)} documents in {config.DB_PATH}")
     print(f"  released automatically: {auto}, waiting for review: {len(boreholes) - auto} "
           f"(threshold {round(config.AUTO_APPROVE_THRESHOLD * 100)})")
+    return set(done)
 
 
 def _report(boreholes, n_docs: int) -> None:
@@ -298,16 +381,22 @@ def cmd_rebuild(args) -> None:
 
 def rebuild(docs, max_pages: int | None = None, dry_run: bool = False) -> None:
     """Assemble, apply knowledge and corrections, and store, from the cache only (no API calls)."""
+    if max_pages is not None and max_pages < 1:
+        raise ValueError("max_pages must be positive")
     con = store.connect()
-    rendered = {d.doc_id: ingest.render(d) for d in docs}
-    if max_pages:  # same page limit as the run that filled the cache
-        rendered = {doc_id: ps[: max_pages] for doc_id, ps in rendered.items()}
-    classes, labs = cached_inputs(rendered)
-    extractions = {}
-    for chain in _chains(extract_todo(rendered, classes), classes):  # same chains and context as the run
-        extractions.update(_walk(chain, classes, llm.cached_extraction)[0])
-    print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")
-    _store(con, docs, rendered, classes, extractions, labs, dry_run=dry_run)
+    try:
+        rendered = {d.doc_id: ingest.render(d) for d in docs}
+        truncated = {doc_id for doc_id, ps in rendered.items() if max_pages is not None and len(ps) > max_pages}
+        if max_pages is not None:
+            rendered = {doc_id: ps[: max_pages] for doc_id, ps in rendered.items()}
+        classes, labs = cached_inputs(rendered)
+        extractions = {}
+        for chain in _chains(extract_todo(rendered, classes), classes):  # same chains and context as the run
+            extractions.update(_walk(chain, classes, llm.cached_extraction)[0])
+        print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")
+        _store(con, docs, rendered, classes, extractions, labs, dry_run=dry_run, incomplete_docs=truncated)
+    finally:
+        con.close()
 
 
 def cached_inputs(rendered):
@@ -370,11 +459,15 @@ def cmd_experiment(args) -> None:
         new = [p for p in todo if not llm.cache_path("extract", p).exists()]
         if new and not args.yes:
             sys.exit(f"{len(new)} of {len(todo)} pages to extract with prompt {name} ({fingerprint}), "
-                     f"≈ ${len(new) * COST_EXTRACT:.0f} on the API or subscription quota. Re-run with --yes.")
+                     f"≈ ${len(new) * _page_cost(COST_EXTRACT, config.EXTRACT_MODEL):.2f} on the API or subscription quota. Re-run with --yes.")
         if new:
             _require_credentials()
+        extracted, failed = _extract(todo, classes)  # no DB: no reviewer knowledge in the prompt
+        # A partial arm would score its failed pages as missing records; its successful pages stay cached.
+        if failed:
+            sys.exit(f"{failed} of {len(todo)} pages failed: arm {name} left unchanged, re-run to retry them")
         con = experiment.fresh_db(name)
-        extractions = kept | _extract(todo, classes, con)  # empty DB: no reviewer knowledge in the prompt
+        extractions = kept | extracted
     _store(con, docs, rendered, classes, extractions, labs)
     experiment.save_proxy(name, experiment.proxy(con, docs, rendered))
     con.close()

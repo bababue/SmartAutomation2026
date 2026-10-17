@@ -1,23 +1,36 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchBoreholes, fetchDetail, fetchMapPoints, fetchQueue, fetchStats, fetchUploadStatus, postUpload } from './api'
-import { LithologyPatterns, lithStyle, patternId } from './lithology'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { fetchBoreholes, fetchBoreholesById, fetchDetail, fetchMapPoints, fetchQueue, fetchStats, fetchUploadStatus, postUpload } from './api'
+import { LithologyPatterns } from './lithology'
+import { BrandLogo } from './components/BrandLogo'
 import { DetailPanel } from './components/DetailPanel'
 import { MapView } from './components/MapView'
 import { ResultList } from './components/ResultList'
 import { ReviewQueue } from './components/ReviewQueue'
 import { SectionView, orderAlongLine } from './components/SectionView'
+import { STATUS_LABEL } from './review'
 import type { QueueNav } from './components/ReviewBox'
-import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats, StatusFilter } from './types'
+import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats } from './types'
+import { readUrl, writeUrl, type View } from './url'
+import { SheetResizer } from './components/SheetResizer'
+import { FilterBar } from './components/FilterBar'
+import { AppMenu } from './components/AppMenu'
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
-type View = 'map' | 'review'
+const THEME_KEY = 'borehole-atlas.theme'
+
+function loadDark(): boolean {
+  try {
+    const saved = localStorage.getItem(THEME_KEY)
+    if (saved) return saved === 'dark'
+  } catch { /* storage blocked */ }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+}
 
 export default function App() {
-  const [view, setView] = useState<View>('map')
-  const [filters, setFilters] = useState<Filters>({
-    q: '', lithology: [], depthFrom: null, depthTo: null, lab: null, labMin: null, minPosition: null, status: 'all',
-  })
-  const [query, setQuery] = useState('')
+  const [initial] = useState(() => readUrl(window.location.search))
+  const [view, setView] = useState<View>(initial.view)
+  const [filters, setFilters] = useState<Filters>(initial.filters)
+  const [query, setQuery] = useState(initial.filters.q)
   const [data, setData] = useState<FeatureCollection>(EMPTY)  // list: loaded pages of summaries
   const [points, setPoints] = useState<FeatureCollection>(EMPTY)  // map: every match, slim
   const [loadingMore, setLoadingMore] = useState(false)
@@ -27,13 +40,38 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId)
   const [detail, setDetail] = useState<Detail | null>(null)
   const [refresh, setRefresh] = useState(0) // bump after a review decision
-  const [sectionIds, setSectionIds] = useState<string[]>([])
-  const [uploadJobId, setUploadJobId] = useState<string | null>(null)
+  const [sectionIds, setSectionIds] = useState<string[]>(initial.sectionIds)
+  const [blockingOnly, setBlockingOnly] = useState(initial.blockingOnly)
+  const [uploadJob, setUploadJob] = useState<{ id: string; label: string } | null>(null)
+  const [uploading, setUploading] = useState(false) // from the first byte sent until the job is done or failed
+  const [listOpen, setListOpen] = useState(initial.listOpen)
+  const [sheetWidth, setSheetWidth] = useState<number | null>(null)  // null: default split; a reload resets it
+  const beforeSource = useRef<{ listOpen: boolean; sheetWidth: number | null }>({ listOpen: true, sheetWidth: null })
+  // The source page needs the room: opening it hides the list and widens the sheet so the record
+  // keeps a readable width; closing it restores both.
+  const onSourceToggle = useCallback((open: boolean) => {
+    if (open) {
+      beforeSource.current = { listOpen, sheetWidth }
+      const current = document.querySelector('.detail')?.getBoundingClientRect().width ?? 0
+      setListOpen(false)
+      setSheetWidth(Math.round(Math.max(current, Math.min(window.innerWidth * 0.75, window.innerWidth - 200))))
+    } else {
+      if (beforeSource.current.listOpen) setListOpen(true)
+      setSheetWidth(beforeSource.current.sheetWidth)
+    }
+  }, [listOpen, sheetWidth])
   const [uploadNote, setUploadNote] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
+  const [dark, setDark] = useState(loadDark)
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+    try { localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light') } catch { /* private mode: the choice lasts this visit */ }
+  }, [dark])
 
   useEffect(() => {
     const t = setTimeout(() => setFilters((f) => ({ ...f, q: query })), 250)
@@ -46,6 +84,38 @@ export default function App() {
     features.forEach((f) => next.set(f.properties.id, f))
     return next
   }), [])
+
+  // Section holes from a URL need not be in the loaded list pages.
+  const restoreSection = useCallback((ids: string[]) => {
+    if (ids.length) fetchBoreholesById(ids).then((page) => remember(page.features)).catch(() => undefined)
+  }, [remember])
+
+  useEffect(() => { restoreSection(initial.sectionIds) }, [initial, restoreSection])
+
+  // Page and selection changes get a history entry, so Back closes a borehole or leaves the queue.
+  useEffect(() => {
+    const url = writeUrl({ view, selectedId, sectionIds, listOpen, filters, blockingOnly })
+    const shown = readUrl(window.location.search)
+    if (url === (window.location.search || window.location.pathname)) return
+    if (shown.view !== view || shown.selectedId !== selectedId) window.history.pushState(null, '', url)
+    else window.history.replaceState(null, '', url)
+  }, [view, selectedId, sectionIds, listOpen, filters, blockingOnly])
+
+  useEffect(() => {
+    const onPop = () => {
+      const s = readUrl(window.location.search)
+      setView(s.view)
+      setSelectedId(s.selectedId)
+      setSectionIds(s.sectionIds)
+      setBlockingOnly(s.blockingOnly)
+      setListOpen(s.listOpen)
+      setFilters(s.filters)
+      setQuery(s.filters.q)
+      restoreSection(s.sectionIds)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [restoreSection])
 
   useEffect(() => {
     const ctrl = new AbortController()
@@ -67,10 +137,10 @@ export default function App() {
 
   useEffect(() => {
     const ctrl = new AbortController()
-    fetchQueue(ctrl.signal).then(({ items, total }) => { setQueue(items); setQueueTotal(total) }).catch(() => undefined)
+    fetchQueue(blockingOnly, ctrl.signal).then(({ items, total }) => { setQueue(items); setQueueTotal(total) }).catch(() => undefined)
     fetchStats().then(setStats).catch(() => undefined)
     return () => ctrl.abort()
-  }, [refresh])
+  }, [refresh, blockingOnly])
 
   // Only the response for the currently selected borehole may land in state.
   useEffect(() => {
@@ -85,7 +155,7 @@ export default function App() {
   // Counts over all matches, from the server (the list may be one page).
   const lithologies = useMemo(() => {
     const counts = new Map<string, number>(data.facets?.lithologies ?? [])
-    filters.lithology.forEach((l) => counts.set(l, counts.get(l) ?? 0))
+    filters.lithology.forEach(({ key }) => counts.set(key, counts.get(key) ?? 0))
     return [...counts.entries()].sort((a, b) => b[1] - a[1])
   }, [data, filters.lithology])
 
@@ -98,15 +168,10 @@ export default function App() {
       approximate: loc.method === 'geocoded_place', hasDepth: depth > 0 }
   }, [detail])
 
-  const toggleLith = (key: string) =>
-    setFilters((f) => ({ ...f, lithology: f.lithology.includes(key) ? f.lithology.filter((l) => l !== key) : [...f.lithology, key] }))
-
   const onReviewChange = useCallback((update: DetailUpdate) => {
     setDetail((d) => (d && d.borehole.borehole_id === update.borehole.borehole_id ? { ...d, ...update } : d))
     setRefresh((n) => n + 1)
   }, [])
-
-  const pending = stats?.status.pending_review ?? queue.length
 
   // Position in the review queue, for "approve and next" and arrow-key navigation.
   const nav: QueueNav | null = useMemo(() => {
@@ -135,6 +200,19 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [nav])
 
+  // The start page: map view, default filters, nothing open; the reload fits the map to all matches.
+  const goHome = useCallback(() => {
+    const start = readUrl('')
+    setView(start.view)
+    setSelectedId(null)
+    setSectionIds([])
+    setBlockingOnly(false)
+    setListOpen(true)
+    setFilters(start.filters)
+    setQuery('')
+    setRefresh((n) => n + 1)
+  }, [])
+
   const toggleSection = useCallback(
     (id: string) => setSectionIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])),
     [],
@@ -148,52 +226,75 @@ export default function App() {
     [sectionFeatures],
   )
 
+  const startUpload = useCallback((file: File) => {
+    setUploading(true)
+    setUploadNote(`Uploading ${file.name}…`)
+    postUpload(file)
+      .then((res) => {
+        const label = `${res.pages} page${res.pages === 1 ? '' : 's'} of ${file.name}`
+        setUploadJob({ id: res.job_id, label })
+        setUploadNote(`Processing ${label}…`)
+      })
+      .catch((err) => { setUploading(false); setUploadNote(`Could not upload ${file.name}: ${err.message}`) })
+  }, [])
+
   const onFileChosen = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     e.target.value = '' // allow re-choosing the same file later
-    if (!file) return
-    setUploadNote(`Uploading ${file.name}…`)
-    postUpload(file)
-      .then((res) => { setUploadJobId(res.job_id); setUploadNote(`Processing ${res.pages} page${res.pages === 1 ? '' : 's'} of ${file.name}…`) })
-      .catch((err) => setUploadNote(`Could not upload ${file.name}: ${err.message}`))
-  }, [])
+    if (file) startUpload(file)
+  }, [startUpload])
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    const file = e.dataTransfer.files[0]
+    if (file && !uploading) startUpload(file)
+  }, [startUpload, uploading])
 
   // Poll until the document is classified, extracted and stored (or fails).
   useEffect(() => {
-    if (!uploadJobId) return
+    if (!uploadJob) return
+    const started = Date.now()
+    const finish = (note: string) => { clearInterval(t); setUploadJob(null); setUploading(false); setUploadNote(note) }
     const t = setInterval(() => {
-      fetchUploadStatus(uploadJobId).then((status) => {
-        if (status.status === 'processing') return
-        clearInterval(t)
-        setUploadJobId(null)
-        if (status.status === 'error') {
-          setUploadNote(`Upload failed: ${status.error}`)
+      fetchUploadStatus(uploadJob.id).then((status) => {
+        if (status.status === 'processing') {
+          setUploadNote(`Processing ${uploadJob.label}… ${Math.round((Date.now() - started) / 1000)} s`)
+        } else if (status.status === 'error') {
+          finish(`Upload failed: ${status.error}`)
         } else if (status.boreholes.length === 0) {
-          setUploadNote('Processed, but no borehole was recognised in the document.')
+          finish('Processed, but no borehole was recognised in the document.')
         } else {
           const [first] = status.boreholes
-          setUploadNote(`Added ${status.boreholes.map((b) => b.name).join(', ')}`)
+          finish(`Added ${status.boreholes.map((b) => `${b.name} (${STATUS_LABEL[b.review_status].toLowerCase()})`).join(', ')}`)
           setSelectedId(first.id)
           setRefresh((n) => n + 1) // reload the map, list and queue
         }
-      }).catch(() => { clearInterval(t); setUploadJobId(null); setUploadNote('Lost track of the upload.') })
+      }).catch(() => finish('Lost track of the upload.'))
     }, 1500)
     return () => clearInterval(t)
-  }, [uploadJobId])
+  }, [uploadJob])
 
   return (
-    <div className="app">
+    <div
+      className={`app${listOpen ? '' : ' list-closed'}`}
+      style={sheetWidth ? { '--sheet-w': `${sheetWidth}px` } as CSSProperties : undefined}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }}
+      onDragLeave={(e) => { if (!e.relatedTarget) setDragging(false) }}
+      onDrop={onDrop}
+    >
+      {dragging && (
+        <div className="drop-overlay" aria-hidden="true">
+          {uploading ? 'An upload is still being processed' : 'Drop a borehole log to add it (PDF, image or DOCX)'}
+        </div>
+      )}
       <svg width={0} height={0} style={{ position: 'absolute' }} aria-hidden="true"><LithologyPatterns /></svg>
 
       <header className="topbar">
-        <h1 className="brand">Borehole Atlas</h1>
-        {stats?.demo && <span className="demo-flag" title="The API serves data/demo.sqlite: synthetic records without source pages">Synthetic demo data</span>}
-        <nav className="tabs" aria-label="Views">
-          <button className={`tab${view === 'map' ? ' tab-on' : ''}`} aria-current={view === 'map'} onClick={() => setView('map')}>Map</button>
-          <button className={`tab${view === 'review' ? ' tab-on' : ''}`} aria-current={view === 'review'} onClick={() => setView('review')}>
-            Review queue {pending > 0 && <span className="tab-count">{pending}</span>}
-          </button>
-        </nav>
+        <div className="topbar-side">
+          <BrandLogo onHome={goHome} />
+          {stats?.demo && <span className="demo-flag" title="The API serves data/demo.sqlite: synthetic records without source pages">Synthetic demo data</span>}
+        </div>
         <label className="search">
           <span className="visually-hidden">Search boreholes</span>
           <input
@@ -203,98 +304,30 @@ export default function App() {
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
-        <button className="btn" onClick={() => fileInput.current?.click()} disabled={!!uploadJobId}>
-          {uploadJobId ? 'Processing…' : 'Upload document'}
-        </button>
-        <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx" className="visually-hidden"
-          onChange={onFileChosen} aria-label="Upload a borehole log" />
-        {uploadNote && <p className="upload-note" role="status">{uploadNote}</p>}
-        {stats && (
-          <p className="stats">
-            <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes,{' '}
-            <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> released
-          </p>
-        )}
+        <div className="topbar-side topbar-end">
+          <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx" className="visually-hidden"
+            onChange={onFileChosen} aria-label="Upload a borehole log" />
+          {uploadNote && <p className="upload-note" role="status" title={uploadNote}>{uploadNote}</p>}
+          {stats && (
+            <p className="stats">
+              <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes,{' '}
+              <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> released
+            </p>
+          )}
+          <AppMenu inReview={view === 'review'} uploading={uploading} dark={dark}
+            onToggleReview={() => setView(view === 'review' ? 'map' : 'review')}
+            onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} />
+        </div>
       </header>
 
-      <aside className="sidebar">
-        <div className="filters">
-          <div className="filter-row">
-            <label>
-              Release state
-              <select value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value as StatusFilter }))}>
-                <option value="all">All</option>
-                <option value="released">Released</option>
-                <option value="pending">Waiting for review</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </label>
-            <label>
-              Position quality
-              <select
-                value={filters.minPosition ?? ''}
-                onChange={(e) => setFilters((f) => ({ ...f, minPosition: e.target.value ? Number(e.target.value) : null }))}
-              >
-                <option value="">Any</option>
-                <option value="0.4">Medium or better</option>
-                <option value="0.7">High only</option>
-              </select>
-            </label>
-          </div>
-          {lithologies.length > 0 && (
-            <div className="chips" role="group" aria-label="Filter by lithology">
-              {lithologies.map(([key, n]) => (
-                <button key={key} className={`chip${filters.lithology.includes(key) ? ' chip-on' : ''}`} onClick={() => toggleLith(key)} aria-pressed={filters.lithology.includes(key)}>
-                  <svg width={12} height={12} aria-hidden="true"><rect width={12} height={12} fill={`url(#${patternId(key)})`} /></svg>
-                  {lithStyle(key).label}
-                  <span className="chip-n">{n}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {filters.lithology.length > 0 && (
-            <div className="filter-row filter-depth">
-              <label>
-                Between (m)
-                <input inputMode="decimal" placeholder="0" value={filters.depthFrom ?? ''}
-                  onChange={(e) => setFilters((f) => ({ ...f, depthFrom: e.target.value === '' ? null : Number(e.target.value.replace(',', '.')) }))} />
-              </label>
-              <label>
-                and (m)
-                <input inputMode="decimal" placeholder="any" value={filters.depthTo ?? ''}
-                  onChange={(e) => setFilters((f) => ({ ...f, depthTo: e.target.value === '' ? null : Number(e.target.value.replace(',', '.')) }))} />
-              </label>
-            </div>
-          )}
-          <div className="filter-row filter-lab">
-            <label>
-              Lab value
-              <select value={filters.lab ?? ''} onChange={(e) => setFilters((f) => ({ ...f, lab: e.target.value || null }))}>
-                <option value="">Any</option>
-                <option value="ucs">UCS (MPa)</option>
-                <option value="cai">CAI</option>
-                <option value="tensile_strength">Tensile strength (MPa)</option>
-                <option value="point_load_index">Point load Is50 (MPa)</option>
-                <option value="water_content">Water content (%)</option>
-              </select>
-            </label>
-            {filters.lab && (
-              <label>
-                at least
-                <input inputMode="decimal" placeholder="e.g. 80" value={filters.labMin ?? ''}
-                  onChange={(e) => setFilters((f) => ({ ...f, labMin: e.target.value === '' ? null : Number(e.target.value.replace(',', '.')) }))} />
-              </label>
-            )}
-          </div>
-        </div>
+      <button className="edge-tab list-toggle" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} aria-controls="sidebar"
+        aria-label={listOpen ? 'Hide filters and results' : 'Show filters and results'} title={listOpen ? 'Hide list' : 'Show list'}>
+        {listOpen ? '‹' : '›'}
+      </button>
+      <aside className="sidebar" id="sidebar" inert={!listOpen}>
+        <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies} />
         <div className="result-head">
           <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
-          <span className="export-links">
-            Export released:{' '}
-            <a href="/api/export.xlsx" className="link" title="Released records in Herrenknecht's BoreholeDataFormat">Excel</a>
-            {' · '}
-            <a href="/api/export.csv" className="link" title="Released records, one row per layer">CSV</a>
-          </span>
         </div>
         {error && <p className="error" role="alert">{error}</p>}
         <ResultList features={data.features} selectedId={selectedId} onSelect={setSelectedId} loading={loading} sectionIds={sectionIds} onToggleSection={toggleSection} />
@@ -306,7 +339,7 @@ export default function App() {
       </aside>
 
       <main className={`map-wrap${sectionFeatures.length ? ' map-wrap-section' : ''}`}>
-        <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} />
+        <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} sheetWidth={detail ? sheetWidth : null} dark={dark} />
         <div className="legend" aria-label="Map legend">
           <span><i className="dot dot-high" /> released</span>
           <span><i className="dot dot-medium" /> waiting for review</span>
@@ -324,11 +357,13 @@ export default function App() {
           />
         )}
         {view === 'review' && (
-          <ReviewQueue items={queue} total={queueTotal} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9} onSelect={setSelectedId}
-            onChanged={() => setRefresh((n) => n + 1)} />
+          <ReviewQueue items={queue} total={queueTotal} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9}
+            blockingOnly={blockingOnly} onBlockingOnly={setBlockingOnly} onSelect={setSelectedId}
+            onChanged={() => setRefresh((n) => n + 1)} onClose={() => setView('map')} />
         )}
       </main>
 
+      {detail && <SheetResizer onResize={setSheetWidth} />}
       {detail && (
         <DetailPanel
           key={detail.borehole.borehole_id}
@@ -338,6 +373,7 @@ export default function App() {
           nav={nav}
           inSection={sectionIds.includes(detail.borehole.borehole_id)}
           onToggleSection={() => toggleSection(detail.borehole.borehole_id)}
+          onSourceToggle={onSourceToggle}
         />
       )}
     </div>

@@ -25,7 +25,7 @@ from schema.borehole import Borehole, GeorefMethod, GroundwaterObservation, Laye
 
 from . import config
 from .georef import _apply, resolve_with
-from .scoring import SOURCE_CONFLICTS, score
+from .scoring import SOURCE_CONFLICTS, counts_against, score
 
 # Findings about the position that a reviewer's CRS or position correction settles.
 GEOREF_ISSUES = (
@@ -143,6 +143,7 @@ def _test(bh: Borehole, p: dict) -> bool:
             row.rqd_pct = p["rqd"]
     else:
         row.value, row.qualifier = p["value"], None
+        row.value_upper = None
     return True
 
 
@@ -240,5 +241,5 @@ def page_texts(bh: Borehole) -> dict[tuple[str, int | None], str]:
 
 
 def rescore(bh: Borehole) -> None:
-    unreadable = sum(1 for i in bh.issues if i.startswith("unreadable:"))
+    unreadable = sum(1 for i in bh.issues if i.startswith("unreadable:") and counts_against(i))
     score(bh, page_texts(bh), unreadable)

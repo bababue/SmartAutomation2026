@@ -257,3 +257,19 @@ def test_sheet_break_keeps_what_it_cannot_resolve():
                    [(9, 12, "Soft silty CLAY", "clay")]):
         depths, _, _ = _sheet_layers([(8.5, 10, "Stiff CLAY", "clay")], second)
         assert len(depths) == 2
+
+
+def test_only_unreadable_items_outside_the_header_and_tests_lower_the_extraction_confidence():
+    def confidence(*unreadable: str) -> float:
+        log = _log("BH1", "E 412000 N 5320000", 300.0, [(0, 2), (2, 6)]).model_copy(update={"unreadable": list(unreadable)})
+        [bh] = assemble([PageResult("r", "r.pdf", 1, "borehole_log", PageExtraction(logs=[log], coordinate_rows=[]))])
+        return bh.confidence
+
+    # Several items, so the penalty goes below the cap for logs nothing confirms independently.
+    clean = confidence()
+    assert confidence(*["header: drilling method cut off by a punch hole", "tests: SPT blows at 4.5 m faint"] * 2) == clean
+    assert confidence(*[f"depth: boundary at {d} m faint" for d in (1, 2, 3, 4)]) < clean
+    assert confidence(*[f"boundary at {d} m faint" for d in (1, 2, 3, 4)]) < clean  # without a field name it counts
+    # Doubts about the position or the ground level count under any field name.
+    assert confidence(*["header: datum illegible", "header: coordinate uncertain", "header: ground level faint",
+                        "tests: UTM zone cut off"]) < clean
