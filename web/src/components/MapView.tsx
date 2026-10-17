@@ -32,6 +32,8 @@ interface Props {
   selectedId: string | null
   focus: { lon: number; lat: number; accuracy_m: number | null; approximate: boolean; hasDepth: boolean } | null
   onSelect: (id: string) => void
+  /** Width of the detail sheet over the map; the selected hole stays centred beside it. */
+  sheetWidth: number | null
 }
 
 const CLUSTER_MAX_ZOOM = 14
@@ -151,7 +153,7 @@ function wrapLongitude(lon: number) {
   return ((lon + 180) % 360 + 360) % 360 - 180
 }
 
-export function MapView({ data, section, selectedId, focus, onSelect }: Props) {
+export function MapView({ data, section, selectedId, focus, onSelect, sheetWidth }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibre | null>(null)
   const ready = useRef(false)
@@ -280,7 +282,8 @@ export function MapView({ data, section, selectedId, focus, onSelect }: Props) {
           'circle-stroke-color': STATUS_COLOR, 'circle-stroke-width': 2.5 },
       })
       m.addLayer({
-        id: 'selected', type: 'circle', source: 'boreholes', filter: ['==', ['get', 'id'], ''],
+        // Below column zoom only: at column zoom the centred 3D column marks the selection.
+        id: 'selected', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM, filter: ['==', ['get', 'id'], ''],
         paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 11, 'circle-stroke-color': ACCENT, 'circle-stroke-width': 3 },
       })
 
@@ -327,10 +330,12 @@ export function MapView({ data, section, selectedId, focus, onSelect }: Props) {
       }
       m.on('mouseenter', 'clusters', () => (m.getCanvas().style.cursor = 'pointer'))
       m.on('mouseleave', 'clusters', () => (m.getCanvas().style.cursor = ''))
+      // Collapsing the list resizes the map; keep the selected hole in view.
+      m.on('resize', () => recenter(m, latest.current.focus))
       m.on('move', scheduleRefresh)
       m.on('moveend', finishRefresh)
       ready.current = true
-      fit(m, latest.current.data)
+      if (!latest.current.selectedId) fit(m, latest.current.data)
       applySelection(m, latest.current.selectedId, latest.current.focus)  // selection made before load
       refreshColumns()
     })
@@ -347,7 +352,8 @@ export function MapView({ data, section, selectedId, focus, onSelect }: Props) {
     if (!m || !ready.current) return
     ;(m.getSource('boreholes') as GeoJSONSource).setData(data)
     updateColumns(m, data, layerStrips.current)
-    fit(m, data)
+    // An open borehole (e.g. after a reload) keeps its view instead of zooming out to all matches.
+    if (!latest.current.selectedId) fit(m, data)
   }, [data])
 
   useEffect(() => {
@@ -355,6 +361,11 @@ export function MapView({ data, section, selectedId, focus, onSelect }: Props) {
     if (!m || !ready.current) return
     applySelection(m, selectedId, focus)
   }, [selectedId, focus])
+
+  useEffect(() => {
+    const m = map.current
+    if (m && ready.current) recenter(m, latest.current.focus)
+  }, [sheetWidth])
 
   useEffect(() => {
     const m = map.current
@@ -375,8 +386,19 @@ function applySelection(m: MapLibre, selectedId: string | null, focus: Props['fo
   const radius = focus.approximate ? Math.max(focus.accuracy_m ?? 0, 500) : 0
   source.setData({ type: 'FeatureCollection', features: radius ? [circlePolygon(focus.lon, focus.lat, radius)] : [] })
   const zoom = radius && !focus.hasDepth ? Math.max(6, Math.min(13, 16 - Math.log2(radius / 100))) : 16
-  m.flyTo({ center: [focus.lon, focus.lat], zoom, duration: 500,
-    padding: { left: 0, right: Math.min(window.innerWidth * 0.55, 760), top: 0, bottom: 0 } })
+  m.flyTo({ center: [focus.lon, focus.lat], zoom, duration: 500, padding: uncovered(m) })
+}
+
+function recenter(m: MapLibre, focus: Props['focus']) {
+  if (focus) m.easeTo({ center: [focus.lon, focus.lat], padding: uncovered(m), duration: 0 })
+}
+
+/** Padding that keeps the centre in the part of the map the detail sheet leaves visible. */
+function uncovered(m: MapLibre) {
+  const map = m.getContainer().getBoundingClientRect()
+  const sheet = document.querySelector('.detail')?.getBoundingClientRect()
+  const right = sheet && sheet.left > map.left ? Math.max(0, map.right - sheet.left) : 0
+  return { left: 0, right, top: 0, bottom: 0 }
 }
 
 function fit(m: MapLibre, data: FeatureCollection) {

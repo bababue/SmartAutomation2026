@@ -1,3 +1,4 @@
+import { encodeRange } from './url'
 import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, Stats, UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -17,11 +18,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 function filterParams(f: Filters): URLSearchParams {
   const params = new URLSearchParams()
   if (f.q.trim()) params.set('q', f.q.trim())
-  f.lithology.forEach((l) => params.append('lithology', l))
-  if (f.lithology.length && f.depthFrom != null) params.set('depth_from', String(f.depthFrom))
-  if (f.lithology.length && f.depthTo != null) params.set('depth_to', String(f.depthTo))
-  if (f.lab) params.set('lab', f.lab)
-  if (f.lab && f.labMin != null) params.set('lab_min', String(f.labMin))
+  f.lithology.forEach((l) => params.append('lithology', encodeRange(l)))
+  f.lab.forEach((l) => params.append('lab', encodeRange(l)))
   if (f.minPosition != null) params.set('min_position', String(f.minPosition))
   if (f.status !== 'all') params.set('status', f.status)
   return params

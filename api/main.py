@@ -108,8 +108,22 @@ def _bbox_clause(bbox: str) -> tuple[str, list]:
     return "(" + " OR ".join(parts) + ")", params
 
 
-def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, country, min_depth, min_position,
-             status, ids) -> tuple[list[str], list]:
+def _conditions(values: list[str], name: str) -> list[tuple[str, float | None, float | None]]:
+    """'key', 'key:min:max', 'key:min:' or 'key::max' -> (key, min, max)."""
+    out = []
+    for value in values:
+        key, *bounds = value.split(":")
+        if not key or len(bounds) > 2:
+            raise HTTPException(422, f"{name}: expected key or key:min:max, got {value!r}")
+        try:
+            lo, hi = [float(b) if b else None for b in [*bounds, "", ""][:2]]
+        except ValueError:
+            raise HTTPException(422, f"{name}: bounds must be numbers, got {value!r}") from None
+        out.append((key, lo, hi))
+    return out
+
+
+def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, ids) -> tuple[list[str], list]:
     where, params = ["lat IS NOT NULL"], []
     if ids:
         where.append(f"id IN ({','.join('?' * len(ids))})")
@@ -127,9 +141,9 @@ def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, co
         params += values
     # Set lookups through the (code, depth) and (parameter, value) indexes. A correlated EXISTS per hole
     # would make SQLite scan every matching layer for every hole (171 s at 50,000 holes).
-    for lith in lithology:  # each lithology somewhere in the hole, within the depth range if one is given
+    for code, depth_from, depth_to in lithology:  # each lithology somewhere in the hole, within its depth range
         clause = "rid IN (SELECT rid FROM layers WHERE primary_code = ?"
-        params.append(lith)
+        params.append(code)
         if depth_to is not None:
             clause += " AND top_m < ?"
             params.append(depth_to)
@@ -137,9 +151,9 @@ def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, co
             clause += " AND bottom_m > ?"
             params.append(depth_from)
         where.append(clause + ")")
-    if lab:
+    for parameter, lab_min, lab_max in lab:  # each parameter measured at least once within its range
         clause = "rid IN (SELECT rid FROM lab_values WHERE parameter = ?"
-        params.append(lab)
+        params.append(parameter)
         if lab_min is not None:
             clause += " AND (qualifier IS NULL OR qualifier IN ('>', '≥', '>=', 'range')) AND value >= ?"
             params.append(lab_min)
@@ -169,12 +183,9 @@ def list_boreholes(
     con: DB,
     q: str | None = None,
     bbox: str | None = Query(None, description="minLon,minLat,maxLon,maxLat (min > max crosses the antimeridian)"),
-    lithology: list[str] = Query(default_factory=list),
-    depth_from: float | None = Query(None, description="lithology filter: layer below this depth (m)"),
-    depth_to: float | None = Query(None, description="lithology filter: layer above this depth (m)"),
-    lab: str | None = Query(None, description="lab parameter, e.g. ucs, cai"),
-    lab_min: float | None = None,
-    lab_max: float | None = None,
+    lithology: list[str] = Query(default_factory=list,
+                                 description="code[:from_m:to_m], e.g. clay:10:20 (a clay layer between 10 and 20 m)"),
+    lab: list[str] = Query(default_factory=list, description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
     country: str | None = None,
     min_depth: float | None = None,
     min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
@@ -188,8 +199,8 @@ def list_boreholes(
     'list' returns a GeoJSON page with the total and lithology counts of all matches."""
     if fields == "layers" and not bbox:
         raise HTTPException(422, "bbox is required for layer strips")
-    where, params = _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, country, min_depth,
-                             min_position, status, id)
+    where, params = _filters(q, bbox, _conditions(lithology, "lithology"), _conditions(lab, "lab"), country,
+                             min_depth, min_position, status, id)
     sql_where = " AND ".join(where)
     if fields == "layers":
         rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {sql_where}", params).fetchall()
