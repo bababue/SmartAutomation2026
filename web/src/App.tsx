@@ -182,7 +182,7 @@ export default function App() {
     moreRequest.current?.abort()
     const ctrl = new AbortController()
     const request = { filters, refresh }
-    Promise.all([fetchBoreholes(filters, 0, 200, ctrl.signal), fetchMapPoints(filters, ctrl.signal)])
+    Promise.all([fetchBoreholes(filters, 0, 500, ctrl.signal), fetchMapPoints(filters, ctrl.signal)])
       .then(([page, map]) => { setData(page); remember(page.features); setPoints(map); setError(null); setListFor(request) })
       .catch((e) => {
         if (e.name === 'AbortError') return
@@ -197,7 +197,7 @@ export default function App() {
     const ctrl = new AbortController()
     moreRequest.current = ctrl
     setLoadingMore(true)
-    fetchBoreholes(filters, data.features.length, 200, ctrl.signal)
+    fetchBoreholes(filters, data.features.length, 500, ctrl.signal)
       .then((page) => { setData((d) => ({ ...page, features: [...d.features, ...page.features] })); remember(page.features) })
       .catch((e) => e.name !== 'AbortError' && setError(`Could not load more boreholes (${e.message}).`))
       .finally(() => setLoadingMore(false))
