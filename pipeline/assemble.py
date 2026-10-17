@@ -331,42 +331,39 @@ def missing_sheets(logs: list[tuple[XLog, SourceRef]]) -> list[str]:
 
 def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
             notes: list[str] | None = None) -> list[Layer]:
+    """The layer sequence of a hole's sheets; findings about how it was read are added to `notes`."""
+    notes = [] if notes is None else notes
     flat = [(x, src) for log, src in logs for x in log.layers]
-    if notes is not None:
-        notes.extend(missing_sheets(logs))
+    notes.extend(missing_sheets(logs))
     # Fill missing boundaries from neighbours: top ← previous bottom, bottom ← next top / final depth.
     # Surface and final depth are assumptions, not readings: they are reported as findings.
     tops = [x.top_m for x, _ in flat]
     bottoms = [x.bottom_m for x, _ in flat]
-    inferred: list[str] = []
     for i in range(len(flat)):
         if tops[i] is None:
             tops[i] = bottoms[i - 1] if i > 0 else 0.0
             if i == 0 and bottoms[i] is not None:
-                inferred.append("boundary inferred: top of the first layer not readable, set to 0 m")
+                notes.append("boundary inferred: top of the first layer not readable, set to 0 m")
         if bottoms[i] is None:
             if i + 1 < len(flat):
                 bottoms[i] = tops[i + 1]  # stays None if the next top is unknown too
             elif final_depth is not None and tops[i] is not None and final_depth <= tops[i] + 0.01:
                 # The hole ends where this unit starts (e.g. a pit stopped on rock): a finding, not a layer.
-                inferred.append(f"reached at the final depth {final_depth:g} m, thickness unknown: "
-                                f"{' '.join(flat[i][0].description_original.split())[:80]}")
+                notes.append(f"reached at the final depth {final_depth:g} m, thickness unknown: "
+                             f"{' '.join(flat[i][0].description_original.split())[:80]}")
             else:
                 bottoms[i] = final_depth  # only the last layer may close at the final depth
                 if final_depth is not None and tops[i] is not None:
-                    inferred.append(f"boundary inferred: bottom of the last layer not readable, "
-                                    f"set to the final depth {final_depth:g} m")
-    if notes is not None:
-        notes.extend(inferred)
+                    notes.append(f"boundary inferred: bottom of the last layer not readable, "
+                                 f"set to the final depth {final_depth:g} m")
     layers: list[Layer] = []
     for index, ((x, src), top, bottom) in enumerate(zip(flat, tops, bottoms)):
         if top is None or bottom is None:
             continue
         if index == len(flat) - 1 and abs(bottom - top) < 0.01 and (final_depth is None or abs(final_depth - top) < 0.01):
             # The last row describes what was hit at the end (a pit or hand auger stopped on rock).
-            if notes is not None:
-                notes.append(f"reached at the final depth {top:g} m, thickness unknown: "
-                             f"{' '.join(x.description_original.split())[:80]}")
+            notes.append(f"reached at the final depth {top:g} m, thickness unknown: "
+                         f"{' '.join(x.description_original.split())[:80]}")
             continue
         layer = Layer(
             top_m=top,
@@ -388,61 +385,61 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
             moisture=x.moisture,
             source=SourceRef(file=src.file, page=src.page, bbox=_bbox(x.bbox)),
         )
-        if (layers and not _same_page(src, layers[-1].source) and top < layers[-1].bottom_m < bottom
-                and any(abs(l.top_m - top) < 0.05 for l in layers)
-                and all(_same_properties(l, layer) for l in layers if l.bottom_m > top and l.top_m < bottom)):
-            if notes is not None:
-                notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page}; "
-                             f"top set to {layers[-1].bottom_m:g} m")
-            layer.top_m = top = layers[-1].bottom_m
-        prev = layers[-1] if layers else None
-        if (prev and layer.primary == Lithology.unknown and not _same_page(src, prev.source)
-                and abs(prev.bottom_m - top) < 0.05 and prev.primary not in (Lithology.unknown, Lithology.no_recovery)):
-            # Same unit across a sheet break whose soil/rock name is printed on the earlier sheet only.
-            layer.primary = prev.primary
-            if notes is not None:
-                notes.append(f"lithology of layer {top:g}–{bottom:g} m taken from the previous sheet")
-        join = _sheet_join(layers[-1], layer) if layers and not _same_page(src, flat[index - 1][1]) else None
-        if join == "merge":
-            prev = layers[-1]
-            if notes is not None and abs(prev.bottom_m - top) > 0.05:
-                notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats the unit "
-                             f"{prev.top_m:g}–{prev.bottom_m:g} m of the previous sheet; joined as "
-                             f"{prev.top_m:g}–{max(prev.bottom_m, bottom):g} m")
-            prev.bottom_m = max(prev.bottom_m, bottom)
-            if _plain(layer.description_original) not in ("", _plain(prev.description_original)):
-                prev.description_original += f" / {layer.description_original}"
-                if prev.description_en and layer.description_en:
-                    prev.description_en += f" / {layer.description_en}"
-            conflicts = _carry_properties(prev, layer)
-            if conflicts and notes is not None:
-                notes.append(f"properties differ across the sheet break: layer {prev.top_m:g}–{prev.bottom_m:g} m, "
-                             + "; ".join(conflicts))
-            continue
-        if join == "extend":
-            if notes is not None:
-                notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page} as continued from the previous "
-                             f"sheet; top set to {layers[-1].bottom_m:g} m")
-            layer.top_m = top = layers[-1].bottom_m
-        if (layers and abs(layers[-1].top_m - top) < 0.01 and abs(layers[-1].bottom_m - bottom) < 0.01
-                and _same_properties(layers[-1], layer)):
-            continue  # same layer read twice (overlapping sheets); a different material stays as an overlap
-        prev = layers[-1] if layers else None
-        if (prev and not _same_page(src, prev.source) and abs(prev.bottom_m - bottom) < 0.01
-                and prev.top_m < top < prev.bottom_m and _same_properties(prev, layer)):
-            # The earlier sheet gave the unit's full range, the next one repeats it from its sheet top.
-            if notes is not None:
-                notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats {prev.top_m:g}–{prev.bottom_m:g} m")
-            continue
-        if (prev and not _same_page(src, prev.source) and abs(prev.top_m - top) < 0.01
-                and bottom < prev.bottom_m - 0.01 and _same_properties(prev, layer)):
-            # The earlier sheet ran its last unit past its own end; the next sheet shows where it really ends.
-            if notes is not None:
-                notes.append(f"layer {prev.top_m:g}–{prev.bottom_m:g} m ends at {bottom:g} m per page {src.page}")
-            layers[-1] = layer
-            continue
-        layers.append(layer)
+        new_sheet = index > 0 and not _same_page(src, flat[index - 1][1])
+        if not _join_into(layers, layer, new_sheet, notes):
+            layers.append(layer)
     return layers
+
+
+def _join_into(layers: list[Layer], layer: Layer, new_sheet: bool, notes: list[str]) -> bool:
+    """Fit `layer` to the layers read so far across a sheet break: it may restate, continue or end a unit of the
+    previous sheet. Returns whether it was taken in that way; otherwise it is a layer of its own."""
+    src, top, bottom = layer.source, layer.top_m, layer.bottom_m
+    if (layers and not _same_page(src, layers[-1].source) and top < layers[-1].bottom_m < bottom
+            and any(abs(l.top_m - top) < 0.05 for l in layers)
+            and all(_same_properties(l, layer) for l in layers if l.bottom_m > top and l.top_m < bottom)):
+        notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page}; top set to {layers[-1].bottom_m:g} m")
+        layer.top_m = top = layers[-1].bottom_m
+    prev = layers[-1] if layers else None
+    if (prev and layer.primary == Lithology.unknown and not _same_page(src, prev.source)
+            and abs(prev.bottom_m - top) < 0.05 and prev.primary not in (Lithology.unknown, Lithology.no_recovery)):
+        # Same unit across a sheet break whose soil/rock name is printed on the earlier sheet only.
+        layer.primary = prev.primary
+        notes.append(f"lithology of layer {top:g}–{bottom:g} m taken from the previous sheet")
+    join = _sheet_join(prev, layer) if prev and new_sheet else None
+    if join == "merge":
+        if abs(prev.bottom_m - top) > 0.05:
+            notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats the unit "
+                         f"{prev.top_m:g}–{prev.bottom_m:g} m of the previous sheet; joined as "
+                         f"{prev.top_m:g}–{max(prev.bottom_m, bottom):g} m")
+        prev.bottom_m = max(prev.bottom_m, bottom)
+        if _plain(layer.description_original) not in ("", _plain(prev.description_original)):
+            prev.description_original += f" / {layer.description_original}"
+            if prev.description_en and layer.description_en:
+                prev.description_en += f" / {layer.description_en}"
+        if conflicts := _carry_properties(prev, layer):
+            notes.append(f"properties differ across the sheet break: layer {prev.top_m:g}–{prev.bottom_m:g} m, "
+                         + "; ".join(conflicts))
+        return True
+    if join == "extend":
+        notes.append(f"layer {top:g}–{bottom:g} m restated on page {src.page} as continued from the previous "
+                     f"sheet; top set to {prev.bottom_m:g} m")
+        layer.top_m = top = prev.bottom_m
+    if (prev and abs(prev.top_m - top) < 0.01 and abs(prev.bottom_m - bottom) < 0.01
+            and _same_properties(prev, layer)):
+        return True  # same layer read twice (overlapping sheets); a different material stays as an overlap
+    if (prev and not _same_page(src, prev.source) and abs(prev.bottom_m - bottom) < 0.01
+            and prev.top_m < top < prev.bottom_m and _same_properties(prev, layer)):
+        # The earlier sheet gave the unit's full range, the next one repeats it from its sheet top.
+        notes.append(f"layer {top:g}–{bottom:g} m on page {src.page} repeats {prev.top_m:g}–{prev.bottom_m:g} m")
+        return True
+    if (prev and not _same_page(src, prev.source) and abs(prev.top_m - top) < 0.01
+            and bottom < prev.bottom_m - 0.01 and _same_properties(prev, layer)):
+        # The earlier sheet ran its last unit past its own end; the next sheet shows where it really ends.
+        notes.append(f"layer {prev.top_m:g}–{prev.bottom_m:g} m ends at {bottom:g} m per page {src.page}")
+        layers[-1] = layer
+        return True
+    return False
 
 
 def extend_sampled_layers(bh: Borehole, sample_max: float = 0.6, gap_max: float = 1.6) -> list[str]:
