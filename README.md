@@ -321,6 +321,10 @@ sheets come from the main cache. The main cache, database and review work are no
 follow `EXTRACT_MODEL` / `EXTRACT_EFFORT`, so the same command compares models (with `LLM_BACKEND=openai`
 also models of other vendors). Each cached page records its duration and token usage.
 
+`--reference-pages` re-extracts only the pages the reference records come from (with their continuation sheets)
+and takes every other page from the main cache. That costs a fraction of a full run; the proxy signals then
+mix both prompts, so only the reference table measures the arm.
+
 Without a reference, `experiment compare --against baseline` shows how far an arm agrees with the baseline
 (Opus). That is a hint, not accuracy: agreeing with another model is not being right.
 
