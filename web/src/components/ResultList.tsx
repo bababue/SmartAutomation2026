@@ -13,14 +13,11 @@ interface Props {
   selectedId: string | null
   onSelect: (id: string) => void
   loading: boolean
-  sectionIds: string[]
-  onToggleSection: (id: string) => void
 }
 
 const fmtDepth = (d: number | null) => (d == null ? '–' : `${d.toLocaleString('en', { maximumFractionDigits: 1 })} m`)
 
-export function ResultList({ features, groups, activeGroup, onShowGroup, selectedId, onSelect, loading, sectionIds,
-  onToggleSection }: Props) {
+export function ResultList({ features, groups, activeGroup, onShowGroup, selectedId, onSelect, loading }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   if (!loading && !features.length) {
     return (
@@ -89,15 +86,6 @@ export function ResultList({ features, groups, activeGroup, onShowGroup, selecte
                         </span>
                         {p.loc_method === 'geocoded_place' && <span className="flag flag-warn" title="Position estimated from the place name">approx. position</span>}
                       </span>
-                    </button>
-                    <button
-                      className={`section-toggle${sectionIds.includes(p.id) ? ' section-toggle-on' : ''}`}
-                      onClick={() => onToggleSection(p.id)}
-                      aria-pressed={sectionIds.includes(p.id)}
-                      aria-label={`${sectionIds.includes(p.id) ? 'Remove' : 'Add'} ${p.name} ${sectionIds.includes(p.id) ? 'from' : 'to'} the section`}
-                      title={sectionIds.includes(p.id) ? 'In the section view' : 'Add to the section view'}
-                    >
-                      {sectionIds.includes(p.id) ? 'In section' : '+ Section'}
                     </button>
                   </li>
                 ))}

@@ -302,12 +302,16 @@ Restart the API after pipeline code changes; the UI picks up new data on reload.
 - **Review queue**: everything below the threshold or with blocking findings, weakest first. Enter your name
   once, then approve or reject; from the queue the next waiting record opens automatically. Keys: `A` approve,
   `R` reject, `←`/`→` previous/next in the queue, `Esc` close.
-- **Section**: "+ Section" on boreholes shows them side by side along a line, at ground level where known.
-  Each hole marks its rock head (top of the rock that continues to the bottom of the hole; decomposed rock of
-  grades IV–VI above it is dashed) and its groundwater level, both derived from the layers in code
-  (`pipeline/ground.py`). Between neighbours up to 150 m apart they are joined as a linear estimate; the band
-  around the rock head widens with the distance to the nearest hole (±10 %). Layers themselves are not
-  correlated. The synthetic demo data contains a tunnel route ("Demo tunnel route") to try it.
+- **Tunnel route**: open **Tunnel route**, draw an alignment by clicking points on the map and finish it,
+  or import a WGS84 GeoJSON LineString. Set the corridor distance, then select nearby boreholes individually
+  or use all nearby ones. The longitudinal section orders holes by their position along the route and scales
+  horizontal distances by chainage; each hole's distance from the route appears on hover. Optionally enter
+  a tunnel axis depth below ground or start/end elevations and a diameter. The route is saved in this browser;
+  `route=1` in the URL reopens it on reload. Estimated lithology spans adjacent boreholes along the route;
+  spans over 150 m are drawn lighter and identified as lower confidence on hover. Rock head and groundwater
+  joins stop at gaps over 150 m or where a borehole lies outside the corridor. The route profile shows
+  boreholes at their stations along the tunnel, with rock head and groundwater derived from the layers in
+  `pipeline/ground.py`. The synthetic demo data contains a tunnel route to try it.
 - **Export**: "Export released (CSV)" – one row per layer, released records only.
 
 ### 9. Tests

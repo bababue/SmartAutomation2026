@@ -12,8 +12,6 @@ interface Props {
   onClose: () => void
   onReviewChange: (update: DetailUpdate) => void
   nav?: QueueNav | null
-  inSection?: boolean
-  onToggleSection?: () => void
   onSourceToggle?: (open: boolean) => void
   onSelect?: (id: string) => void
   onFindLike?: (like: NonNullable<SimilarGround['like']>) => void
@@ -39,7 +37,7 @@ function Level({ value, label }: { value: number | null; label: string }) {
   )
 }
 
-export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, onToggleSection, onSourceToggle, onSelect, onFindLike }: Props) {
+export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceToggle, onSelect, onFindLike }: Props) {
   const bh = detail.borehole
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
@@ -93,11 +91,6 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
               <span className="muted" title={`${nav.position} of ${nav.total} waiting`}>{nav.position} / {nav.total}</span>
               <button className="btn btn-icon" onClick={nav.next ?? undefined} disabled={!nav.next} aria-label="Next in queue" title="Next (→)">›</button>
             </div>
-          )}
-          {onToggleSection && (
-            <button className={`btn${inSection ? ' btn-on' : ''}`} onClick={onToggleSection} aria-pressed={inSection}>
-              {inSection ? 'In section' : 'Add to section'}
-            </button>
           )}
           <button className="btn btn-icon" onClick={onClose} aria-label="Close details" title="Close (Esc)">✕</button>
         </div>

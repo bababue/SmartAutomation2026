@@ -25,7 +25,7 @@ summarised; not a verbatim record). No project data.
 | 2 | Matches: vision LLM with a slim schema, IDs/CRS/WGS84/confidence set in code. |
 | 3 | Matches: release score from computed evidence (not model self-assessment), blocking findings, auto-release only with positive evidence, export of released records only. Worth showing the eval numbers (`pipeline eval`) as proof of the hit rate. |
 | 4 | Partly: two-column profile with DIN 4023 lithology and stratigraphy next to the source page. |
-| 5 | Partly: the section view puts holes side by side along a line at ground level, but deliberately does not correlate layers. Next step: optional interpolated layer boundaries between neighbouring holes, drawn as uncertain (dashed / band widening with distance), only for matching primary lithology. |
+| 5 | The tunnel route profile places boreholes by station along the alignment and estimates material layers between them. Longer spans are marked as less certain; boundary correlations remain estimates. |
 | 6 | Not started. Possible: a per-hole ground profile vector (lithology shares per depth band, rock vs. soil, depth to rock, groundwater) and a "similar boreholes" list in the detail view. |
 | 7 | README's data-security section stays as a design principle; the provider is a configuration switch. No further work needed for the challenge. |
 | 8 | Done: [model-comparison.md](model-comparison.md). Opus 5.5 and Haiku 5.5 measured against the human-checked records (quality, tokens, cost and time per page), plus an earlier agreement benchmark of nine configurations including a local model. Opus stays the corpus model; Haiku costs about 1/30 and is weaker on boundary precision, groundwater and lab values. |
