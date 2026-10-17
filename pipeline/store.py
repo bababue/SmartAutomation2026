@@ -452,6 +452,11 @@ def group_borehole_ids(con: sqlite3.Connection, group: str) -> list[str]:
     )]
 
 
+def knowledge_item(con: sqlite3.Connection, item_id: int) -> dict:
+    row = con.execute("SELECT * FROM knowledge WHERE id = ?", (item_id,)).fetchone()
+    return {**dict(row), "payload": json.loads(row["payload"])} if row else {}
+
+
 def add_knowledge(con: sqlite3.Connection, scope_type: str, scope_value: str | None, kind: str, payload: dict,
                   source: str, note: str | None, created_by: str, evidence: str | None = None) -> dict:
     """Store a knowledge item. The same fact again counts as a confirmation only with independent evidence
@@ -478,18 +483,9 @@ def add_knowledge(con: sqlite3.Connection, scope_type: str, scope_value: str | N
     return knowledge_item(con, cur.lastrowid)
 
 
-def knowledge_item(con: sqlite3.Connection, item_id: int) -> dict:
-    row = con.execute("SELECT * FROM knowledge WHERE id = ?", (item_id,)).fetchone()
-    return {**dict(row), "payload": json.loads(row["payload"])} if row else {}
-
-
 def active_knowledge(con: sqlite3.Connection) -> list[dict]:
     return [{**dict(r), "payload": json.loads(r["payload"])}
             for r in con.execute("SELECT * FROM knowledge WHERE active = 1 ORDER BY id")]
-
-
-def deactivate_knowledge(con: sqlite3.Connection, item_id: int) -> bool:
-    return con.execute("UPDATE knowledge SET active = 0 WHERE id = ?", (item_id,)).rowcount > 0
 
 
 def review_log(con: sqlite3.Connection, borehole_id: str) -> list[dict]:

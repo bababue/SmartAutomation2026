@@ -7,7 +7,6 @@ import io
 import json
 import re
 import sqlite3
-import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Literal
@@ -22,7 +21,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, export, ingest, knowledge, scoring, store
+from pipeline import config, corrections, export, scoring, store
 from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
 app = FastAPI(title="Borehole Atlas API")
@@ -445,114 +444,6 @@ def correct(borehole_id: str, body: Correction, con: DB):
     return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
             "corrections": store.corrections_for(con, borehole_id), "blocking": _blocking(bh), "updated": updated,
             "content_hash": _content_hash(con, borehole_id)}
-
-
-# --- knowledge -------------------------------------------------------------------------------------
-
-_rebuild_lock = threading.Lock()
-REBUILD = {"running": False, "documents": 0, "error": None}
-
-
-def _rebuild_in_background(doc_ids: set[str]) -> int:
-    """Re-assemble the affected documents from the cache so new knowledge shows at once (no API calls)."""
-    docs = [d for d in ingest.discover() if d.doc_id in doc_ids]
-
-    def work():
-        from pipeline.__main__ import rebuild
-        with _rebuild_lock:
-            REBUILD.update(running=True, documents=len(docs), error=None)
-            try:
-                rebuild(docs)
-            except Exception as exc:  # reported via /api/knowledge/status
-                REBUILD["error"] = f"{type(exc).__name__}: {exc}"
-            finally:
-                REBUILD["running"] = False
-
-    if docs:
-        threading.Thread(target=work, daemon=True).start()
-    return len(docs)
-
-
-def _affected_docs(con: sqlite3.Connection, item: dict) -> set[str]:
-    rows = con.execute("SELECT doc_id, country, project FROM boreholes").fetchall()
-    st, sv = item["scope_type"], item["scope_value"]
-    if st == "global":
-        return {r["doc_id"] for r in rows}
-    if st == "document":
-        return {r["doc_id"] for r in rows if r["doc_id"].split("__")[0] == sv}
-    if st == "region":
-        return {r["doc_id"] for r in rows if (r["country"] or "").upper() == sv}
-    return {r["doc_id"] for r in rows if knowledge.norm_project(r["project"]) == sv}
-
-
-class KnowledgeIn(BaseModel):
-    borehole_id: str | None = Field(None, description="Record the scope is taken from (not needed for global)")
-    scope_type: Literal["document", "project", "region", "global"]
-    kind: Literal["crs", "term", "note"]
-    payload: dict
-    source: Literal["review", "external"] = "review"
-    note: str | None = Field(None, max_length=2000)
-    reviewer: str = Field(min_length=1, max_length=80)
-
-    @model_validator(mode="after")
-    def _check(self):
-        p = self.payload
-        if self.kind == "crs":
-            try:
-                CRS.from_epsg(int(p.get("epsg")))
-            except (CRSError, TypeError, ValueError):
-                raise ValueError("unknown EPSG code")
-            self.payload = {"epsg": int(p["epsg"])}
-        elif self.kind == "term":
-            term = str(p.get("term") or "").strip()
-            if not 2 <= len(term) <= 80:
-                raise ValueError("give a term of 2 to 80 characters")
-            self.payload = {"term": term, "primary": Lithology(p.get("primary")).value}
-        else:
-            text = str(p.get("text") or "").strip()
-            if not text:
-                raise ValueError("write the note")
-            self.payload = {"text": text[:2000]}
-        if self.scope_type != "global" and not self.borehole_id:
-            raise ValueError("a scope other than global needs a record")
-        return self
-
-
-@app.get("/api/knowledge")
-def list_knowledge(con: DB, borehole_id: str | None = None):
-    """Everything known (or what applies to one record), with the record's scope values for new items."""
-    items = store.active_knowledge(con)
-    if borehole_id is None:
-        return {"items": items, "scopes": None, "rebuild": REBUILD}
-    bh = store.load_borehole(con, borehole_id)
-    if bh is None:
-        raise HTTPException(404, "borehole not found")
-    return {"items": knowledge.applicable(items, bh), "scopes": knowledge.scope_keys(bh), "rebuild": REBUILD}
-
-
-@app.post("/api/knowledge")
-def add_knowledge(body: KnowledgeIn, con: DB):
-    scope_value = None
-    if body.scope_type != "global":
-        bh = store.load_borehole(con, body.borehole_id)
-        if bh is None:
-            raise HTTPException(404, "borehole not found")
-        scope_value = knowledge.scope_keys(bh)[body.scope_type]
-        if scope_value is None:
-            raise HTTPException(422, f"this record has no {body.scope_type} to attach the knowledge to")
-    with con:
-        item = store.add_knowledge(con, body.scope_type, scope_value, body.kind, body.payload, body.source, body.note,
-                                   body.reviewer.strip())
-    return {"item": item, "rebuilding": _rebuild_in_background(_affected_docs(con, item))}
-
-
-@app.delete("/api/knowledge/{item_id}")
-def remove_knowledge(item_id: int, con: DB):
-    item = store.knowledge_item(con, item_id)
-    with con:
-        if not item or not store.deactivate_knowledge(con, item_id):
-            raise HTTPException(404, "knowledge item not found")
-    return {"rebuilding": _rebuild_in_background(_affected_docs(con, item))}
 
 
 @app.get("/api/pages/{doc_id}/{page}")
