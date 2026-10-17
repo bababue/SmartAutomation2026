@@ -13,7 +13,7 @@ from schema.borehole import Borehole, GeorefMethod
 from . import config
 from .assemble import norm_name
 from .extraction_models import CoordinateReading, PageExtraction
-from .georef import candidates, crs_from_hint, haversine_km, resolve_with
+from .georef import candidates, crs_from_hint, haversine_km, is_precise, resolve_with
 from .ingest import PageImage
 
 # Two readings of the same printed text agree to well below this after parsing; more is a different reading.
@@ -86,7 +86,7 @@ def _equivalent(loc, crs: int | str) -> bool:
 def check(bh: Borehole, found: dict[Key, CoordinateReading | None]) -> str | None:
     """The finding for a record whose position comes from printed coordinates, None without a second reading."""
     loc = bh.location
-    if loc.method not in (GeorefMethod.stated_coordinates, GeorefMethod.linked_table) or loc.lat is None:
+    if not is_precise(loc):
         return None
     reading = _reading_for(bh, found)
     if reading is None:

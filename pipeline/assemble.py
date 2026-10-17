@@ -42,7 +42,7 @@ from schema.borehole import (
 
 from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLog
 from . import corrections
-from .georef import candidates, crs_from_hint, georeference, haversine_km
+from .georef import candidates, crs_from_hint, georeference, haversine_km, is_precise
 from .knowledge import printed_pair
 from .scoring import SOURCE_CONFLICTS, STRUCTURAL, counts_against, finding_severity, score
 
@@ -524,8 +524,7 @@ def document_crs(pages: list[PageResult]) -> tuple[str, int] | None:
 
 def flag_position_outliers(boreholes: list[Borehole]) -> None:
     """Holes of one document lie close together; one far from the others hints at a misread or a wrong CRS."""
-    precise = [b for b in boreholes if b.location.lat is not None
-               and b.location.method in (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)]
+    precise = [b for b in boreholes if is_precise(b.location)]
     if len(precise) < 3:
         return
     lat = statistics.median(b.location.lat for b in precise)
@@ -1056,18 +1055,12 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
     return dedupe(boreholes) if deduplicate else boreholes
 
 
-PRECISE_METHODS = (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)
 DEPTH_TOLERANCE_M = 0.05
 # Findings that describe a record's layer sequence or its position travel with the layers or the position.
 LAYER_FINDINGS = STRUCTURAL + ("no layers extracted", "layer ", "minor discontinuity", "core loss inferred",
                                "lithology of layer", "missing sheets", "page ", "depths printed in feet",
                                "properties differ")
-POSITION_FINDINGS = ("coordinate", "CRS", "position", "printed coordinates", "not georeferenced", "invalid WGS84",
-                     "no place to cross-check")
-
-
-def _precise(bh: Borehole) -> bool:
-    return bh.location.lat is not None and bh.location.method in PRECISE_METHODS
+POSITION_FINDINGS = corrections.GEOREF_ISSUES + ("coordinate system from reviewer knowledge",)
 
 
 def _document(bh: Borehole) -> str:
@@ -1116,7 +1109,7 @@ def _evidence(a: Borehole, b: Borehole) -> tuple[list[str], list[str], list[str]
     la, lb = a.location, b.location
     if la.lat is not None and lb.lat is not None:
         d = haversine_km(la.lat, la.lon, lb.lat, lb.lon) * 1000
-        if _precise(a) and _precise(b):
+        if is_precise(la) and is_precise(lb):
             (agree if d <= POSITION_TOLERANCE_M else differ).append(f"positions {d:.0f} m apart")
         elif d > 3 * max(la.accuracy_m or 0.0, lb.accuracy_m or 0.0, 1000.0):
             differ.append(f"positions {d / 1000:.0f} km apart")
@@ -1163,7 +1156,7 @@ def _complete(bh: Borehole) -> bool:
 
 def _location_rank(bh: Borehole) -> tuple:
     loc = bh.location
-    return loc.lat is not None, _precise(bh), not loc.is_planned, loc.confidence or 0.0
+    return loc.lat is not None, is_precise(loc), not loc.is_planned, loc.confidence or 0.0
 
 
 # How far header values of two documents may differ; a date has to match.

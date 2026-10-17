@@ -581,3 +581,8 @@ def apply_reading(loc: Location, c: Candidate) -> None:
     loc.crs_proj = c.crs if c.epsg is None else None
     if loc.method != GeorefMethod.linked_table:
         loc.method = GeorefMethod.stated_coordinates
+
+
+def is_precise(loc: Location) -> bool:
+    """A position read from printed coordinates, on the log or in a summary table."""
+    return loc.lat is not None and loc.method in (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)
