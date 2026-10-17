@@ -55,7 +55,7 @@ flowchart LR
 Only the two LLM steps call a model; everything after the cache is code, so a rule change needs only
 `pipeline rebuild` (seconds, free).
 
-1. **Ingest:** every page of a PDF (text, scanned, vector-only), JPG/PNG/TIFF or DOCX (through its PDF export)
+1. **Ingest:** every page of a PDF (text, scanned, vector-only), JPG/PNG/TIFF or DOCX (converted to PDF with LibreOffice)
    is rendered to an image; plain-text logs and Excel workbooks are laid out on A4 pages first. Text layers are
    only a hint, because many are scrambled.
 2. **Classify:** a thumbnail per page; large reports contain only a few log pages.
@@ -106,6 +106,7 @@ call an LLM; they use cached or hand-written page results. The same checks run l
 | Python | 3.12 or newer | pipeline and API |
 | Node.js | 22 or newer | web UI |
 | OpenRouter key | `sk-or-…` from openrouter.ai | processing documents and web uploads only |
+| LibreOffice | any recent | optional: renders DOCX files (`brew install --cask libreoffice`, `apt install libreoffice-writer-nogui`); without it only their embedded images are read |
 
 No database server or GIS stack: storage is one SQLite file and coordinate transformations use pyproj.
 

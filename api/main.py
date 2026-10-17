@@ -658,6 +658,7 @@ async def upload_documents(files: list[UploadFile] = File(...)) -> models.Upload
             docs=[uploads.UploadDoc(doc_id=d.doc_id, path=d.path, kind=d.kind, sha256=digests[d.path]) for d in docs]))
     except Exception as exc:
         shutil.rmtree(upload_dir, ignore_errors=True)
+        shutil.rmtree(ingest.converted_dir(upload_dir), ignore_errors=True)
         for d in docs:
             shutil.rmtree(config.PAGES_DIR / d.doc_id, ignore_errors=True)
         if isinstance(exc, HTTPException):

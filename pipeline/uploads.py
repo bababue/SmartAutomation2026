@@ -167,10 +167,10 @@ class UploadQueue:
                 task.cancelled = cancelled
                 result.cancelled = _paths(task, cancelled)
                 result.calls = _calls(con, job_id)
+                _remove_files(task, cancelled, whole=result.status == "cancelled")  # gone before the status says so
                 with con:
                     con.execute("UPDATE upload_jobs SET status = ?, task = ?, result = ?, error = ? WHERE id = ?",
                                 (result.status, task.model_dump_json(), result.model_dump_json(), result.error, job_id))
-            _remove_files(task, cancelled, whole=result.status == "cancelled")
             self.progress.pop(job_id, None)
         finally:
             con.close()
@@ -192,6 +192,7 @@ def _remove_files(task: UploadTask, doc_ids: list[str], whole: bool) -> None:
         shutil.rmtree(config.PAGES_DIR / doc_id, ignore_errors=True)
     if whole:
         shutil.rmtree(config.UPLOADS_DIR / task.folder, ignore_errors=True)
+        shutil.rmtree(ingest.converted_dir(config.UPLOADS_DIR / task.folder), ignore_errors=True)
 
 
 def result(con: sqlite3.Connection, job_id: str) -> UploadResult | None:
