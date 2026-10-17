@@ -36,3 +36,7 @@ export function saveReviewer(name: string) {
 
 export const fmtDateTime = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : ''
+
+/** `text` with `suffix` appended, unless the printed text already carries it ('… (WGS84)', '… m a.s.l.'). */
+export const withSuffix = (text: string, suffix: string | null, wrap = (x: string) => ` ${x}`) =>
+  suffix && !text.toLowerCase().includes(suffix.toLowerCase()) ? `${text}${wrap(suffix)}` : text

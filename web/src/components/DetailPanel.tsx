@@ -4,6 +4,7 @@ import { lithStyle, patternId } from '../lithology'
 import { CardHead, CorrectionList, LayersEditor, NotesEditor, RecordEditor, TestsEditor, type TestRow } from './Corrections'
 import { Profile } from './Profile'
 import { ReviewBox, type QueueNav } from './ReviewBox'
+import { withSuffix } from '../review'
 
 interface Props {
   detail: Detail
@@ -120,7 +121,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
           <dl className="record">
             <dt>Coordinates as printed</dt>
             <dd onMouseEnter={() => setCoordsHovered(true)} onMouseLeave={() => setCoordsHovered(false)}>
-              {loc.coords_raw ?? '–'}{loc.crs_raw ? ` (${loc.crs_raw})` : ''}
+              {withSuffix(loc.coords_raw ?? '–', loc.crs_raw, (x) => ` (${x})`)}
             </dd>
             <dt>Position (WGS84)</dt>
             <dd>
@@ -128,7 +129,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
               {loc.crs_epsg ? <span className="muted"> via EPSG:{loc.crs_epsg}</span> : null}
               {loc.crs_candidates.length > 1 && <span className="muted"> (also possible: {loc.crs_candidates.slice(1).join(', ')})</span>}
             </dd>
-            <dt>Ground level</dt><dd>{bh.surface_elevation_raw ?? fmt(bh.surface_elevation_m)}{bh.elevation_datum ? ` ${bh.elevation_datum}` : ''}</dd>
+            <dt>Ground level</dt><dd>{withSuffix(bh.surface_elevation_raw ?? fmt(bh.surface_elevation_m), bh.elevation_datum)}</dd>
             <dt>Final depth</dt><dd>{fmt(bh.depth_m)} m{bh.inclination_deg != null && bh.inclination_deg !== 90 && Math.abs(bh.inclination_deg) !== 90 ? `, inclined ${bh.inclination_deg}°` : ''}</dd>
             <dt>Drilled</dt><dd>{bh.start_date ?? '–'}{bh.end_date && bh.end_date !== bh.start_date ? ` to ${bh.end_date}` : ''}</dd>
             <dt>Method</dt><dd>{bh.drilling_method ?? '–'}</dd>
