@@ -22,7 +22,7 @@ BLOCKING = ("no layers extracted", "log not extracted", "log not assembled", "CR
             "non-finite depth", "invalid WGS84", "gap", "overlap", "layers end at", "stale correction", "log starts at",
             "depths printed in feet", "missing sheets", "sheet header differs", "same printed coordinates as",
             "same hole assumed", "sources disagree on", "read differently on a second look",
-            "possible prompt injection")
+            "possible prompt injection", "km from the other holes of this document")
 
 # Findings that name files, holes, header texts of other documents or gazetteer places: their own severity
 # holds, whatever those names contain ('Singapore' contains 'gap').

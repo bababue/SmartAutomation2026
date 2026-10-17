@@ -347,3 +347,18 @@ def test_a_document_cancelled_during_a_run_leaves_nothing_behind(con, monkeypatc
     assert [r[0] for r in con.execute("SELECT doc_id FROM documents")] == ["upload-x__a"]
     with pytest.raises(runner.llm.Cancelled):
         runner.run(docs, guard=runner.llm.CallGuard(cancelled=lambda doc_id: True))
+
+
+def test_a_hole_moved_far_off_by_a_reviewer_crs_still_blocks_as_a_position_outlier(con):
+    from pipeline.assemble import PageResult, assemble
+    # Invented holes 100 m apart in UTM 32N; the last northing lost its leading digit.
+    logs = [_log(f"BH{n}", f"E {412000 + 100 * n} N 5320000", 300, [(0, 9)]) for n in range(1, 4)]
+    logs.append(_log("BH4", "E 412400 N 320000", 300, [(0, 9)]))
+    records = assemble([PageResult("r", "r.pdf", 1, "borehole_log", PageExtraction(logs=logs, coordinate_rows=[]))])
+    store.add_correction(con, "document", "r", "crs", {"epsg": 25832}, "Ana", None)
+    con.commit()
+    stored = {bh.borehole_name: bh for bh in runner._write_group(con, records, ["r"], dry_run=True)}
+    assert any(i.startswith("corrected by") for i in stored["BH4"].issues)
+    outlier = [i for i in stored["BH4"].issues if "from the other holes of this document" in i]
+    assert outlier and finding_severity(outlier[0]) == "blocking"
+    assert not any("from the other holes" in i for i in stored["BH1"].issues)

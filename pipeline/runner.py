@@ -11,7 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from . import config, coordcheck, corrections, evaluate, experiment, ingest, knowledge, llm, store
-from .assemble import LOG_KINDS, PageResult, _log_key, assemble, dedupe, norm_name, placeholder, unstack_place_positions
+from .assemble import (LOG_KINDS, PageResult, _log_key, assemble, dedupe, flag_position_outliers, norm_name,
+                       placeholder, unstack_place_positions)
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
 
@@ -409,6 +410,9 @@ def _write_group(con, records, doc_ids: list[str], dry_run: bool) -> list:
         unstack_place_positions(records, protected)
         for bh in records:  # reviewer fixes survive re-extraction, and win over learned knowledge
             corrections.apply(bh, fixes[bh.borehole_id])
+        # A reviewer's CRS applied to misread digits can move a hole far off: positions are checked as stored.
+        for bh in flag_position_outliers(records):
+            corrections.rescore(bh)
         if dry_run:
             con.rollback()
             return records

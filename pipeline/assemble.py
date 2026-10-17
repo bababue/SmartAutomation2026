@@ -554,19 +554,26 @@ def document_crs(pages: list[PageResult]) -> tuple[str, int] | None:
     return " ".join(text.split()), page
 
 
-def flag_position_outliers(boreholes: list[Borehole]) -> None:
-    """Holes of one document lie close together; one far from the others hints at a misread or a wrong CRS."""
+OUTLIER = "km from the other holes of this document"
+
+
+def flag_position_outliers(boreholes: list[Borehole]) -> list[Borehole]:
+    """Holes of one document lie close together; one far from the others hints at a misread or a wrong CRS.
+    Returns the holes flagged now (a hole flagged before is not flagged twice)."""
     precise = [b for b in boreholes if is_precise(b.location)]
     if len(precise) < 3:
-        return
+        return []
     lat = statistics.median(b.location.lat for b in precise)
     lon = statistics.median(b.location.lon for b in precise)
     dist = {b.borehole_id: haversine_km(b.location.lat, b.location.lon, lat, lon) for b in precise}
     typical = statistics.median(dist.values())
+    flagged = []
     for b in precise:
-        if dist[b.borehole_id] > max(20.0, 5 * typical):
-            b.issues.append(f"position {dist[b.borehole_id]:.0f} km from the other holes of this document")
+        if dist[b.borehole_id] > max(20.0, 5 * typical) and not any(OUTLIER in i for i in b.issues):
+            b.issues.append(f"position {dist[b.borehole_id]:.0f} {OUTLIER}")
             b.location.confidence = min(b.location.confidence or 0.0, 0.5)
+            flagged.append(b)
+    return flagged
 
 
 def flag_shared_coordinates(boreholes: list[Borehole]) -> None:
