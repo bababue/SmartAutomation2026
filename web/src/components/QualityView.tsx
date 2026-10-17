@@ -137,9 +137,9 @@ function best(runs: { metrics: QualityMetrics }[], key: MetricKey): number {
 
 function Models({ ev, models }: { ev: ModelEvaluation; models: NonNullable<ModelEvaluation['models']> }) {
   const runs = models.runs
-  const cell = (key: MetricKey, m: QualityMetrics) => {
+  const cell = (key: MetricKey, run: string, m: QualityMetrics) => {
     const top = runs.length > 1 && ratio(m[key]) === best(runs, key)
-    return <td key={key} className={`num${top ? ' quality-best' : ''}`}>{percent(m[key])}</td>
+    return <td key={run} className={`num${top ? ' quality-best' : ''}`}>{percent(m[key])}</td>
   }
   return (
     <section className="stats-card" aria-labelledby="quality-models">
@@ -155,7 +155,7 @@ function Models({ ev, models }: { ev: ModelEvaluation; models: NonNullable<Model
           </thead>
           <tbody>
             {METRICS.map(([key, label, hint]) => (
-              <tr key={key}><th scope="row" title={hint}>{label}</th>{runs.map((r) => cell(key, r.metrics))}</tr>
+              <tr key={key}><th scope="row" title={hint}>{label}</th>{runs.map((r) => cell(key, r.arm, r.metrics))}</tr>
             ))}
             <tr><th scope="row">Records not found</th>{runs.map((r) => <td key={r.arm} className="num">{n(r.metrics.missing)}</td>)}</tr>
             <tr><th scope="row">Largest position error</th>{runs.map((r) => <td key={r.arm} className="num">{fmtError(r.metrics.position_max_m)}</td>)}</tr>
