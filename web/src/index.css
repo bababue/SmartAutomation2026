@@ -478,6 +478,7 @@ button, input, select { font: inherit; color: inherit; }
 .queue-table tbody tr { cursor: pointer; }
 .queue-table tbody tr:hover td { background: var(--hover); }
 .queue-table .row-active td { background: var(--water-soft); }
+.queue-table .queue-name { font-weight: 700; color: var(--ink); }
 .queue-score {
   display: inline-block; min-width: 38px; padding: 2px 0; text-align: center; font-weight: 700; border-radius: 2px;
   background: color-mix(in srgb, var(--low) calc((1 - var(--s)) * 100%), var(--medium));

@@ -124,11 +124,9 @@ export function ReviewQueue({ items, total, loading, selectedId, threshold, audi
                 key={it.id}
                 className={it.id === selectedId ? 'row-active' : undefined}
                 onClick={() => onSelect(it.id)}
-                tabIndex={0}
-                onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelect(it.id)}
               >
                 <td className="num"><span className="queue-score" style={{ ['--s' as string]: it.score ?? 0 }}>{scoreText(it.score)}</span></td>
-                <td><strong>{it.name}</strong><span className="original">{it.n_layers} layers</span>
+                <td><button className="link-button queue-name" onClick={() => onSelect(it.id)}>{it.name}</button><span className="original">{it.n_layers} layers</span>
                   {SHOW_SOURCE_FILE && it.source_file && <span className="original result-file">{it.source_file}</span>}</td>
                 <td>{it.location_name ?? it.project ?? '–'}{it.country ? `, ${it.country}` : ''}</td>
                 <td><ul className="queue-reasons">{it.reasons.map((r) => <li key={r}>{r}</li>)}</ul></td>

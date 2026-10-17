@@ -33,6 +33,14 @@ const tickStep = (range: number) => {
   return base * (scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10)
 }
 
+interface ScreenPoint { clientX: number; clientY: number }
+
+/** Where a keyboard-focused element shows its tooltip: its centre. */
+function centre(element: Element): ScreenPoint {
+  const r = element.getBoundingClientRect()
+  return { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }
+}
+
 interface Viewport { key: string; from: number; to: number; low: number; high: number }
 interface ZoomSelection { x0: number; y0: number; x1: number; y1: number }
 
@@ -170,7 +178,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
       return Math.abs(label.x - other.x) >= (label.width + other.width) / 2 + 6
     })) visibleLabels.add(label.index)
   }
-  const placeTooltip = (event: ReactMouseEvent<SVGElement>, content: HTMLElement) => {
+  const placeTooltip = (event: ScreenPoint, content: HTMLElement) => {
     if (drag.current?.zooming) return
     const host = section.current, tip = tooltip.current
     if (!host || !tip) return
@@ -183,7 +191,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     tip.style.left = `${Math.max(8, left)}px`
     tip.style.top = `${Math.max(8, top)}px`
   }
-  const showTooltip = (event: ReactMouseEvent<SVGElement>, p: BoreholeSummary, layer?: NonNullable<BoreholeSummary['strip']>[number]) => {
+  const showTooltip = (event: ScreenPoint, p: BoreholeSummary, layer?: NonNullable<BoreholeSummary['strip']>[number]) => {
     const content = tooltipContent(layer ? { ...p, layer_top: layer[0], layer_bottom: layer[1], layer_lithology: layer[2] } : p)
     const elevation = p.elevation
     if (layer && elevation != null) {
@@ -204,8 +212,8 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     const layer = p.strip?.find(([top, bottom]) => depth >= top && depth <= bottom)
     showTooltip(event, p, layer)
   }
-  const showEstimation = (event: ReactMouseEvent<SVGPolygonElement>, band: SectionBand, j: number) => {
-    const svg = event.currentTarget.ownerSVGElement
+  const showEstimation = (target: SVGPolygonElement, event: ScreenPoint, band: SectionBand, j: number) => {
+    const svg = target.ownerSVGElement
     if (!svg) return
     const x1 = xs[j], x2 = xs[j + 1]
     const fraction = x2 === x1 ? 0.5 : Math.max(0, Math.min(1, (event.clientX - svg.getBoundingClientRect().left - x1) / (x2 - x1)))
@@ -317,8 +325,9 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
             return <polygon key={`${j}-${k}`} points={points} fill={`url(#${patternId(band.lithology)})`}
               className={`section-layer-band${layout.gaps[j] > MAX_JOIN_GAP_M ? ' section-layer-band-distant' : ''}`}
               role="img" tabIndex={0} aria-label={`Estimation: ${lithStyle(band.lithology).label} between ${ordered[j].properties.name} and ${ordered[j + 1].properties.name}`}
-              onMouseEnter={(event) => showEstimation(event, band, j)} onMouseMove={(event) => showEstimation(event, band, j)}
-              onMouseLeave={hideTooltip} />
+              onMouseEnter={(event) => showEstimation(event.currentTarget, event, band, j)}
+              onMouseMove={(event) => showEstimation(event.currentTarget, event, band, j)} onMouseLeave={hideTooltip}
+              onFocus={(event) => showEstimation(event.currentTarget, centre(event.currentTarget), band, j)} onBlur={hideTooltip} />
           }))}
           </g>
           {ticks.map((v) => (
@@ -391,6 +400,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
               <g key={p.id} data-hole-id={p.id} className={`section-hole${p.id === selectedId ? ' section-hole-on' : ''}`}
                 role="button" tabIndex={0} aria-label={`Select ${p.name}${p.id === selectedId ? ', press Delete to remove from section' : ''}`}
                 onMouseEnter={(event) => showHoleTooltip(event, p, i)} onMouseMove={(event) => showHoleTooltip(event, p, i)} onMouseLeave={hideTooltip}
+                onFocus={(event) => showTooltip(centre(event.currentTarget), p)} onBlur={hideTooltip}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(p.id) }
                   if (p.id === selectedId && (event.key === 'Delete' || event.key === 'Backspace')) { event.preventDefault(); onRemove(p.id) }
