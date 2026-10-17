@@ -428,6 +428,10 @@ def georeference(
             penalty = 0.0 if c.hinted else 0.5
             penalty += 0.0 if "guessed" not in c.note else 1.0
             penalty += 0.0 if "alternative" not in c.note else 2.0  # flags only, never outranks
+            # North America: NAD83 / UTM is the usual grid; WGS84 / UTM lands within metres, so only a
+            # tie-break, otherwise the choice would follow noise in the place estimate.
+            if (country or "").upper() in ("US", "CA") and c.epsg and 32601 <= c.epsg <= 32660:
+                penalty += 0.05
             return (c.distance_km or 0) + penalty
 
         cands.sort(key=rank)

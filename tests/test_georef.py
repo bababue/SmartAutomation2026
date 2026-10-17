@@ -215,3 +215,11 @@ def test_danish_system_34_printed_as_positive_westing():
     assert result.location.crs_epsg == 10250, result.issues
     assert haversine_km(result.location.lat, result.location.lon, lat, lon) < 0.05
     assert not any(i.startswith("CRS ambiguous") for i in result.issues)
+
+
+def test_north_america_prefers_nad83_utm():
+    lat, lon = 49.2488, -122.9805  # Burnaby, BC
+    e, n = fwd(26910, lat, lon)
+    for offset in (0.01, -0.01, 0.03):  # whatever the place estimate's noise
+        result = georeference(f"N: {n:.1f} E: {e:.1f}", None, "CA", lat + offset, lon - offset, 5.0)
+        assert result.location.crs_epsg == 26910
