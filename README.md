@@ -138,10 +138,9 @@ cp .env.example .env        # git-ignored; replace sk-or-... with your key
 ```
 
 ```dotenv
-OPENROUTER_API_KEY=sk-or-...
 LLM_BACKEND=openai
 OPENAI_BASE_URL=https://openrouter.ai/api/v1
-OPENAI_API_KEY=${OPENROUTER_API_KEY}
+OPENAI_API_KEY=sk-or-...   # your OpenRouter key
 CLASSIFY_MODEL=anthropic/claude-haiku-5.5
 EXTRACT_MODEL=anthropic/claude-haiku-5.5
 ```
@@ -268,7 +267,7 @@ corrections are lost**.
 | Symptom | Cause and fix |
 |---|---|
 | `No key for https://openrouter.ai/api/v1` | No `.env` in the project root, or `OPENAI_API_KEY` is missing in it. |
-| OpenRouter answers `401` | `OPENROUTER_API_KEY` in `.env` is still the placeholder `sk-or-...`. |
+| OpenRouter answers `401` | `OPENAI_API_KEY` in `.env` is still the placeholder `sk-or-...`. |
 | OpenRouter: "no endpoints found" | The model has no zero-data-retention provider; pick another model or set `OPENROUTER_ZDR=0` if that is acceptable. |
 | `401 invalid x-api-key` (`LLM_BACKEND=api`) | The key is a subscription token, not an API key; see [Other model backends](#other-model-backends). |
 | Map stays empty, "Worker failed to load" | Old UI build: `npm --prefix web run build`, or restart the dev server. |
