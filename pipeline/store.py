@@ -208,10 +208,14 @@ def content_hash(bh: Borehole) -> str:
 
 
 def extracted_summary(bh: Borehole) -> dict:
-    """What the model produced, kept before reviewer corrections are applied: layers and position."""
+    """What the model produced, kept before reviewer corrections are applied, in the form `eval` compares.
+    `key` (the natural key) matches the same hole when a variant names it differently."""
     loc = bh.location
-    return {"layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
-            "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg}
+    return {"key": natural_key(bh),
+            "layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
+            "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg, "depth_m": bh.depth_m,
+            "groundwater": sorted(gw.depth_m for gw in bh.groundwater if gw.depth_m is not None),
+            "lab": [[r.parameter.value, r.value, r.top_m] for r in bh.lab_results]}
 
 
 def _delete(con: sqlite3.Connection, borehole_id: str) -> dict | None:
@@ -448,6 +452,11 @@ def group_borehole_ids(con: sqlite3.Connection, group: str) -> list[str]:
     )]
 
 
+def knowledge_item(con: sqlite3.Connection, item_id: int) -> dict:
+    row = con.execute("SELECT * FROM knowledge WHERE id = ?", (item_id,)).fetchone()
+    return {**dict(row), "payload": json.loads(row["payload"])} if row else {}
+
+
 def add_knowledge(con: sqlite3.Connection, scope_type: str, scope_value: str | None, kind: str, payload: dict,
                   source: str, note: str | None, created_by: str, evidence: str | None = None) -> dict:
     """Store a knowledge item. The same fact again counts as a confirmation only with independent evidence
@@ -474,18 +483,9 @@ def add_knowledge(con: sqlite3.Connection, scope_type: str, scope_value: str | N
     return knowledge_item(con, cur.lastrowid)
 
 
-def knowledge_item(con: sqlite3.Connection, item_id: int) -> dict:
-    row = con.execute("SELECT * FROM knowledge WHERE id = ?", (item_id,)).fetchone()
-    return {**dict(row), "payload": json.loads(row["payload"])} if row else {}
-
-
 def active_knowledge(con: sqlite3.Connection) -> list[dict]:
     return [{**dict(r), "payload": json.loads(r["payload"])}
             for r in con.execute("SELECT * FROM knowledge WHERE active = 1 ORDER BY id")]
-
-
-def deactivate_knowledge(con: sqlite3.Connection, item_id: int) -> bool:
-    return con.execute("UPDATE knowledge SET active = 0 WHERE id = ?", (item_id,)).rowcount > 0
 
 
 def review_log(con: sqlite3.Connection, borehole_id: str) -> list[dict]:

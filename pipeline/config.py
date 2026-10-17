@@ -34,7 +34,10 @@ EXTRACT_EFFORT = os.getenv("EXTRACT_EFFORT", "medium")
 # "api": Anthropic API with ANTHROPIC_API_KEY. "claude-code": run the local Claude Code CLI
 # (`claude -p`) with its own login, e.g. for testing with a Claude subscription. Slower, and
 # subject to the subscription's usage limits.
+# "openai": any OpenAI-compatible chat API at OPENAI_BASE_URL (key in OPENAI_API_KEY), e.g. OpenRouter
+# (https://openrouter.ai/api/v1) or a local Ollama server (the default). Model names are the server's.
 LLM_BACKEND = os.getenv("LLM_BACKEND", "api")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
 CLAUDE_CLI = os.getenv("CLAUDE_CLI", "claude")
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "3" if LLM_BACKEND == "claude-code" else "6"))
 

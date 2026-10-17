@@ -61,14 +61,13 @@ depths that literally appear in that text.
 
 ## Learning from reviewers
 
-Local rules are kept as data, not code. Reviewers' corrections and what they enter under *What we know
-here* in the detail view become knowledge items with a scope (document, project, country, everywhere) and a
-source (learned from corrections, from the documents, or told by someone, e.g. on the phone).
+Local rules are kept as data, not code. Reviewers' corrections become knowledge items with a scope
+(document, project, country, everywhere) and a source (learned from corrections or from the documents).
 
 - A confirmed coordinate system counts for the country; after three confirmations it is treated as stated.
 - Positions set by hand in a document are used as control points: a local grid is fitted on every run
   (Helmert, affine from four points) and places the other holes printed in the same grid.
-- Local terms map to a DIN 4023 class ("caliche" → limestone), offered when a reviewer changes a lithology.
+- Stored local terms map to a DIN 4023 class ("caliche" → limestone).
 - New extractions get the applicable knowledge as context; it is not part of the cache key, so new
   knowledge does not trigger re-extraction (it is applied in code on every run anyway).
 - Order on every run: extraction → knowledge → reviewer corrections. Every item is visible and removable.
@@ -177,6 +176,23 @@ echo "LLM_BACKEND=claude-code" >> .env
 To use another subscription than the CLI's default login, add `CLAUDE_CONFIG_DIR=~/.claude-other`
 (a profile directory logged in with that account) or `CLAUDE_CLI_TOKEN_FILE=~/path/to/token`.
 
+**Option C – other models (OpenRouter, or local with Ollama).** `LLM_BACKEND=openai` talks to any
+OpenAI-compatible chat API with the same prompts and schemas. Model names are the server's:
+
+```bash
+# local: brew install ollama; ollama pull qwen3-vl:8b-instruct
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve
+LLM_BACKEND=openai EXTRACT_MODEL=qwen3-vl:8b-instruct MAX_WORKERS=1 .venv/bin/python -m pipeline ...
+
+# OpenRouter: the cost of each call is stored with the cached answer
+LLM_BACKEND=openai OPENAI_BASE_URL=https://openrouter.ai/api/v1 OPENAI_API_KEY=sk-or-... \
+  EXTRACT_MODEL=anthropic/claude-sonnet-5.5 .venv/bin/python -m pipeline ...
+```
+
+Ollama's default context window can be smaller than the extraction needs: the prompt with its schema needs about
+10k plus the answer, hence `OLLAMA_CONTEXT_LENGTH`. A local server runs one request at a time, so
+`MAX_WORKERS=1` keeps the measured seconds per page free of queueing.
+
 ### 6. Process documents
 
 ```bash
@@ -223,7 +239,10 @@ Restart the API after pipeline code changes; the UI picks up new data on reload.
 ### 8. Use the app
 
 - **Map**: clusters by location; colour = release state (green released, ochre waiting for review, red rejected),
-  ring = approximate position (estimated from the place name). Hover for name and score; click to open.
+  ring = approximate position (estimated from the place name). At zoom 15+, holes with a position and known
+  depth become 3D columns. Coloured, patterned bands show lithology from shallow at the top to deep at the base; a thin cap
+  shows release state. Layer heights use a 1:1 metre scale across the full depth, with a 0.5 m status cap above. Hover for the name,
+  layer interval, depth and score; click to open.
 - **Search and filters**: full text over names, projects, places and layer descriptions; release state,
   position quality, lithology.
 - **Detail**: two-column profile (stratigraphy, DIN 4023 lithology), layers, tests, record data and the
@@ -258,25 +277,52 @@ Measures extraction quality against records a human has checked.
 
 `snapshot` writes `data/eval/reference.json` (git-ignored, confidential like all of `data/`). It adds to and
 updates the existing reference, so a record approved earlier stays in it even if a later run changes it and
-sends it back to review. Per record it keeps the layers (top, bottom, primary lithology), the position and the
-EPSG code.
+sends it back to review. Per record it keeps the natural key, the layers (top, bottom, primary lithology), the
+position and EPSG code, the final depth, the groundwater levels and the lab values.
 
 `eval` prints, per document and overall:
 
 | Column | Meaning |
 |---|---|
-| `holes` / `miss` / `extra` | reference records, of those not found by ID, records of the same documents not in the reference (often just not reviewed yet) |
-| `bounds` | share of reference layer boundaries with a current boundary within 0.1 m |
+| `holes` / `miss` / `extra` | reference records, of those not found (by ID, else by natural key), records of the same documents not in the reference (often just not reviewed yet) |
+| `bounds` | share of reference layer boundaries with a current boundary within 0.1 m; a missing record counts all of its boundaries as missed |
+| `prec` | share of the model's boundaries that are in the reference (extra boundaries lower it) |
 | `lith` | same primary lithology on layers whose top and bottom both match |
+| `lith m` | share of the reference log length with the same lithology at the same depth (robust to different splits) |
 | `med m` / `max m` | median and maximum position error in metres |
-| `no pos` / `crs≠` | records that lost their position / have a different EPSG code |
+| `no pos` / `crs≠` | records without a position (missing ones included) / with a different EPSG code |
+| `depth` / `gw` / `lab` | final depth within 0.1 m; groundwater levels found; lab values with the same parameter, value and sample depth |
 | `corr` | compared records with reviewer corrections |
 
-Every run keeps the model output before reviewer corrections (layers and position, column `boreholes.extracted`).
+Every run keeps the model output before reviewer corrections (column `boreholes.extracted`).
 `eval` compares that by default, so a record a reviewer fixed still counts the model's mistake. With
 `--corrected` it compares the final values instead; corrected records then match the reference by construction.
-Records stored before this column existed are compared with their final values until the next `rebuild`.
-Typical use: snapshot after a review session, change prompts or code, `rebuild`/`run`, then `eval`.
+Fields a stored record or reference entry does not have yet are not counted until the next `rebuild` or snapshot.
+
+`eval holdout --doc GROUP` (repeatable) marks document groups that are kept out of prompt tuning; the reports
+then show the tuning and holdout documents separately. Tune on the rest, check the combined change once on the
+holdout.
+
+### Prompt experiments
+
+A prompt change is tried on the reference documents before it becomes the next `PROMPT_VERSION`:
+
+```bash
+.venv/bin/python -m pipeline experiment baseline          # the main cache into a fresh DB (free)
+.venv/bin/python -m pipeline experiment init units        # copies the current prompt to data/eval/experiments/units/prompt.md
+# edit that prompt.md
+.venv/bin/python -m pipeline experiment run units         # shows the page count; add --yes to extract
+.venv/bin/python -m pipeline experiment compare           # every arm against the reference, per document
+```
+
+Each arm has its own extraction cache (keyed by the prompt's hash, so an edited prompt never reuses pages) and a
+fresh database without corrections or knowledge, so the scores are the model's alone. Classifications and lab
+sheets come from the main cache. The main cache, database and review work are not touched. Model and effort
+follow `EXTRACT_MODEL` / `EXTRACT_EFFORT`, so the same command compares models (with `LLM_BACKEND=openai`
+also models of other vendors). Each cached page records its duration and token usage.
+
+Without a reference, `experiment compare --against baseline` shows how far an arm agrees with the baseline
+(Opus). That is a hint, not accuracy: agreeing with another model is not being right.
 
 ## Configuration
 
@@ -285,7 +331,8 @@ Environment variables, read from the shell or from `.env`:
 | Variable | Default | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | – | API key for `LLM_BACKEND=api` |
-| `LLM_BACKEND` | `api` | `api` (Anthropic API) or `claude-code` (local `claude -p`) |
+| `LLM_BACKEND` | `api` | `api` (Anthropic API), `claude-code` (local `claude -p`) or `openai` (OpenAI-compatible API) |
+| `OPENAI_BASE_URL` / `OPENAI_API_KEY` | `http://localhost:11434/v1` / – | server and key for `LLM_BACKEND=openai` (e.g. OpenRouter) |
 | `CLAUDE_CLI` | `claude` | path to the Claude Code CLI |
 | `CLAUDE_CONFIG_DIR` | CLI default | profile directory for another subscription (CLI backend) |
 | `CLAUDE_CLI_TOKEN_FILE` | – | token file for another subscription (CLI backend) |

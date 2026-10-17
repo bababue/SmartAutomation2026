@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Detail, DetailUpdate, Layer, SourceRef } from '../types'
-import { SHOW_SOURCE_FILE } from '../dev'
 import { lithStyle, patternId } from '../lithology'
-import { CorrectionList, LayerAdder, LayerEditor, PositionCorrection, RecordEditor } from './Corrections'
-import { KnowledgePanel } from './Knowledge'
+import { CardHead, CorrectionList, LayersEditor, NotesEditor, RecordEditor, TestsEditor, type TestRow } from './Corrections'
 import { Profile } from './Profile'
 import { ReviewBox, type QueueNav } from './ReviewBox'
 
@@ -41,10 +39,9 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
   const [coordsHovered, setCoordsHovered] = useState(false)
-  const [editing, setEditing] = useState<number | null>(null)
-  const [editingRecord, setEditingRecord] = useState(false)
-  const [adding, setAdding] = useState(false)
-  const open = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const [editing, setEditing] = useState<'record' | 'layers' | 'tests' | 'notes' | null>(null)
+  const done = () => setEditing(null)
+  const [sourceOpen, setSourceOpen] = useState(false)
 
   // Findings in the order a reviewer needs them: what blocks the release, other checks, then the model's notes.
   const blocking = new Set(detail.blocking ?? [])
@@ -63,18 +60,11 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
   }, [focus, pages])
   const highlight = focus?.bbox && page && focus.file === page.file && focus.page === page.page ? focus.bbox : null
 
-  // 'report.pdf p. 1, 2' per source file
-  const sourceFiles = useMemo(() => {
-    const byFile = new Map<string, number[]>()
-    bh.sources.forEach((s) => byFile.set(s.file, [...(byFile.get(s.file) ?? []), ...(s.page != null ? [s.page] : [])]))
-    return [...byFile].map(([file, ps]) => (ps.length ? `${file} p. ${[...new Set(ps)].sort((a, b) => a - b).join(', ')}` : file)).join('; ')
-  }, [bh.sources])
-
   const tests = useMemo(() => {
-    const rows: { depth: number; text: string }[] = []
-    bh.spt.forEach((s) => rows.push({ depth: s.depth_m, text: `SPT ${s.refusal ? 'refusal' : `N = ${s.n_value ?? '–'}`}${s.raw ? ` (${s.raw})` : ''}` }))
-    bh.core_runs.forEach((c) => rows.push({ depth: c.top_m, text: `Core ${fmt(c.top_m)}–${fmt(c.bottom_m)} m: TCR ${fmt(c.total_core_recovery_pct, 0)} %, RQD ${fmt(c.rqd_pct, 0)} %` }))
-    bh.lab_results.forEach((l) => rows.push({ depth: l.top_m ?? 0, text: `${l.parameter.replaceAll('_', ' ')}: ${fmt(l.value, 3)}${l.value_raw ? ` (printed ${l.value_raw})` : ''}` }))
+    const rows: TestRow[] = []
+    bh.spt.forEach((s) => rows.push({ test: 'spt', depth: s.depth_m, value: s.n_value, label: 'SPT N', text: `SPT ${s.refusal ? 'refusal' : `N = ${s.n_value ?? '–'}`}${s.raw ? ` (${s.raw})` : ''}` }))
+    bh.core_runs.forEach((c) => rows.push({ test: 'core', depth: c.top_m, value: c.total_core_recovery_pct, rqd: c.rqd_pct, label: 'Core TCR %', text: `Core ${fmt(c.top_m)}–${fmt(c.bottom_m)} m: TCR ${fmt(c.total_core_recovery_pct, 0)} %, RQD ${fmt(c.rqd_pct, 0)} %` }))
+    bh.lab_results.forEach((l) => rows.push({ test: 'lab', depth: l.top_m ?? 0, parameter: l.parameter, value: l.value, label: l.parameter.replaceAll('_', ' '), text: `${l.parameter.replaceAll('_', ' ')}: ${fmt(l.value, 3)}${l.value_raw ? ` (printed ${l.value_raw})` : ''}` }))
     return rows.sort((a, b) => a.depth - b.depth)
   }, [bh])
 
@@ -84,13 +74,12 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
         <div>
           <h2>{bh.borehole_name}</h2>
           <p className="detail-sub">{[bh.project_name, bh.location_name].filter(Boolean).join(', ') || 'No project name on the log'}</p>
-          {SHOW_SOURCE_FILE && sourceFiles && <p className="detail-sub result-file">{sourceFiles}</p>}
         </div>
         <div className="detail-actions">
           {nav && (
             <div className="queue-nav" aria-label="Review queue position">
               <button className="btn btn-icon" onClick={nav.prev ?? undefined} disabled={!nav.prev} aria-label="Previous in queue" title="Previous (←)">‹</button>
-              <span className="muted">{nav.position} of {nav.total} waiting</span>
+              <span className="muted" title={`${nav.position} of ${nav.total} waiting`}>{nav.position} / {nav.total}</span>
               <button className="btn btn-icon" onClick={nav.next ?? undefined} disabled={!nav.next} aria-label="Next in queue" title="Next (→)">›</button>
             </div>
           )}
@@ -102,29 +91,18 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
           <button className="btn btn-icon" onClick={onClose} aria-label="Close details" title="Close (Esc)">✕</button>
         </div>
       </header>
-      <div className="detail-levels">
-        <Level value={bh.confidence} label="Extraction" />
-        <Level value={loc.confidence} label="Position" />
-        <span className="muted">Position {METHOD_TEXT[loc.method ?? ''] ?? 'unknown'}</span>
-      </div>
+      <ReviewBox detail={detail} onChange={onReviewChange} nav={nav}>
+        <li className="chip-pill"><Level value={bh.confidence} label="Extraction" /></li>
+        <li className="chip-pill" title={`Position ${METHOD_TEXT[loc.method ?? ''] ?? 'unknown'}`}><Level value={loc.confidence} label="Position" /></li>
+      </ReviewBox>
 
-      <div className="detail-body">
-        <section className="detail-profile">
+      <div className={`detail-body${sourceOpen ? '' : ' source-closed'}`}>
+        <section className="card detail-profile">
+          <h3 className="card-head">Profile <span className="muted card-unit">m</span></h3>
           {bh.layers.length ? <Profile borehole={bh} hovered={hovered} onHover={setHovered} /> : <p className="muted">No layers extracted.</p>}
         </section>
 
         <section className="detail-data">
-          <ReviewBox detail={detail} onChange={onReviewChange} nav={nav} />
-          {bh.review_status !== 'approved' && bh.review_status !== 'rejected' && (
-            <div className="fix-bar">
-              <span>Wrong or missing values? Correct them first, then approve. Corrections are kept when the pipeline runs again.</span>
-              <span className="fix-bar-actions">
-                <button className="btn btn-small" onClick={() => open('detail-record')}>Position</button>
-                <button className="btn btn-small" onClick={() => { setEditingRecord(true); open('detail-record') }}>Header values</button>
-                <button className="btn btn-small" onClick={() => open('detail-layers')}>Layers</button>
-              </span>
-            </div>
-          )}
           {blocking.size > 0 && (
             <div className="checks checks-blocking">
               <h3>Needs a person</h3>
@@ -143,13 +121,10 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
             </div>
           )}
           <CorrectionList items={detail.corrections ?? []} />
-          <KnowledgePanel boreholeId={bh.borehole_id} onChange={onReviewChange} />
 
-          <h3 id="detail-record" className="section-head">
-            Record
-            {!editingRecord && <button className="btn btn-small" onClick={() => setEditingRecord(true)}>Edit header values</button>}
-          </h3>
-          {editingRecord && <RecordEditor borehole={bh} onChange={onReviewChange} onDone={() => setEditingRecord(false)} />}
+          {editing === 'record' ? <RecordEditor borehole={bh} onChange={onReviewChange} onDone={done} /> : (
+          <div className="card">
+          <CardHead id="detail-record" title="Record" onEdit={editing ? undefined : () => setEditing('record')} />
           <dl className="record">
             <dt>Coordinates as printed</dt>
             <dd onMouseEnter={() => setCoordsHovered(true)} onMouseLeave={() => setCoordsHovered(false)}>
@@ -160,7 +135,6 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
               {loc.lat != null ? `${fmt(loc.lat, 6)}, ${fmt(loc.lon, 6)}` : '–'}
               {loc.crs_epsg ? <span className="muted"> via EPSG:{loc.crs_epsg}</span> : null}
               {loc.crs_candidates.length > 1 && <span className="muted"> (also possible: {loc.crs_candidates.slice(1).join(', ')})</span>}
-              <PositionCorrection boreholeId={bh.borehole_id} hasCoords={!!loc.coords_raw} currentEpsg={loc.crs_epsg} onChange={onReviewChange} />
             </dd>
             <dt>Ground level</dt><dd>{bh.surface_elevation_raw ?? fmt(bh.surface_elevation_m)}{bh.elevation_datum ? ` ${bh.elevation_datum}` : ''}</dd>
             <dt>Final depth</dt><dd>{fmt(bh.depth_m)} m{bh.inclination_deg != null && bh.inclination_deg !== 90 && Math.abs(bh.inclination_deg) !== 90 ? `, inclined ${bh.inclination_deg}°` : ''}</dd>
@@ -170,23 +144,21 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
             <dt>Contractor</dt><dd>{bh.contractor ?? '–'}</dd>
             {bh.groundwater.length > 0 && (<><dt>Groundwater</dt><dd>{bh.groundwater.map((g) => g.dry ? 'dry' : `${fmt(g.depth_m)} m ${g.reference === 'casing' ? 'below casing ' : ''}(${g.kind})`).join('; ')}</dd></>)}
           </dl>
+          </div>
+          )}
 
-          <h3 id="detail-layers" className="section-head">
-            Layers
-            {!adding && <button className="btn btn-small" onClick={() => setAdding(true)} disabled={editing != null}>Add layer</button>}
-          </h3>
+          {editing === 'layers' ? <LayersEditor borehole={bh} onChange={onReviewChange} onDone={done} /> : (
+          <div className="card card-flush">
+          <CardHead id="detail-layers" title="Layers" onEdit={editing ? undefined : () => setEditing('layers')} />
           <div className="table-scroll">
           <table className="layers">
             <thead>
-              <tr><th>From</th><th>To</th><th>Lithology</th><th>Description</th><th>Stratigraphy</th><th><span className="sr-only">Edit</span></th></tr>
+              <tr><th>Depth</th><th>Lithology</th><th>Description</th><th>Stratigraphy</th></tr>
             </thead>
             <tbody>
-              {bh.layers.map((l: Layer, i) => editing === i ? (
-                <LayerEditor key={`edit-${i}`} boreholeId={bh.borehole_id} layer={l} onChange={onReviewChange} onDone={() => setEditing(null)} />
-              ) : (
+              {bh.layers.map((l: Layer, i) => (
                 <tr key={i} className={hovered === i ? 'row-active' : undefined} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}>
-                  <td className="num">{fmt(l.top_m)}</td>
-                  <td className="num">{fmt(l.bottom_m)}</td>
+                  <td className="num depth">{fmt(l.top_m)}–{fmt(l.bottom_m)}</td>
                   <td>
                     <svg width={14} height={14} className="swatch" aria-hidden="true"><rect width={14} height={14} fill={`url(#${patternId(l.primary)})`} /></svg>
                     {lithStyle(l.primary).label}
@@ -196,34 +168,41 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
                     {l.description_en && <span className="original">{l.description_original}</span>}
                   </td>
                   <td>{[l.stratigraphic_code, l.stratigraphic_name, l.geologic_age].filter(Boolean).join(', ') || '–'}</td>
-                  <td>
-                    <button className="btn btn-small btn-edit" onClick={() => setEditing(i)} disabled={editing != null}
-                      aria-label={`Correct layer ${fmt(l.top_m)}–${fmt(l.bottom_m)} m`} title="Correct this layer">Edit</button>
-                  </td>
                 </tr>
               ))}
-              {adding && (
-                <LayerAdder boreholeId={bh.borehole_id} suggestTop={bh.layers.length ? Math.max(...bh.layers.map((l) => l.bottom_m)) : 0}
-                  onChange={onReviewChange} onDone={() => setAdding(false)} />
-              )}
             </tbody>
           </table>
           </div>
-          {!bh.layers.length && !adding && <p className="muted">No layers extracted. Use “Add layer” to enter them from the source page.</p>}
-
-          {tests.length > 0 && (
-            <>
-              <h3>Tests</h3>
-              <ul className="tests">{tests.map((t, i) => <li key={i}><span className="num">{fmt(t.depth)} m</span> {t.text}</li>)}</ul>
-            </>
+          {!bh.layers.length && <p className="muted card-empty">No layers extracted. Use “Edit” to enter them from the source page.</p>}
+          </div>
           )}
-          {bh.notes && (<><h3>Notes</h3><p className="notes">{bh.notes}</p></>)}
+
+          {tests.length > 0 && (editing === 'tests' ? <TestsEditor boreholeId={bh.borehole_id} rows={tests} onChange={onReviewChange} onDone={done} /> : (
+            <div className="card">
+              <CardHead title="Tests" onEdit={editing ? undefined : () => setEditing('tests')} />
+              <ul className="tests">{tests.map((t, i) => <li key={i}><span className="num">{fmt(t.depth)} m</span> {t.text}</li>)}</ul>
+            </div>
+          ))}
+          {editing === 'notes' ? <NotesEditor borehole={bh} onChange={onReviewChange} onDone={done} /> : (
+            <div className="card">
+              <CardHead title="Notes" onEdit={editing ? undefined : () => setEditing('notes')} />
+              <p className="notes">{bh.notes ?? <span className="muted">No notes.</span>}</p>
+            </div>
+          )}
         </section>
 
-        <section className="detail-source">
-          <h3>Source</h3>
-          {pages.length ? (
-            <>
+        {!sourceOpen ? (
+          <section className="detail-source detail-source-closed">
+            <button className="btn source-toggle" onClick={() => setSourceOpen(true)} aria-expanded={false} title="Show the source page">
+              ‹ <span>Source</span>
+            </button>
+          </section>
+        ) : (
+        <section className="card detail-source">
+          <div className="card-head">
+            <button className="btn btn-small btn-icon" onClick={() => setSourceOpen(false)} aria-expanded title="Hide the source page">›</button>
+            <h3 className="source-title">Source</h3>
+            {pages.length > 0 && (
               <div className="page-tabs" role="tablist">
                 {pages.map((p, i) => (
                   <button key={`${p.file}-${p.page}`} role="tab" aria-selected={i === pageIndex} className={`page-tab${i === pageIndex ? ' page-tab-on' : ''}`} onClick={() => setPageIndex(i)}>
@@ -231,7 +210,10 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
                   </button>
                 ))}
               </div>
-              <p className="muted source-file">{page.file}</p>
+            )}
+          </div>
+          {pages.length ? (
+            <>
               <a href={page.url} target="_blank" rel="noreferrer" className="source-link">
                 <img src={page.url} alt={`Original page ${page.page} of ${page.file}`} />
                 {highlight && (
@@ -245,12 +227,17 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
                   />
                 )}
               </a>
-              <p className="muted source-hint">Hover a layer or the coordinates to outline where they were read.</p>
+              <p className="muted source-hint">
+                {hovered != null && bh.layers[hovered]
+                  ? <>Selected: <strong>{lithStyle(bh.layers[hovered].primary).label}</strong> · {fmt(bh.layers[hovered].top_m)}–{fmt(bh.layers[hovered].bottom_m)} m{!highlight && ' · not located on this page'}</>
+                  : 'Hover a layer or the coordinates to outline where they were read.'}
+              </p>
             </>
           ) : (
             <p className="muted">No source page stored for this record.</p>
           )}
         </section>
+        )}
       </div>
     </aside>
   )

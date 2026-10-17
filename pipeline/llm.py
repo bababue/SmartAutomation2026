@@ -4,8 +4,9 @@
 - Extraction: JSON validated locally with Pydantic; the schema is too large for strict structured
   outputs (max. 16 nullable fields per request).
 - Server-side refusal fallback enabled (`fallbacks: "default"`).
+- Other models: any OpenAI-compatible chat API (OpenRouter, a local Ollama server), same prompts and schemas.
 - Responses are cached on disk by input hash, so re-runs cost nothing and a crash mid-run
-  loses no work. API calls also store their token usage there, for measured cost per page.
+  loses no work. Each entry also stores the call's duration and, for API calls, its token usage.
 """
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ import json
 import os
 import subprocess
 import threading
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import TypeVar
 
@@ -131,7 +135,7 @@ def _image_block(path: Path) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
 
 
-def _cache_path(stage: str, page: PageImage) -> Path:
+def cache_path(stage: str, page: PageImage) -> Path:
     return config.CACHE_DIR / stage / page.doc_id / f"{page.page:04d}.json"
 
 
@@ -194,33 +198,41 @@ def _call_structured(model: str, effort: str, system: str, content: list[dict], 
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
     )
-    _record_usage(response)
+    _anthropic_usage(response)
     _check_stop(response)
     if response.parsed_output is None:
         raise RuntimeError("no structured output")
     return response.parsed_output
 
 
-def _record_usage(response) -> None:
-    """Add the response's tokens to the usage of the current page (repair rounds add up). Keyed by the
+def _record_usage(model: str, tokens: dict[str, float]) -> None:
+    """Add a response's tokens to the usage of the current page (repair rounds add up). Keyed by the
     model that answered, which differs from the requested one after a refusal fallback."""
     acc = getattr(_usage, "acc", None)
     if acc is None:
         return
-    model = acc.setdefault(response.model, dict.fromkeys(USAGE_FIELDS, 0))
-    for field in USAGE_FIELDS:
-        model[field] += getattr(response.usage, field, None) or 0
+    totals = acc.setdefault(model, {})
+    for field, value in tokens.items():
+        totals[field] = totals.get(field, 0) + value
 
 
-def cost_usd(usage: dict[str, dict[str, int]]) -> float | None:
-    """Price of one page's usage; None if a model has no known price."""
+def _anthropic_usage(response) -> None:
+    _record_usage(response.model, {f: getattr(response.usage, f, None) or 0 for f in USAGE_FIELDS})
+
+
+def cost_usd(usage: dict[str, dict[str, float]]) -> float | None:
+    """Price of one page's usage: as billed where the API reports it (OpenRouter), else from PRICES. None if
+    a model has neither (e.g. a local model)."""
     total = 0.0
     for model, tokens in usage.items():
+        if "cost_usd" in tokens:
+            total += tokens["cost_usd"]
+            continue
         if model not in PRICES:
             return None
         inp, out = PRICES[model]
-        total += (tokens["input_tokens"] * inp + tokens["cache_creation_input_tokens"] * inp * 1.25
-                  + tokens["cache_read_input_tokens"] * inp * 0.1 + tokens["output_tokens"] * out) / 1e6
+        total += (tokens.get("input_tokens", 0) * inp + tokens.get("cache_creation_input_tokens", 0) * inp * 1.25
+                  + tokens.get("cache_read_input_tokens", 0) * inp * 0.1 + tokens.get("output_tokens", 0) * out) / 1e6
     return total
 
 
@@ -243,19 +255,22 @@ def _json_text(response) -> str:
     return _strip_fences("".join(b.text for b in response.content if b.type == "text"))
 
 
+def _json_instruction(out: type[BaseModel]) -> str:
+    schema = json.dumps(out.model_json_schema(), ensure_ascii=False)
+    return ("Answer with one JSON object only, no prose and no code fences. It must validate against this JSON "
+            f"Schema (all listed properties are required; use null where a value is not printed):\n{schema}")
+
+
+def _repair_prompt(exc: ValidationError) -> str:
+    return f"The JSON did not validate:\n{str(exc)[:3000]}\nReturn the corrected JSON object only."
+
+
 def _call_json(model: str, effort: str, system: str, content: list[dict], out: type[T], max_tokens: int) -> T:
     """JSON output validated locally. Used for the large extraction schema, which exceeds the
     structured-output complexity limits. One repair round with the validation error."""
-    schema = json.dumps(out.model_json_schema(), ensure_ascii=False)
     system_blocks = [
         {"type": "text", "text": system},
-        {
-            "type": "text",
-            "text": "Answer with one JSON object only, no prose and no code fences. "
-            "It must validate against this JSON Schema (all listed properties are required; use null "
-            f"where a value is not printed):\n{schema}",
-            "cache_control": {"type": "ephemeral"},
-        },
+        {"type": "text", "text": _json_instruction(out), "cache_control": {"type": "ephemeral"}},
     ]
     messages: list[dict] = [{"role": "user", "content": content}]
     for attempt in range(2):
@@ -269,7 +284,7 @@ def _call_json(model: str, effort: str, system: str, content: list[dict], out: t
             fallbacks="default",
         ) as stream:
             response = stream.get_final_message()
-        _record_usage(response)
+        _anthropic_usage(response)
         _check_stop(response)
         try:
             return out.model_validate_json(_json_text(response))
@@ -278,8 +293,63 @@ def _call_json(model: str, effort: str, system: str, content: list[dict], out: t
                 raise
             messages += [
                 {"role": "assistant", "content": response.content},
-                {"role": "user", "content": f"The JSON did not validate:\n{str(exc)[:3000]}\nReturn the corrected JSON object only."},
+                {"role": "user", "content": _repair_prompt(exc)},
             ]
+    raise AssertionError("unreachable")
+
+
+def _call_openai(model: str, system: str, image: Path, text: str, out: type[T], max_tokens: int) -> T:
+    """OpenAI-compatible chat completions. The schema is in the prompt for its field descriptions and in
+    `response_format`, which local servers enforce while decoding. One repair round, as in _call_json."""
+    data = base64.standard_b64encode(image.read_bytes()).decode()
+    messages: list[dict] = [
+        {"role": "system", "content": f"{system}\n\n{_json_instruction(out)}"},
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}"}},
+            {"type": "text", "text": text},
+        ]},
+    ]
+    response_format = {"type": "json_schema", "json_schema": {"name": out.__name__, "schema": out.model_json_schema()}}
+    for attempt in range(2):
+        response = _post_chat({"model": model, "messages": messages, "max_tokens": max_tokens,
+                               "response_format": response_format})
+        usage = response.get("usage") or {}
+        tokens = {"input_tokens": usage.get("prompt_tokens", 0), "output_tokens": usage.get("completion_tokens", 0)}
+        if usage.get("cost") is not None:
+            tokens["cost_usd"] = usage["cost"]
+        _record_usage(response.get("model") or model, tokens)
+        choice = response["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise RuntimeError("output truncated (max_tokens)")
+        answer = _strip_fences(choice["message"].get("content") or "")
+        try:
+            return out.model_validate_json(answer)
+        except ValidationError as exc:
+            if attempt:
+                raise
+            messages += [{"role": "assistant", "content": answer}, {"role": "user", "content": _repair_prompt(exc)}]
+    raise AssertionError("unreachable")
+
+
+def _post_chat(body: dict) -> dict:
+    headers = {"Content-Type": "application/json"}
+    if key := os.getenv("OPENAI_API_KEY"):
+        headers["Authorization"] = f"Bearer {key}"
+    request = urllib.request.Request(f"{config.OPENAI_BASE_URL.rstrip('/')}/chat/completions",
+                                     data=json.dumps(body).encode(), headers=headers)
+    for attempt in range(4):
+        try:
+            # A local model on a laptop needs minutes for a dense page.
+            with urllib.request.urlopen(request, timeout=1800) as resp:
+                result = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (429, 500, 502, 503, 504) or attempt == 3:
+                raise RuntimeError(f"chat API HTTP {exc.code}: {exc.read()[:500].decode(errors='replace')}") from None
+            time.sleep(5 * 2**attempt)
+            continue
+        if "error" in result:  # OpenRouter reports upstream failures in a 200 response
+            raise RuntimeError(f"chat API error: {str(result['error'])[:500]}")
+        return result
     raise AssertionError("unreachable")
 
 
@@ -345,19 +415,20 @@ def _strip_fences(text: str) -> str:
 
 
 def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
-    path = _cache_path(stage, page)
+    path = cache_path(stage, page)
     if path.exists():
         cached = json.loads(path.read_text())
         if cached.get("key") == key:
             return out.model_validate(cached["result"])
     _usage.acc = {}
+    start = time.monotonic()
     try:
         result = produce()
         usage = _usage.acc
     finally:
         _usage.acc = None
-    entry = {"key": key, "result": result.model_dump(mode="json")}
-    if usage:  # API backend only; the CLI backend reports no token counts
+    entry = {"key": key, "result": result.model_dump(mode="json"), "seconds": round(time.monotonic() - start, 1)}
+    if usage:  # the CLI backend reports no token counts
         entry["usage"] = usage
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(entry, ensure_ascii=False))
@@ -366,7 +437,7 @@ def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
 
 def _from_cache(stage: str, page: PageImage, key: str, out: type[T]) -> T | None:
     """Cached result only if it was produced from the same input and settings."""
-    path = _cache_path(stage, page)
+    path = cache_path(stage, page)
     if not path.exists():
         return None
     cached = json.loads(path.read_text())
@@ -379,6 +450,19 @@ def _lab_key(page: PageImage) -> str:
                       page.text[:8000])
 
 
+def _produce(model: str, effort: str, system: str, image: Path, hint: str, out: type[T], max_tokens: int,
+             strict: bool = False):
+    """The call for the configured backend. strict: a small schema, strict structured output on the
+    Anthropic API."""
+    if config.LLM_BACKEND == "claude-code":
+        return lambda: _call_claude_code(model, system, image, hint, out)
+    if config.LLM_BACKEND == "openai":
+        return lambda: _call_openai(model, system, image, hint, out, max_tokens)
+    content = [_image_block(image), {"type": "text", "text": hint}]
+    call = _call_structured if strict else _call_json
+    return lambda: call(model, effort, system, content, out, max_tokens)
+
+
 def cached_lab_results(page: PageImage) -> PageLabResults | None:
     return _from_cache("lab", page, _lab_key(page), PageLabResults)
 
@@ -386,12 +470,7 @@ def cached_lab_results(page: PageImage) -> PageLabResults | None:
 def extract_lab_results(page: PageImage) -> PageLabResults:
     image = config.PAGES_DIR / page.image
     hint = f"Text layer (may be empty or scrambled):\n{page.text[:8000]}"
-    if config.LLM_BACKEND == "claude-code":
-        produce = lambda: _call_claude_code(config.EXTRACT_MODEL, LAB_SYSTEM, image, hint, PageLabResults)
-    else:
-        content = [_image_block(image), {"type": "text", "text": hint}]
-        produce = lambda: _call_json(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, LAB_SYSTEM, content,
-                                     PageLabResults, 32000)
+    produce = _produce(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, LAB_SYSTEM, image, hint, PageLabResults, 32000)
     return _cached("lab", page, _lab_key(page), PageLabResults, produce)
 
 
@@ -406,12 +485,8 @@ def cached_extraction(page: PageImage, kind: str, context: str = "") -> PageExtr
 def classify_page(page: PageImage) -> PageClassification:
     thumb = config.PAGES_DIR / page.thumb
     hint = f"Text layer (may be empty or scrambled):\n{page.text[:1500]}"
-    if config.LLM_BACKEND == "claude-code":
-        produce = lambda: _call_claude_code(config.CLASSIFY_MODEL, CLASSIFY_SYSTEM, thumb, hint, PageClassification)
-    else:
-        content = [_image_block(thumb), {"type": "text", "text": hint}]
-        produce = lambda: _call_structured(config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT, CLASSIFY_SYSTEM, content,
-                                           PageClassification, 2000)
+    produce = _produce(config.CLASSIFY_MODEL, config.CLASSIFY_EFFORT, CLASSIFY_SYSTEM, thumb, hint,
+                       PageClassification, 2000, strict=True)
     return _cached("classify", page, _classify_key(page), PageClassification, produce)
 
 
@@ -425,10 +500,5 @@ def extract_page(page: PageImage, kind: str, context: str = "", knowledge: str =
         hint += f"\n\nPrevious sheet of this document (context only):\n{context}"
     if knowledge:
         hint += f"\n\n{knowledge}"
-    if config.LLM_BACKEND == "claude-code":
-        produce = lambda: _call_claude_code(config.EXTRACT_MODEL, EXTRACT_SYSTEM, image, hint, PageExtraction)
-    else:
-        content = [_image_block(image), {"type": "text", "text": hint}]
-        produce = lambda: _call_json(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, EXTRACT_SYSTEM, content,
-                                     PageExtraction, 32000)
+    produce = _produce(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, EXTRACT_SYSTEM, image, hint, PageExtraction, 32000)
     return _cached("extract", page, _extract_key(page, kind, context), PageExtraction, produce)

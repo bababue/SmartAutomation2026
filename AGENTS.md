@@ -27,10 +27,6 @@ first, and quality beats quantity. Uncertain records go to a person.
 The challenge dataset is **confidential** real project data. Only the event participants
 may use it, only for this challenge, and it is deleted after the event.
 
-- Claude and Codex are approved to process it, with training on the data switched off.
-  **No other service is approved**: no geocoders, other LLM APIs, OCR services, paste
-  sites or online converters. A new external call that would carry document content or
-  coordinates needs Marvin's OK first.
 - `temp/` (dataset, notes) and `data/` (pages, cache, DB) are git-ignored and stay that
   way.
 - **Nothing from the dataset goes into the repo.** That covers names, project names,

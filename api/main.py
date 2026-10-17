@@ -24,8 +24,8 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, export, ingest, knowledge, scoring, store
-from schema.borehole import DIN4023_LABEL_DE, Borehole, Lithology, ReviewStatus
+from pipeline import config, corrections, export, ingest, scoring, store
+from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
 app = FastAPI(title="Borehole Atlas API")
 app.add_middleware(GZipMiddleware, minimum_size=2000)  # map points and lists compress about 6:1
@@ -71,7 +71,7 @@ def _feature(r: sqlite3.Row) -> dict:
     return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]}, "properties": props}
 
 
-MAP_COLUMNS = "id, name, location_name, lat, lon, review_status, score, loc_method"
+MAP_COLUMNS = "id, name, location_name, lat, lon, depth, review_status, score, loc_method"
 
 
 def _bbox_clause(bbox: str) -> tuple[str, list]:
@@ -154,20 +154,25 @@ def list_boreholes(
     min_depth: float | None = None,
     min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
     status: Literal["all", "released", "pending", "rejected"] = "all",
-    fields: Literal["list", "map"] = Query("list", description="'map': only what map markers need, all matches"),
+    fields: Literal["list", "map", "layers"] = Query("list", description="'map': slim points; 'layers': depth strips for visible columns"),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
 ):
-    """Filtered boreholes as GeoJSON. 'map' returns slim points for every match; 'list' returns a page of
-    summaries with the total and lithology counts of all matches."""
+    """Filtered boreholes. 'map' returns slim GeoJSON points; 'layers' returns strips in a bbox;
+    'list' returns a GeoJSON page with the total and lithology counts of all matches."""
+    if fields == "layers" and not bbox:
+        raise HTTPException(422, "bbox is required for layer strips")
     where, params = _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, country, min_depth,
                              min_position, status)
     sql_where = " AND ".join(where)
+    if fields == "layers":
+        rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {sql_where}", params).fetchall()
+        return {"items": [{"id": r["id"], "strip": json.loads(r["strip"]) if r["strip"] else None} for r in rows]}
     if fields == "map":
         rows = con.execute(f"SELECT {MAP_COLUMNS} FROM boreholes WHERE {sql_where}", params).fetchall()
         return {"type": "FeatureCollection", "total": len(rows), "features": [
             {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]},
-             "properties": {"id": r["id"], "name": r["name"], "location_name": r["location_name"],
+             "properties": {"id": r["id"], "name": r["name"], "location_name": r["location_name"], "depth": r["depth"],
                             "review_status": r["review_status"], "score": r["score"], "loc_method": r["loc_method"]}}
             for r in rows]}
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {sql_where}", params).fetchone()[0]
@@ -349,7 +354,7 @@ class FieldFix(BaseModel):
         elif kind is date_type:
             self.value = date_type.fromisoformat(str(self.value)).isoformat()
         else:
-            self.value = str(self.value).strip()[:300]
+            self.value = str(self.value).strip()[:4000 if self.field == "notes" else 300]
         return self
 
 
@@ -364,12 +369,33 @@ class GroundwaterFix(BaseModel):
         return self
 
 
+class ResultFix(BaseModel):
+    test: Literal["spt", "core", "lab"]
+    orig_depth: float
+    parameter: LabParameter | None = None
+    delete: bool = False
+    value: float | None = None
+    rqd: float | None = Field(None, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if (self.test == "lab") != (self.parameter is not None):
+            raise ValueError("a parameter is given for lab results only, and always")
+        if not self.delete and self.value is None:
+            raise ValueError("give a value or delete the result")
+        if not self.delete and self.test != "lab" and not (0 <= self.value <= (100 if self.test == "core" else 1000)):
+            raise ValueError("value out of range")
+        if not self.delete and self.test == "spt" and self.value != int(self.value):
+            raise ValueError("an SPT N value is a whole number")
+        return self
+
+
 FIXES = {"crs": CrsFix, "position": PositionFix, "layer": LayerFix, "layer_add": LayerAddFix, "field": FieldFix,
-         "groundwater": GroundwaterFix}
+         "groundwater": GroundwaterFix, "test": ResultFix}
 
 
 class Correction(BaseModel):
-    kind: Literal["crs", "position", "layer", "layer_add", "field", "groundwater"]
+    kind: Literal["crs", "position", "layer", "layer_add", "field", "groundwater", "test"]
     scope: Literal["borehole", "document"] = "borehole"
     payload: dict
     reviewer: str = Field(min_length=1, max_length=80)
@@ -486,114 +512,6 @@ def upload_status(job_id: str):
     return job
 
 
-# --- knowledge -------------------------------------------------------------------------------------
-
-_rebuild_lock = threading.Lock()
-REBUILD = {"running": False, "documents": 0, "error": None}
-
-
-def _rebuild_in_background(doc_ids: set[str]) -> int:
-    """Re-assemble the affected documents from the cache so new knowledge shows at once (no API calls)."""
-    docs = [d for d in ingest.discover() if d.doc_id in doc_ids]
-
-    def work():
-        from pipeline.__main__ import rebuild
-        with _rebuild_lock:
-            REBUILD.update(running=True, documents=len(docs), error=None)
-            try:
-                rebuild(docs)
-            except Exception as exc:  # reported via /api/knowledge/status
-                REBUILD["error"] = f"{type(exc).__name__}: {exc}"
-            finally:
-                REBUILD["running"] = False
-
-    if docs:
-        threading.Thread(target=work, daemon=True).start()
-    return len(docs)
-
-
-def _affected_docs(con: sqlite3.Connection, item: dict) -> set[str]:
-    rows = con.execute("SELECT doc_id, country, project FROM boreholes").fetchall()
-    st, sv = item["scope_type"], item["scope_value"]
-    if st == "global":
-        return {r["doc_id"] for r in rows}
-    if st == "document":
-        return {r["doc_id"] for r in rows if r["doc_id"].split("__")[0] == sv}
-    if st == "region":
-        return {r["doc_id"] for r in rows if (r["country"] or "").upper() == sv}
-    return {r["doc_id"] for r in rows if knowledge.norm_project(r["project"]) == sv}
-
-
-class KnowledgeIn(BaseModel):
-    borehole_id: str | None = Field(None, description="Record the scope is taken from (not needed for global)")
-    scope_type: Literal["document", "project", "region", "global"]
-    kind: Literal["crs", "term", "note"]
-    payload: dict
-    source: Literal["review", "external"] = "review"
-    note: str | None = Field(None, max_length=2000)
-    reviewer: str = Field(min_length=1, max_length=80)
-
-    @model_validator(mode="after")
-    def _check(self):
-        p = self.payload
-        if self.kind == "crs":
-            try:
-                CRS.from_epsg(int(p.get("epsg")))
-            except (CRSError, TypeError, ValueError):
-                raise ValueError("unknown EPSG code")
-            self.payload = {"epsg": int(p["epsg"])}
-        elif self.kind == "term":
-            term = str(p.get("term") or "").strip()
-            if not 2 <= len(term) <= 80:
-                raise ValueError("give a term of 2 to 80 characters")
-            self.payload = {"term": term, "primary": Lithology(p.get("primary")).value}
-        else:
-            text = str(p.get("text") or "").strip()
-            if not text:
-                raise ValueError("write the note")
-            self.payload = {"text": text[:2000]}
-        if self.scope_type != "global" and not self.borehole_id:
-            raise ValueError("a scope other than global needs a record")
-        return self
-
-
-@app.get("/api/knowledge")
-def list_knowledge(con: DB, borehole_id: str | None = None):
-    """Everything known (or what applies to one record), with the record's scope values for new items."""
-    items = store.active_knowledge(con)
-    if borehole_id is None:
-        return {"items": items, "scopes": None, "rebuild": REBUILD}
-    bh = store.load_borehole(con, borehole_id)
-    if bh is None:
-        raise HTTPException(404, "borehole not found")
-    return {"items": knowledge.applicable(items, bh), "scopes": knowledge.scope_keys(bh), "rebuild": REBUILD}
-
-
-@app.post("/api/knowledge")
-def add_knowledge(body: KnowledgeIn, con: DB):
-    scope_value = None
-    if body.scope_type != "global":
-        bh = store.load_borehole(con, body.borehole_id)
-        if bh is None:
-            raise HTTPException(404, "borehole not found")
-        scope_value = knowledge.scope_keys(bh)[body.scope_type]
-        if scope_value is None:
-            raise HTTPException(422, f"this record has no {body.scope_type} to attach the knowledge to")
-    with con:
-        item = store.add_knowledge(con, body.scope_type, scope_value, body.kind, body.payload, body.source, body.note,
-                                   body.reviewer.strip())
-    return {"item": item, "rebuilding": _rebuild_in_background(_affected_docs(con, item))}
-
-
-@app.delete("/api/knowledge/{item_id}")
-def remove_knowledge(item_id: int, con: DB):
-    item = store.knowledge_item(con, item_id)
-    with con:
-        if not item or not store.deactivate_knowledge(con, item_id):
-            raise HTTPException(404, "knowledge item not found")
-    return {"rebuilding": _rebuild_in_background(_affected_docs(con, item))}
-
-
 @app.get("/api/pages/{doc_id}/{page}")
 def page_image(doc_id: str, page: int, con: DB):
     row = con.execute("SELECT image FROM pages WHERE doc_id = ? AND page = ?", (doc_id, page)).fetchone()
@@ -677,7 +595,7 @@ def _csv_record(w, row) -> None:
     """The rows of one record (one per layer)."""
     bh = Borehole.model_validate_json(row["data"])
     loc = bh.location
-    original_crs = f"EPSG:{loc.crs_epsg}" if loc.crs_epsg else loc.crs_raw
+    original_crs = f"EPSG:{loc.crs_epsg}" if loc.crs_epsg else loc.crs_proj or loc.crs_raw
     source_file = row["source_file"]
     pages = {s.page for s in bh.sources if s.page is not None and (source_file is None or s.file == source_file)}
     source_pages = ";".join(str(p) for p in sorted(pages)) or None

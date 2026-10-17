@@ -90,9 +90,12 @@ export default function App() {
   }, [data, filters.lithology])
 
   const focus = useMemo(() => {
-    const loc = detail?.borehole.location
+    const borehole = detail?.borehole
+    const loc = borehole?.location
     if (!loc || loc.lat == null || loc.lon == null) return null
-    return { lat: loc.lat, lon: loc.lon, accuracy_m: loc.accuracy_m, approximate: loc.method === 'geocoded_place' }
+    const depth = Math.max(borehole.depth_m ?? 0, ...borehole.layers.map((layer) => layer.bottom_m))
+    return { lat: loc.lat, lon: loc.lon, accuracy_m: loc.accuracy_m,
+      approximate: loc.method === 'geocoded_place', hasDepth: depth > 0 }
   }, [detail])
 
   const toggleLith = (key: string) =>
@@ -309,6 +312,7 @@ export default function App() {
           <span><i className="dot dot-medium" /> waiting for review</span>
           <span><i className="dot dot-low" /> rejected</span>
           <span><i className="dot dot-ring" /> approximate position</span>
+          <span>3D columns: layer heights at 1:1 scale; patterns show lithology, top cap shows release state</span>
         </div>
         {sectionFeatures.length > 0 && (
           <SectionView

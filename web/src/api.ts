@@ -1,4 +1,4 @@
-import type { CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, KnowledgeItem, KnowledgeList, QueueItem, ReviewStatus, Stats, UploadStatus } from './types'
+import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, Stats, UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -37,6 +37,11 @@ export function fetchMapPoints(f: Filters, signal?: AbortSignal): Promise<Featur
   return request(`/api/boreholes?${params}`, { signal })
 }
 
+export function fetchLayerStrips(bbox: string, signal?: AbortSignal): Promise<{ items: { id: string; strip: BoreholeSummary['strip'] }[] }> {
+  const params = new URLSearchParams({ fields: 'layers', bbox })
+  return request(`/api/boreholes?${params}`, { signal })
+}
+
 const enc = (id: string) => encodeURIComponent(id)
 
 export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>(`/api/boreholes/${enc(id)}/detail`, { signal })
@@ -48,20 +53,6 @@ export async function fetchQueue(signal?: AbortSignal, limit = 200): Promise<{ i
   return { items, total: Number(res.headers.get('X-Total-Count') ?? items.length) }
 }
 export const fetchCrsGroups = (signal?: AbortSignal) => request<CrsGroup[]>('/api/review-queue/crs-groups', { signal })
-
-export const fetchKnowledge = (boreholeId?: string) =>
-  request<KnowledgeList>(`/api/knowledge${boreholeId ? `?borehole_id=${enc(boreholeId)}` : ''}`)
-
-export function postKnowledge(body: {
-  borehole_id: string; scope_type: KnowledgeItem['scope_type']; kind: KnowledgeItem['kind']
-  payload: Record<string, unknown>; source: 'review' | 'external'; note: string | null; reviewer: string
-}) {
-  return request<{ item: KnowledgeItem; rebuilding: number }>('/api/knowledge', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  })
-}
-
-export const deleteKnowledge = (id: number) => request<{ rebuilding: number }>(`/api/knowledge/${id}`, { method: 'DELETE' })
 
 export function postCorrection(id: string, kind: CorrectionKind, payload: Record<string, unknown>, reviewer: string,
   scope: 'borehole' | 'document' = 'borehole') {

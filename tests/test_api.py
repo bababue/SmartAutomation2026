@@ -52,6 +52,13 @@ def test_like_wildcards_are_literal(client):
     assert ids(client, "XYZ_1") == []
 
 
+def test_map_points_include_depth_for_3d_markers(client):
+    features = client.get("/api/boreholes", params={"fields": "map"}).json()["features"]
+    assert {feature["properties"]["id"]: feature["properties"]["depth"] for feature in features} == {
+        "XYZ01:BH1": 4.0, "QRS02:BH7": 4.0,
+    }
+
+
 def test_csv_lists_source_file_and_pages(client):
     rows = list(csv.reader(io.StringIO(client.get("/api/export.csv").text)))
     header = rows[0]
