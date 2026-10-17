@@ -23,7 +23,7 @@ from pyproj import CRS
 from pyproj.exceptions import CRSError
 
 from pipeline import config, corrections, export, ingest, knowledge, scoring, store
-from schema.borehole import DIN4023_LABEL_DE, Borehole, Lithology, ReviewStatus
+from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
 app = FastAPI(title="Borehole Atlas API")
 app.add_middleware(GZipMiddleware, minimum_size=2000)  # map points and lists compress about 6:1
@@ -352,7 +352,7 @@ class FieldFix(BaseModel):
         elif kind is date_type:
             self.value = date_type.fromisoformat(str(self.value)).isoformat()
         else:
-            self.value = str(self.value).strip()[:300]
+            self.value = str(self.value).strip()[:4000 if self.field == "notes" else 300]
         return self
 
 
@@ -367,12 +367,33 @@ class GroundwaterFix(BaseModel):
         return self
 
 
+class ResultFix(BaseModel):
+    test: Literal["spt", "core", "lab"]
+    orig_depth: float
+    parameter: LabParameter | None = None
+    delete: bool = False
+    value: float | None = None
+    rqd: float | None = Field(None, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if (self.test == "lab") != (self.parameter is not None):
+            raise ValueError("a parameter is given for lab results only, and always")
+        if not self.delete and self.value is None:
+            raise ValueError("give a value or delete the result")
+        if not self.delete and self.test != "lab" and not (0 <= self.value <= (100 if self.test == "core" else 1000)):
+            raise ValueError("value out of range")
+        if not self.delete and self.test == "spt" and self.value != int(self.value):
+            raise ValueError("an SPT N value is a whole number")
+        return self
+
+
 FIXES = {"crs": CrsFix, "position": PositionFix, "layer": LayerFix, "layer_add": LayerAddFix, "field": FieldFix,
-         "groundwater": GroundwaterFix}
+         "groundwater": GroundwaterFix, "test": ResultFix}
 
 
 class Correction(BaseModel):
-    kind: Literal["crs", "position", "layer", "layer_add", "field", "groundwater"]
+    kind: Literal["crs", "position", "layer", "layer_add", "field", "groundwater", "test"]
     scope: Literal["borehole", "document"] = "borehole"
     payload: dict
     reviewer: str = Field(min_length=1, max_length=80)

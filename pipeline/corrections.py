@@ -10,6 +10,8 @@ Kinds (payloads):
 - layer_add: {"top": .., "bottom": .., "primary": .., "description_original": ..} – a layer the extraction missed
 - field:    {"field": "surface_elevation_m", "value": 35.7}   – a header value (see FIELDS)
 - groundwater: {"depth_m": 4.5} or {"dry": true}              – a groundwater observation
+- test:     {"test": "spt"|"core"|"lab", "orig_depth": .., "parameter": .. (lab), "value": .., "rqd": .. (core),
+             "delete": false} – SPT N, core TCR/RQD or a lab value
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ GEOREF_UNREADABLE = re.compile(r"^unreadable:(?!.*\b(?:elevation|level)\b).*\b(?
 # Header fields a reviewer may set, with their type.
 FIELDS: dict[str, type] = {
     "borehole_name": str, "project_name": str, "location_name": str, "surface_elevation_m": float,
-    "elevation_datum": str, "depth_m": float, "start_date": date, "end_date": date,
+    "elevation_datum": str, "depth_m": float, "start_date": date, "end_date": date, "notes": str,
 }
 LAYER_TEXT = ("description_original", "stratigraphic_code", "stratigraphic_name", "geologic_age")
 
@@ -54,6 +56,9 @@ def describe(kind: str, payload: dict) -> str:
         return f"coordinate system EPSG:{payload['epsg']}"
     if kind == "position":
         return f"position {payload['lat']:.6f}, {payload['lon']:.6f}"
+    if kind == "test":
+        what = f"{payload.get('parameter') or payload['test']} at {payload['orig_depth']:g} m"
+        return f"{what} deleted" if payload.get("delete") else f"{what} → {payload['value']:g}"
     span = f"layer {payload['orig_top']:g}–{payload['orig_bottom']:g} m"
     if payload.get("delete"):
         return f"{span} deleted"
@@ -118,6 +123,29 @@ def _layer_add(bh: Borehole, p: dict) -> bool:
     return True
 
 
+def _test(bh: Borehole, p: dict) -> bool:
+    """The result is found by its kind and the depth the reviewer saw; a lab result also by its parameter."""
+    rows = {"spt": bh.spt, "core": bh.core_runs, "lab": bh.lab_results}[p["test"]]
+    depth = {"spt": lambda r: r.depth_m, "core": lambda r: r.top_m, "lab": lambda r: r.top_m or 0}[p["test"]]
+    i = next((i for i, r in enumerate(rows) if abs(depth(r) - p["orig_depth"]) < 0.01
+              and (p["test"] != "lab" or r.parameter.value == p.get("parameter"))), None)
+    if i is None:
+        return False
+    if p.get("delete"):
+        del rows[i]
+        return True
+    row = rows[i]
+    if p["test"] == "spt":
+        row.n_value, row.refusal = int(p["value"]), False
+    elif p["test"] == "core":
+        row.total_core_recovery_pct = p["value"]
+        if p.get("rqd") is not None:
+            row.rqd_pct = p["rqd"]
+    else:
+        row.value, row.qualifier = p["value"], None
+    return True
+
+
 def _field(bh: Borehole, p: dict) -> bool:
     kind = FIELDS.get(p["field"])
     if kind is None:
@@ -159,6 +187,8 @@ def apply(bh: Borehole, items: list[dict]) -> list[bool]:
             ok = _field(bh, p)
         elif kind == "groundwater":
             ok = _groundwater(bh, p)
+        elif kind == "test":
+            ok = _test(bh, p)
         else:
             ok = _layer(bh, p)
         results.append(ok)

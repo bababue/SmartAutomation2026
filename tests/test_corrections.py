@@ -7,7 +7,7 @@ from pyproj import Transformer
 from api.main import app
 from pipeline import config, corrections, store
 from pipeline.scoring import score
-from schema.borehole import Borehole, GeorefMethod, Layer, Location, SourceRef
+from schema.borehole import SPT, Borehole, CoreRun, GeorefMethod, LabResult, Layer, Location, SourceRef
 
 # Sydney landmark, MGA94 zone 56, coordinates printed without a CRS
 LAT, LON = -33.8568, 151.2153
@@ -167,3 +167,28 @@ def test_crs_confirmation_becomes_knowledge_for_the_country(client):
     post(client, "demo__a:BH1", kind="crs", scope="document", payload={"epsg": 28356})
     items = client.get("/api/knowledge").json()["items"]
     assert [(k["scope_type"], k["scope_value"], k["kind"], k["payload"]) for k in items] == [("region", "AU", "crs", {"epsg": 28356})]
+
+
+def test_test_results_and_notes(client):
+    bid = "demo__a:BH1"
+    con = store.connect()
+    bh = store.load_borehole(con, bid)
+    bh.spt = [SPT(depth_m=1.5, n_value=12), SPT(depth_m=3.0, refusal=True)]
+    bh.core_runs = [CoreRun(top_m=4.5, bottom_m=6.0, total_core_recovery_pct=80)]
+    bh.lab_results = [LabResult(parameter="water_content", value=21.0, top_m=2.0, qualifier="<")]
+    store.save_borehole(con, bh)
+    assert post(client, bid, kind="test", payload={"test": "spt", "orig_depth": 3.0, "value": 14}).status_code == 200
+    assert post(client, bid, kind="test", payload={"test": "core", "orig_depth": 4.5, "value": 90, "rqd": 55}).status_code == 200
+    assert post(client, bid, kind="test", payload={"test": "lab", "parameter": "water_content", "orig_depth": 2.0,
+                                                    "delete": True}).status_code == 200
+    r = post(client, bid, kind="field", payload={"field": "notes", "value": "Casing to 3 m."})
+    out = r.json()["borehole"]
+    assert [(s["depth_m"], s["n_value"], s["refusal"]) for s in out["spt"]] == [(1.5, 12, False), (3.0, 14, False)]
+    assert (out["core_runs"][0]["total_core_recovery_pct"], out["core_runs"][0]["rqd_pct"]) == (90, 55)
+    assert out["lab_results"] == [] and out["notes"] == "Casing to 3 m."
+    # wrong depth, missing parameter, fractional N, delete of a result that is gone
+    assert post(client, bid, kind="test", payload={"test": "spt", "orig_depth": 2.0, "value": 5}).status_code == 422
+    assert post(client, bid, kind="test", payload={"test": "lab", "orig_depth": 2.0, "value": 5}).status_code == 422
+    assert post(client, bid, kind="test", payload={"test": "spt", "orig_depth": 1.5, "value": 5.5}).status_code == 422
+    assert post(client, bid, kind="test", payload={"test": "lab", "parameter": "water_content", "orig_depth": 2.0,
+                                                    "delete": True}).status_code == 422
