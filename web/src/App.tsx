@@ -61,6 +61,8 @@ export default function App() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId)
   const [detail, setDetail] = useState<Detail | null>(null)
+  // Closing drops the record, so a later selection never shows it while its own loads; switching keeps it until then.
+  if (!selectedId && detail) setDetail(null)
   const [refresh, setRefresh] = useState(0)  // bump to reload map, list, queue and stats
   const [routeHoleIds, setRouteHoleIds] = useState<string[]>(initial.routeHoleIds)
   const closedRouteHoleIds = useRef<string[]>([])
@@ -193,7 +195,7 @@ export default function App() {
 
   // Only the response for the currently selected borehole may land in state.
   useEffect(() => {
-    if (!selectedId) { setDetail(null); return }
+    if (!selectedId) return
     const ctrl = new AbortController()
     fetchDetail(selectedId, ctrl.signal)
       .then(setDetail)

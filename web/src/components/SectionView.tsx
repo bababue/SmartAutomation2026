@@ -20,6 +20,11 @@ interface Props {
 /** Half-width of the band around a joined rock head, as a share of the distance to the nearest hole. */
 const UNCERTAINTY = 0.1
 const SAMPLES = 12
+const HEIGHT = 290
+const MARGIN = { left: 58, right: 24, top: 36, bottom: 56 }
+const PLOT_H = HEIGHT - MARGIN.top - MARGIN.bottom
+/** Width of a borehole column in px. */
+const COL = 6
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
 const tickStep = (range: number) => {
@@ -74,15 +79,12 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
       routeLength([ordered[j].geometry.coordinates, f.geometry.coordinates])),
   ), [ordered])
   const byElevation = ordered.every((f) => f.properties.elevation != null)
-  const height = 290
-  const m = { left: 58, right: 24, top: 36, bottom: 56 }
-  const col = 6
 
   const layout = useMemo(() => {
     const positions = ordered.map((feature) => routePositions.get(feature.properties.id)?.chainageM ?? 0)
     const gaps = positions.slice(1).map((position, i) => position - positions[i])
     const total = routeLength(route.coordinates)
-    const plotWidth = Math.max(1, width - m.left - m.right - col)
+    const plotWidth = Math.max(1, width - MARGIN.left - MARGIN.right - COL)
     const tops = ordered.map((f) => (byElevation ? f.properties.elevation! : 0))
     const bottoms = ordered.map((f, i) => {
       const depth = f.properties.depth ?? Math.max(0, ...(f.properties.strip ?? []).map((s) => s[1]))
@@ -102,19 +104,18 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     const vMax = byElevation ? Math.max(...tops, ...tunnelValues.map((value) => value + diameter / 2)) : 0
     const vMin = byElevation ? Math.min(...bottoms, ...tunnelValues.map((value) => value - diameter / 2))
       : Math.max(...bottoms, ...tunnelValues.map((value) => value + diameter / 2))
-    return { gaps, total, positions, plotWidth, svgWidth: m.left + plotWidth + col + m.right, tops, vMax, vMin, tunnel, diameter }
-  }, [ordered, route, routePositions, width, byElevation, m.left, m.right])
+    return { gaps, total, positions, plotWidth, svgWidth: MARGIN.left + plotWidth + COL + MARGIN.right, tops, vMax, vMin, tunnel, diameter }
+  }, [ordered, route, routePositions, width, byElevation])
 
-  const plotH = height - m.top - m.bottom
   const active = viewport?.key === sectionKey ? viewport : null
   const from = active?.from ?? 0, to = active?.to ?? Math.max(1, layout.total)
   const low = active?.low ?? (byElevation ? layout.vMin : 0)
   const high = Math.max(low + 0.1, active?.high ?? (byElevation ? layout.vMax : layout.vMin))
-  const xs = layout.positions.map((metres) => m.left + col / 2 + ((metres - from) / (to - from)) * layout.plotWidth)
+  const xs = layout.positions.map((metres) => MARGIN.left + COL / 2 + ((metres - from) / (to - from)) * layout.plotWidth)
   const y = (v: number) =>
     byElevation
-      ? m.top + ((high - v) / Math.max(0.1, high - low)) * plotH
-      : m.top + ((v - low) / Math.max(0.1, high - low)) * plotH
+      ? MARGIN.top + ((high - v) / Math.max(0.1, high - low)) * PLOT_H
+      : MARGIN.top + ((v - low) / Math.max(0.1, high - low)) * PLOT_H
   const step = tickStep(high - low)
   /** Plot value of a depth below ground in hole i: a level, or the depth itself. */
   const at = (i: number, depth: number) => (byElevation ? layout.tops[i] - depth : depth)
@@ -163,7 +164,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
   }))
   const visibleLabels = new Set<number>()
   for (const label of [...labels].sort((a, b) => Number(ordered[b.index].properties.id === selectedId) - Number(ordered[a.index].properties.id === selectedId) || a.index - b.index)) {
-    if (label.x < m.left || label.x > layout.svgWidth - m.right) continue
+    if (label.x < MARGIN.left || label.x > layout.svgWidth - MARGIN.right) continue
     if ([...visibleLabels].every((index) => {
       const other = labels[index]
       return Math.abs(label.x - other.x) >= (label.width + other.width) / 2 + 6
@@ -197,7 +198,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
   const showHoleTooltip = (event: ReactMouseEvent<SVGGElement>, p: BoreholeSummary, i: number) => {
     const svg = event.currentTarget.ownerSVGElement
     if (!svg) return
-    const fraction = (event.clientY - svg.getBoundingClientRect().top - m.top) / plotH
+    const fraction = (event.clientY - svg.getBoundingClientRect().top - MARGIN.top) / PLOT_H
     const level = byElevation ? high - fraction * (high - low) : low + fraction * (high - low)
     const depth = byElevation ? layout.tops[i] - level : level
     const layer = p.strip?.find(([top, bottom]) => depth >= top && depth <= bottom)
@@ -220,8 +221,8 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
   const pointerPosition = (event: ReactPointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect()
     return {
-      x: clamp(event.clientX - rect.left, m.left + col / 2, m.left + col / 2 + layout.plotWidth),
-      y: clamp(event.clientY - rect.top, m.top, m.top + plotH),
+      x: clamp(event.clientX - rect.left, MARGIN.left + COL / 2, MARGIN.left + COL / 2 + layout.plotWidth),
+      y: clamp(event.clientY - rect.top, MARGIN.top, MARGIN.top + PLOT_H),
     }
   }
   const startSelection = (event: ReactPointerEvent<SVGSVGElement>) => {
@@ -229,8 +230,8 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     suppressClick.current = false
     const { x, y } = pointerPosition(event)
     const rect = event.currentTarget.getBoundingClientRect()
-    if (event.clientX - rect.left < m.left || event.clientX - rect.left > layout.svgWidth - m.right ||
-        event.clientY - rect.top < m.top || event.clientY - rect.top > m.top + plotH) return
+    if (event.clientX - rect.left < MARGIN.left || event.clientX - rect.left > layout.svgWidth - MARGIN.right ||
+        event.clientY - rect.top < MARGIN.top || event.clientY - rect.top > MARGIN.top + PLOT_H) return
     const target = event.target as Element
     const holeId = target.closest<SVGGElement>('.section-hole')?.dataset.holeId ?? null
     drag.current = { pointerId: event.pointerId, x, y, holeId, zooming: false }
@@ -255,11 +256,11 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     if (start.zooming && Math.abs(x - start.x) >= 16 && Math.abs(y - start.y) >= 16) {
       const x0 = Math.min(start.x, x), x1 = Math.max(start.x, x)
       const y0 = Math.min(start.y, y), y1 = Math.max(start.y, y)
-      const left = m.left + col / 2
+      const left = MARGIN.left + COL / 2
       const nextFrom = layout.total ? from + (x0 - left) / layout.plotWidth * (to - from) : 0
       const nextTo = layout.total ? from + (x1 - left) / layout.plotWidth * (to - from) : 1
-      const nextLow = byElevation ? high - (y1 - m.top) / plotH * (high - low) : low + (y0 - m.top) / plotH * (high - low)
-      const nextHigh = byElevation ? high - (y0 - m.top) / plotH * (high - low) : low + (y1 - m.top) / plotH * (high - low)
+      const nextLow = byElevation ? high - (y1 - MARGIN.top) / PLOT_H * (high - low) : low + (y0 - MARGIN.top) / PLOT_H * (high - low)
+      const nextHigh = byElevation ? high - (y0 - MARGIN.top) / PLOT_H * (high - low) : low + (y1 - MARGIN.top) / PLOT_H * (high - low)
       setViewport({ key: sectionKey, from: nextFrom, to: nextTo, low: nextLow, high: nextHigh })
     } else if (!start.zooming && start.holeId) {
       onSelect(start.holeId)
@@ -299,11 +300,11 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
         <button className="btn" onClick={onClear}>Clear boreholes</button>
       </header>
       <div ref={box} className="section-plot">
-        <svg width={layout.svgWidth} height={height} role="img" aria-label={`Section with ${ordered.length} boreholes over ${fmtDistance(layout.total)}`}
+        <svg width={layout.svgWidth} height={HEIGHT} role="img" aria-label={`Section with ${ordered.length} boreholes over ${fmtDistance(layout.total)}`}
           onPointerDown={startSelection} onPointerMove={moveSelection} onPointerUp={finishSelection}
           onPointerCancel={cancelSelection}
           onClickCapture={(event) => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false } }}>
-          <defs><clipPath id="section-plot-clip"><rect x={m.left} y={m.top} width={layout.svgWidth - m.left - m.right} height={plotH} /></clipPath></defs>
+          <defs><clipPath id="section-plot-clip"><rect x={MARGIN.left} y={MARGIN.top} width={layout.svgWidth - MARGIN.left - MARGIN.right} height={PLOT_H} /></clipPath></defs>
           <g clipPath="url(#section-plot-clip)">
           {layerBands.flatMap((bands, j) => bands.map((band, k) => {
             const x1 = xs[j], x2 = xs[j + 1]
@@ -322,22 +323,22 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
           </g>
           {ticks.map((v) => (
             <g key={v}>
-              <line x1={m.left - 4} x2={layout.svgWidth - m.right} y1={y(v)} y2={y(v)} className="section-grid" />
-              <text x={m.left - 8} y={y(v) + 4} textAnchor="end" className="section-tick">{fmtNum(v, 3)}</text>
+              <line x1={MARGIN.left - 4} x2={layout.svgWidth - MARGIN.right} y1={y(v)} y2={y(v)} className="section-grid" />
+              <text x={MARGIN.left - 8} y={y(v) + 4} textAnchor="end" className="section-tick">{fmtNum(v, 3)}</text>
             </g>
           ))}
-          <text x={14} y={m.top + plotH / 2} className="section-tick" transform={`rotate(-90 14 ${m.top + plotH / 2})`} textAnchor="middle">
+          <text x={14} y={MARGIN.top + PLOT_H / 2} className="section-tick" transform={`rotate(-90 14 ${MARGIN.top + PLOT_H / 2})`} textAnchor="middle">
             {byElevation ? 'Level (m)' : 'Depth (m)'}
           </text>
-          <line x1={m.left + col / 2} x2={m.left + col / 2 + layout.plotWidth} y1={height - 33} y2={height - 33} className="section-axis" />
+          <line x1={MARGIN.left + COL / 2} x2={MARGIN.left + COL / 2 + layout.plotWidth} y1={HEIGHT - 33} y2={HEIGHT - 33} className="section-axis" />
           {horizontalTicks.map((v) => {
-            const x = m.left + col / 2 + (v - from) / (to - from) * layout.plotWidth
+            const x = MARGIN.left + COL / 2 + (v - from) / (to - from) * layout.plotWidth
             return <g key={v}>
-              <line x1={x} x2={x} y1={height - 33} y2={height - 27} className="section-axis" />
-              <text x={x} y={height - 14} textAnchor="middle" className="section-tick">{fmtDistance(v)}</text>
+              <line x1={x} x2={x} y1={HEIGHT - 33} y2={HEIGHT - 27} className="section-axis" />
+              <text x={x} y={HEIGHT - 14} textAnchor="middle" className="section-tick">{fmtDistance(v)}</text>
             </g>
           })}
-          <text x={layout.svgWidth - m.right} y={height - 2} textAnchor="end" className="section-tick">
+          <text x={layout.svgWidth - MARGIN.right} y={HEIGHT - 2} textAnchor="end" className="section-tick">
             Station along tunnel route
           </text>
           <g clipPath="url(#section-plot-clip)">
@@ -364,27 +365,27 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
           {waterJoins.map(([j, line]) => <polyline key={`water-${j}`} points={line} className="section-water-join" />)}
           {layout.tunnel && layout.tunnel.length > 1 && <>
             {layout.diameter > 0 && <polygon className="section-tunnel-band" points={[
-              ...layout.tunnel.map(([station, value]) => `${m.left + col / 2 + (station - from) / (to - from) * layout.plotWidth},${y(value + layout.diameter / 2)}`),
-              ...[...layout.tunnel].reverse().map(([station, value]) => `${m.left + col / 2 + (station - from) / (to - from) * layout.plotWidth},${y(value - layout.diameter / 2)}`),
+              ...layout.tunnel.map(([station, value]) => `${MARGIN.left + COL / 2 + (station - from) / (to - from) * layout.plotWidth},${y(value + layout.diameter / 2)}`),
+              ...[...layout.tunnel].reverse().map(([station, value]) => `${MARGIN.left + COL / 2 + (station - from) / (to - from) * layout.plotWidth},${y(value - layout.diameter / 2)}`),
             ].join(' ')} />}
             <polyline className="section-tunnel-axis" points={layout.tunnel.map(([station, value]) =>
-              `${m.left + col / 2 + (station - from) / (to - from) * layout.plotWidth},${y(value)}`).join(' ')}>
+              `${MARGIN.left + COL / 2 + (station - from) / (to - from) * layout.plotWidth},${y(value)}`).join(' ')}>
               <title>Planned tunnel axis{layout.diameter > 0 ? ` · ${layout.diameter} m diameter` : ''}</title>
             </polyline>
           </>}
           {layout.tunnel?.length === 1 && <circle className="section-tunnel-point"
-            cx={m.left + col / 2 + (layout.tunnel[0][0] - from) / (to - from) * layout.plotWidth}
+            cx={MARGIN.left + COL / 2 + (layout.tunnel[0][0] - from) / (to - from) * layout.plotWidth}
             cy={y(layout.tunnel[0][1])} r={4}><title>Planned tunnel axis at this borehole</title></circle>}
           {ordered.map((f, i) => {
             const p = f.properties
             const g = p.ground
             const x = xs[i]
-            if (x < m.left - col || x > layout.svgWidth - m.right + col) return null
+            if (x < MARGIN.left - COL || x > layout.svgWidth - MARGIN.right + COL) return null
             const base = byElevation ? layout.tops[i] : 0
             const depth = p.depth ?? Math.max(0, ...(p.strip ?? []).map((layer) => layer[1]))
             const nearest = Math.min(i > 0 ? x - xs[i - 1] : Infinity,
               i < ordered.length - 1 ? xs[i + 1] - x : Infinity)
-            const lineWidth = Math.max(1, Math.min(col, nearest * 0.7))
+            const lineWidth = Math.max(1, Math.min(COL, nearest * 0.7))
             const hitWidth = Math.max(lineWidth, Math.min(24, nearest * 0.9))
             return (
               <g key={p.id} data-hole-id={p.id} className={`section-hole${p.id === selectedId ? ' section-hole-on' : ''}`}
@@ -423,10 +424,10 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
           })}
           </g>
           {ordered.map((f, i) => <g key={`label-${f.properties.id}`}>
-            {visibleLabels.has(i) && <text x={xs[i]} y={m.top - 18} textAnchor="middle" className="section-name"
+            {visibleLabels.has(i) && <text x={xs[i]} y={MARGIN.top - 18} textAnchor="middle" className="section-name"
               onClick={() => onSelect(f.properties.id)}>{f.properties.name}</text>}
-            {f.properties.id === selectedId && xs[i] >= m.left && xs[i] <= layout.svgWidth - m.right &&
-              <text x={xs[i] + 9} y={m.top - 5} className="section-x" onClick={() => onRemove(f.properties.id)}>×<title>Remove from section</title></text>}
+            {f.properties.id === selectedId && xs[i] >= MARGIN.left && xs[i] <= layout.svgWidth - MARGIN.right &&
+              <text x={xs[i] + 9} y={MARGIN.top - 5} className="section-x" onClick={() => onRemove(f.properties.id)}>×<title>Remove from section</title></text>}
           </g>)}
           {selection && <rect className="section-zoom-selection" x={Math.min(selection.x0, selection.x1)} y={Math.min(selection.y0, selection.y1)}
             width={Math.abs(selection.x1 - selection.x0)} height={Math.abs(selection.y1 - selection.y0)} />}

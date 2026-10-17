@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { Detail, DetailUpdate, Layer, SimilarGround, SourceRef } from '../types'
 import { lithStyle, patternId } from '../lithology'
 import { CardHead, CorrectionList, LayersEditor, NotesEditor, RecordEditor, TestsEditor, type TestRow } from './Corrections'
@@ -40,11 +40,6 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
   const layerRows = useRef<HTMLTableSectionElement>(null)
-  // Hovering the profile brings the matching table row into view; hovering the table itself must not scroll it.
-  const hoverProfile = (i: number | null) => {
-    setHovered(i)
-    if (i != null) layerRows.current?.children[i]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }
   const [coordsHovered, setCoordsHovered] = useState(false)
   const [editing, setEditing] = useState<'record' | 'layers' | 'tests' | 'notes' | null>(null)
   const done = () => setEditing(null)
@@ -60,11 +55,19 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
 
   // What is hovered, and where it was read: follow it to its page and outline it there.
   const focus: SourceRef | null = coordsHovered ? loc.source : hovered != null ? bh.layers[hovered]?.source ?? null : null
-  useEffect(() => {
-    if (!focus) return
-    const i = pages.findIndex((p) => p.file === focus.file && p.page === focus.page)
+  const followSource = (ref: SourceRef | null | undefined) => {
+    const i = ref ? pages.findIndex((p) => p.file === ref.file && p.page === ref.page) : -1
     if (i >= 0) setPageIndex(i)
-  }, [focus, pages])
+  }
+  const hoverLayer = (i: number | null) => {
+    setHovered(i)
+    if (i != null) followSource(bh.layers[i]?.source)
+  }
+  // Hovering the profile brings the matching table row into view; hovering the table itself must not scroll it.
+  const hoverProfile = (i: number | null) => {
+    hoverLayer(i)
+    if (i != null) layerRows.current?.children[i]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }
   const highlight = focus?.bbox && page && focus.file === page.file && focus.page === page.page ? focus.bbox : null
 
   const tests = useMemo(() => {
@@ -121,7 +124,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
           <CardHead id="detail-record" title="Record" onEdit={editing ? undefined : () => setEditing('record')} />
           <dl className="record">
             <dt>Coordinates as printed</dt>
-            <dd onMouseEnter={() => setCoordsHovered(true)} onMouseLeave={() => setCoordsHovered(false)}>
+            <dd onMouseEnter={() => { setCoordsHovered(true); followSource(loc.source) }} onMouseLeave={() => setCoordsHovered(false)}>
               {withSuffix(loc.coords_raw ?? '–', loc.crs_raw, (x) => ` (${x})`)}
             </dd>
             <dt>Position (WGS84)</dt>
@@ -151,7 +154,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
             </thead>
             <tbody ref={layerRows}>
               {bh.layers.map((l: Layer, i) => (
-                <tr key={i} className={hovered === i ? 'row-active' : undefined} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}>
+                <tr key={i} className={hovered === i ? 'row-active' : undefined} onMouseEnter={() => hoverLayer(i)} onMouseLeave={() => setHovered(null)}>
                   <td className="num depth">{fmtNum(l.top_m)}–{fmtNum(l.bottom_m)}</td>
                   <td>
                     <svg width={14} height={14} className="swatch" aria-hidden="true"><rect width={14} height={14} fill={`url(#${patternId(l.primary)})`} /></svg>

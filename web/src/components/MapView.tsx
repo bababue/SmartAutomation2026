@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { GeoJSONSource, LngLat, LngLatBounds, Map as MapLibre, NavigationControl, Popup, ScaleControl, setWorkerUrl, type LngLatLike, type MapLayerMouseEvent, type TransformConstrainFunction } from 'maplibre-gl'
 import type { Feature as GeoJSONFeature, Polygon } from 'geojson'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
@@ -345,11 +345,14 @@ export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, foc
   const ready = useRef(false)
   const latest = useRef({ data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, columns3d })
   const layerStrips = useRef(new Map<string, BoreholeSummary['strip']>())
-  latest.current = { data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, columns3d }
   const [loaded, setLoaded] = useState(false)
   const routeCoordinates = route?.coordinates
   const shownDark = useRef(dark)  // the basemap currently on the map
   const spread = useRef<ColumnSpread>({ columns: [], drawn: new Map(), start: 0, frame: 0, show: columns3d })
+  // Map event handlers read the newest props; layout effects run before the effects below that use them too.
+  useLayoutEffect(() => {
+    latest.current = { data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, columns3d }
+  })
 
   useEffect(() => {
     const columnSpread = spread.current
