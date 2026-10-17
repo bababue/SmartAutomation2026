@@ -334,3 +334,12 @@ def test_utm_zone_beside_an_unknown_datum_is_no_wgs84_statement():
     r = georeference(f"E {e:.1f} N {n:.1f}", "PSAD56 / UTM zone 18S", "PE", lat, lon, 5.0)
     assert r.location.confidence < 0.9
     assert any(i.startswith("coordinate system inferred") for i in r.issues)
+
+
+def test_a_utm_northing_that_lost_its_leading_digits_resolves_to_no_point():
+    # Christ the Redeemer, Rio de Janeiro, in SIRGAS 2000 / UTM 23S, the northing split after its first digit
+    e, n = fwd(31983, -22.9519, -43.2105)
+    full = f"N = {br(n)} E = {br(e)}"
+    split = full.replace("N = 7.", "N = 7. ", 1)
+    assert split != full and resolve_with(split, 31983) is None
+    assert haversine_km(*(lambda c: (c.lat, c.lon))(resolve_with(full, 31983)), -22.9519, -43.2105) < 0.01

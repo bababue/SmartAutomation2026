@@ -452,7 +452,9 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
                             lon, lat = _to_wgs84(crs).transform(east, n)
                         except Exception:
                             continue
-                        if math.isfinite(lat) and math.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180:
+                        # UTM is defined from 80°S to 84°N: beyond that, a northing lost its leading digits.
+                        if math.isfinite(lat) and math.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180 \
+                                and not (_is_utm(crs) and not -80.0 <= lat <= 84.0):
                             note = "projected" + (" (westing)" if east != e else "") + swap_note
                             name, epsg = (f"EPSG:{crs}", crs) if isinstance(crs, int) else (crs, None)
                             out.append(Candidate(lat, lon, name, epsg, east, n, note, crs in hinted, crs in stated))
