@@ -2,6 +2,7 @@ import { parseDecimal } from './format'
 import type { Filters, QueuePosition, RangeFilter, ReviewFilters, StatusFilter } from './types'
 
 export type View = 'map' | 'review' | 'stats'
+export type StatsTab = 'data' | 'quality'
 
 export interface UrlState {
   view: View
@@ -13,6 +14,7 @@ export interface UrlState {
   reviewFilters: ReviewFilters
   /** Review mode: the release audit sample instead (automatic releases drawn for a person to check). */
   auditOnly: boolean
+  statsTab: StatsTab
 }
 
 const STATUSES: StatusFilter[] = ['all', 'released', 'pending', 'rejected']
@@ -52,6 +54,7 @@ export function readUrl(search: string): UrlState {
     tunnelId: p.get('tunnel'),
     selectedId: p.get('borehole'),
     auditOnly: p.get('audit') === '1',
+    statsTab: p.get('tab') === 'quality' ? 'quality' : 'data',
     listOpen: p.get('list') !== 'closed',
     reviewFilters: {
       finding: p.get('finding'),
@@ -80,6 +83,7 @@ export function writeUrl(s: UrlState): string {
   if (s.routeActive && s.tunnelId) p.set('tunnel', s.tunnelId)
   if (s.selectedId) p.set('borehole', s.selectedId)
   if (s.auditOnly) p.set('audit', '1')
+  if (s.view === 'stats' && s.statsTab !== 'data') p.set('tab', s.statsTab)
   if (!s.listOpen) p.set('list', 'closed')
   if (f.q.trim()) p.set('q', f.q.trim())
   f.lithology.forEach((l) => p.append('lith', encodeRange(l)))

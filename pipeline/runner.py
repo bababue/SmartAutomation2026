@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from . import config, coordcheck, corrections, evaluate, experiment, ingest, knowledge, llm, store
-from .assemble import LOG_KINDS, PageResult, assemble, dedupe, norm_name, placeholder, unstack_place_positions
+from .assemble import LOG_KINDS, PageResult, _log_key, assemble, dedupe, norm_name, placeholder, unstack_place_positions
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
 
@@ -305,16 +305,28 @@ def extract_todo(rendered, classes) -> list[ingest.PageImage]:
             if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
 
 
-def _lost_logs(pages, classes, extractions) -> list[tuple[int, str]]:
-    """Log pages that came back with fewer logs than the classification counted. Counted, not matched by
-    name: the classification reads the thumbnail and often writes a hole's name differently. A log without
-    layers counts: a last sheet often holds only notes or the end-of-hole statement. Probe records (dynamic
-    probe, CPT) are left out, they often carry blow counts only."""
-    lost = []
+def _lost_logs(pages, classes, extractions) -> list[tuple[int, str, str | None]]:
+    """Log pages that came back with fewer logs than the classification counted, and holes that came back without
+    a layer on any page: (page, finding, hole name). Counted, not matched by name: the classification reads the
+    thumbnail and often writes a hole's name differently. A log without layers counts on its page: a last sheet
+    often holds only notes or the end-of-hole statement. Probe records (dynamic probe, CPT) are left out, they
+    often carry blow counts only."""
+    lost, first, layered = [], {}, set()
     for p in pages:
-        expected = expected_logs(classes[(p.doc_id, p.page)])
-        if expected and (found := len(extractions[(p.doc_id, p.page)].logs)) < expected:
-            lost.append((p.page, f"log not extracted: page {p.page} shows {expected} logs, {found} came back"))
+        c = classes[(p.doc_id, p.page)]
+        if not (expected := expected_logs(c)):
+            continue
+        logs = extractions[(p.doc_id, p.page)].logs
+        if (found := len(logs)) < expected:
+            lost.append((p.page, f"log not extracted: page {p.page} shows {expected} logs, {found} came back", None))
+        for log in logs:
+            kind, number = _log_key(log, c.kind.value)
+            if kind != "probe":
+                first.setdefault(number, (p.page, log.name))
+                if log.layers:
+                    layered.add(number)
+    lost += [(page, f"log not extracted: {name} came back without layers on every page", name)
+             for number, (page, name) in first.items() if number not in layered]
     return lost
 
 
@@ -358,20 +370,20 @@ def _publishable_docs(con, rendered, classes, extractions, incomplete_docs: set[
 
 def _protected(con, records, uids: dict[str, str | None], fixes: dict[str, list]) -> dict[str, set]:
     """Identities a reviewer stands behind, per record that has corrections or a human decision: deduplication
-    must not merge them away. The record's own id counts when the decision or a correction names it."""
+    must not merge them away. The record's own id counts when the decision or a correction names it. Document
+    corrections apply to every hole of the group, so they identify none."""
     human = {s.value for s in store.HUMAN}
     protected = {}
     for bh in records:
         uid = uids[bh.borehole_id]
+        own = [f for f in fixes[bh.borehole_id] if f["scope"] == "borehole"]
         status = con.execute("SELECT review_status FROM boreholes WHERE id = ? OR uid = ?",
                              (bh.borehole_id, uid)).fetchone()
-        if not (fixes[bh.borehole_id] or status and status[0] in human):
+        if not (own or status and status[0] in human):
             continue
         decided_here = con.execute("SELECT review_status FROM boreholes WHERE id = ?", (bh.borehole_id,)).fetchone()
-        reviewed_as = (decided_here and decided_here[0] in human) or any(
-            f["target"] == bh.borehole_id for f in fixes[bh.borehole_id])
-        protected[bh.borehole_id] = {uid} | {f["id"] for f in fixes[bh.borehole_id]} | (
-            {bh.borehole_id} if reviewed_as else set())
+        reviewed_as = (decided_here and decided_here[0] in human) or any(f["target"] == bh.borehole_id for f in own)
+        protected[bh.borehole_id] = {uid} | {f["id"] for f in own} | ({bh.borehole_id} if reviewed_as else set())
     return protected
 
 
@@ -438,13 +450,13 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
             print(f"  ! kept previous results for {len(failed_groups)} groups with assembly errors", file=sys.stderr)
     if not dry_run:
         for doc_id in done:
-            for page, issue in _lost_logs(rendered[doc_id], classes, extractions):
+            for page, issue, name in _lost_logs(rendered[doc_id], classes, extractions):
                 # A record read from that page may hold the missing hole's layers: it is blocked as well.
                 for bh in boreholes:
                     if store.doc_of(bh.borehole_id) == doc_id and any(s.page == page for s in bh.sources):
                         bh.issues.append(issue)
                         corrections.rescore(bh)
-                boreholes.append(placeholder(doc_id, source_file[doc_id], page, issue))
+                boreholes.append(placeholder(doc_id, source_file[doc_id], page, issue, name))
                 print(f"  ! {doc_id}: {issue}", file=sys.stderr)
     for bh in boreholes:
         if coords and (note := coordcheck.check(bh, coords)):

@@ -12,6 +12,7 @@
     python -m pipeline eval --corrected       # final values, reviewer corrections included
     python -m pipeline eval holdout --doc GROUP  # keep document groups out of prompt tuning
     python -m pipeline eval audit             # sample automatic releases: how often are they wrong?
+    python -m pipeline eval snapshot-models   # aggregates for the statistics page into fixtures/ (committed)
     python -m pipeline experiment baseline    # the main cache's extractions as an arm (no API calls)
     python -m pipeline experiment init NAME   # a prompt variant to edit (see experiment.py)
     python -m pipeline experiment run NAME    # that variant on the reference documents
@@ -24,7 +25,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import config, evaluate, experiment, llm, runner
+from . import config, evaluate, experiment, llm, quality, runner
 from .runner import COST_CLASSIFY, COST_EXTRACT, page_cost
 
 
@@ -54,6 +55,17 @@ def cmd_run(args) -> None:
 
 def cmd_rebuild(args) -> None:
     runner.rebuild(runner.select(args.doc), args.max_pages, args.dry_run)
+
+
+def cmd_eval(args) -> None:
+    if args.action != "snapshot-models":
+        evaluate.cmd_eval(args)
+        return
+    data = quality.write_snapshot()
+    if data is None:
+        sys.exit("no reference yet: approve records, then run `python -m pipeline eval snapshot`")
+    print(f"wrote {quality.SNAPSHOT_PATH}: {data['reference']['records']} reference records, "
+          f"{len(data['arms']['runs'])} arms; check that it holds aggregates only before committing")
 
 
 def cmd_experiment(args) -> None:
@@ -154,9 +166,10 @@ def main() -> None:
     p.add_argument("--with-cache", action="store_true", help="include the model cache, for rebuilds")
     p.set_defaults(fn=cmd_share)
     p = sub.add_parser("eval", help="extraction quality against human-checked records")
-    p.add_argument("action", nargs="?", choices=["compare", "snapshot", "holdout", "audit"], default="compare")
+    p.add_argument("action", nargs="?", choices=["compare", "snapshot", "holdout", "audit", "snapshot-models"],
+                   default="compare")
     p.add_argument("--corrected", action="store_true", help="compare final values instead of the model output")
-    p.set_defaults(fn=evaluate.cmd_eval)
+    p.set_defaults(fn=cmd_eval)
     p.add_argument("--doc", action="append", help="holdout: document group (repeatable; none clears it)")
     p.add_argument("--size", type=int, default=15, help="audit: records to draw")
     p.add_argument("--seed", type=int, default=2026, help="audit: random seed, so the sample can be redrawn")

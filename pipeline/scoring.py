@@ -74,7 +74,9 @@ def text_check(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> t
         if not text or len(text) < 200:
             continue
         checked += 1
-        numbers = set(re.findall(r"\d+(?:[.,]\d+)?", text))
+        # Decimals only: the labels of a depth scale (0 1 2 ...) would confirm every boundary on a whole metre.
+        # A log that prints whole-metre boundaries without decimals goes unconfirmed, to review.
+        numbers = set(re.findall(r"\d+[.,]\d+", text))
         for boundary in (layer.top_m, layer.bottom_m):
             if boundary == 0:
                 continue

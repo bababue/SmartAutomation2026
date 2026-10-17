@@ -186,5 +186,5 @@ Versions are git tags `vMAJOR.MINOR.PATCH` on `marvin`, starting at `v0.1.0`. Wh
 version is `0.x`, `feat` bumps MINOR and `fix`/`perf` bump PATCH. Tag at milestones (the
 state shown to the jury, the final submission) rather than on every commit, and only when
 asked. The Conventional Commit log is the changelog; there is no separate file.
-`PROMPT_VERSION` and `LAB_PROMPT_VERSION` in `pipeline/config.py` are independent: they are cache keys, bumped only
+`PROMPT_VERSION`, `CLASSIFY_PROMPT_VERSION`, `LAB_PROMPT_VERSION` and `COORDS_PROMPT_VERSION` in `pipeline/config.py` are independent: they are cache keys, bumped only
 when the prompt changes.

@@ -55,7 +55,7 @@ flowchart LR
 Only the two LLM steps call a model; everything after the cache is code, so a rule change needs only
 `pipeline rebuild` (seconds, free).
 
-1. **Ingest:** every page of a PDF (text, scanned, vector-only), JPG/PNG/TIFF or DOCX (through its PDF export)
+1. **Ingest:** every page of a PDF (text, scanned, vector-only), JPG/PNG/TIFF or DOCX (converted to PDF with LibreOffice)
    is rendered to an image; plain-text logs and Excel workbooks are laid out on A4 pages first. Text layers are
    only a hint, because many are scrambled.
 2. **Classify:** a thumbnail per page; large reports contain only a few log pages.
@@ -93,7 +93,7 @@ exactly what runs without them:
 | Stage | Checks |
 |---|---|
 | Web | `npm ci`, `oxlint`, unit tests, TypeScript check and production build |
-| Python | `pip install`, the full test suite (~290 tests: coordinate parsing in every notation that broke, CRS resolution, sheet assembly, scoring and blocking rules, review persistence, corrections, API, upload queue, export) |
+| Python | `pip install`, the full test suite (330+ tests: coordinate parsing in every notation that broke, CRS resolution, sheet assembly, scoring and blocking rules, review persistence, corrections, API, upload queue, export) |
 | App | creates a database of synthetic boreholes at public places (`fixtures/demo_data.py`) and serves API and UI on port 8000 |
 
 Not part of the build: extraction itself, which needs an LLM key and the confidential documents. Tests never
@@ -106,6 +106,7 @@ call an LLM; they use cached or hand-written page results. The same checks run l
 | Python | 3.12 or newer | pipeline and API |
 | Node.js | 22 or newer | web UI |
 | OpenRouter key | `sk-or-…` from openrouter.ai | processing documents and web uploads only |
+| LibreOffice | any recent | optional: renders DOCX files (`brew install --cask libreoffice`, `apt install libreoffice-writer-nogui`); without it only their embedded images are read |
 
 No database server or GIS stack: storage is one SQLite file and coordinate transformations use pyproj.
 
@@ -183,18 +184,22 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
   score range, lithology, depth to rock, groundwater.
 - **Detail:** two-column profile (stratigraphy, DIN 4023 lithology), layers, tests and lab values next to the
   original page; hovering a value outlines where it was read. Similar holes by ground profile.
-- **Review** (menu): the list shows the waiting records, lowest score first, also those without a position.
+- **Review:** choose **Review** beside the borehole filters. The left sidebar shows waiting records,
+  lowest score first, also those without a position; use the active **Review ×** card to return to boreholes.
   Filter them by where the position comes from (printed coordinates, estimated from the place name, inferred
   coordinate system, none) and by finding. Approve with `A`, reject with `R`, `Esc` to close; the next record
   opens automatically. A document whose waiting holes share an inferred coordinate system shows "Confirm for all
   n" in the detail of each of them. The statistics open the release audit sample in the same list.
 - **Tunnel routes:** choose **Tunnels** beside the borehole filters. The sidebar groups saved tunnels by the
-  project shared by the most selected boreholes; tunnels without a project appear first. Choose **New tunnel**
-  from the menu to create one. Its settings open on the right. Draw an alignment or import a WGS84 GeoJSON
+  project shared by the most selected boreholes; tunnels without a project appear first. Use **+ New tunnel**
+  beside **Tunnels ×** to create one. Its settings open on the right. Draw an alignment or import a WGS84 GeoJSON
   LineString, select boreholes in the corridor, and view the longitudinal section below the map. Spans over
   150 m are drawn lighter as less certain. Tunnels and selected boreholes are saved in this browser, and the
   selected tunnel reopens from its URL after a reload.
-- **Statistics:** lithology, depth and release distributions and recurring findings for the current filter.
+- **Statistics:** two tabs. **Data**: lithology, depth and release distributions and recurring findings for the
+  current filter. **Quality & models**: extraction quality against the reviewed reference, the release audit,
+  Opus against Haiku with cost per page, the wider benchmark, the prompt experiments side by side and the
+  recorded model calls.
 - **Export:** released records as BoreholeDataFormat workbook or CSV, one row per layer.
 
 ## Evaluation
@@ -203,6 +208,7 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
 .venv/bin/python -m pipeline eval snapshot      # records a person approved become the reference
 .venv/bin/python -m pipeline eval               # model output (before corrections) against the reference
 .venv/bin/python -m pipeline eval audit         # draw automatic releases for a person to check
+.venv/bin/python -m pipeline eval snapshot-models  # aggregates for the statistics page (fixtures/, committed)
 ```
 
 `eval` compares the model's own output, before reviewer corrections, so a fixed record still counts the
@@ -215,7 +221,8 @@ A prompt change is tried on the reference documents before it becomes the next `
 (`pipeline experiment init|run|compare`): each arm has its own cache and a fresh database without corrections,
 so the scores are the model's alone. The same commands compare models;
 [docs/model-comparison.md](docs/model-comparison.md) compares Opus 5.5 with Haiku 5.5 on quality, time and
-cost. [docs/prompt-backlog.md](docs/prompt-backlog.md) collects prompt changes for the next version.
+cost. The statistics page computes the same figures live from `data/eval`; without it (e.g. in the Docker
+image) it shows `fixtures/model_evaluation.json`, which holds aggregates only. [docs/prompt-backlog.md](docs/prompt-backlog.md) collects prompt changes for the next version.
 
 ## Data model
 

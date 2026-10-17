@@ -29,7 +29,7 @@ def inputs(doc_id="report", names=("BH1",)):
     return [doc], {doc_id: [page]}, {(doc_id, 1): classification}, {(doc_id, 1): extraction}
 
 
-@pytest.mark.parametrize("missing", ["empty", "one_hole", "assembly_error"])
+@pytest.mark.parametrize("missing", ["empty", "one_hole", "layerless", "assembly_error"])
 def test_incomplete_inventory_preserves_records_and_decisions(con, monkeypatch, missing):
     args = inputs(names=("BH1", "BH2"))
     for name in ("BH1", "BH2"):
@@ -45,6 +45,8 @@ def test_incomplete_inventory_preserves_records_and_decisions(con, monkeypatch, 
             return build(doc_id, logs, *args)
 
         monkeypatch.setattr(assembly, "build_borehole", fail_second)
+    elif missing == "layerless":
+        args[3][("report", 1)].logs[1].layers = []
     else:
         args[3][("report", 1)].logs = args[3][("report", 1)].logs[:0 if missing == "empty" else 1]
     assert runner._store(con, *args) == set()
@@ -135,6 +137,21 @@ def test_two_reviewed_copies_of_a_hole_both_stay():
     assert dedupe([a, b], {"a:BH1": {"uid", 7}, "b:BH1": {"uid", 7, "b:BH1"}}) == [b]
 
 
+def test_a_document_correction_does_not_join_two_independently_reviewed_copies(con):
+    from pipeline.assemble import dedupe
+    a, b = record(bid="folder__a:BH1", name="BH1"), record(bid="folder__b:BH1", name="BH1")
+    for bh, status in ((a, ReviewStatus.approved), (b, ReviewStatus.rejected)):
+        store.save_borehole(con, bh.model_copy(deep=True))
+        store.record_review(con, bh.borehole_id, status, "Ana", None)
+    store.add_correction(con, "document", "folder", "crs", {"epsg": 25832}, "Ana", None)
+    con.commit()
+    uids = {bh.borehole_id: store.uid_for(con, bh) for bh in (a, b)}
+    fixes = {bh.borehole_id: store.corrections_for(con, bh.borehole_id, uids[bh.borehole_id]) for bh in (a, b)}
+    assert all(fixes.values())
+    protected = runner._protected(con, [a, b], uids, fixes)
+    assert len(dedupe([a, b], protected)) == 2
+
+
 def test_dedupe_prefers_the_better_position():
     from pipeline.assemble import dedupe
     a, b = record(bid="a:BH1"), record(bid="b:BH1")
@@ -153,6 +170,26 @@ def test_continued_layers_keep_distinct_properties(field, first, second):
     b.layers[0] = b.layers[0].model_copy(update={field: second, "description_original": f"SAND, {second} (continued)"})
     layers = _layers([(a, SourceRef(file="r.pdf", page=1)), (b, SourceRef(file="r.pdf", page=2))], 20)
     assert [(l.top_m, l.bottom_m, getattr(l, field)) for l in layers] == [(0, 10, first), (10, 20, second)]
+
+
+def test_a_continued_unit_takes_the_qualifier_of_a_secondary_component():
+    from pipeline.assemble import _layers
+    from pipeline.extraction_models import XSecondary
+    from schema.borehole import SourceRef
+    a, b = _log("BH1", None, None, [(0, 8)]), _log("BH1", None, None, [(8, 12)])
+    sheets = lambda: [(a, SourceRef(file="r.pdf", page=1)), (b, SourceRef(file="r.pdf", page=2))]
+    clay = lambda qualifier: [XSecondary(lithology="clay", qualifier=qualifier)]
+    a.layers[0] = a.layers[0].model_copy(update={"description_original": "SAND, clayey", "secondary": clay(None)})
+    b.layers[0] = b.layers[0].model_copy(update={"description_original": "As above", "secondary": clay("very")})
+    notes: list[str] = []
+    [layer] = _layers(sheets(), 12, notes)
+    assert [(s.lithology.value, s.qualifier.value) for s in layer.secondary] == [("clay", "very")] and not notes
+
+    a.layers[0] = a.layers[0].model_copy(update={"secondary": clay("slightly")})
+    notes = []
+    [layer] = _layers(sheets(), 12, notes)
+    [conflict] = notes
+    assert "slightly" in conflict and "very" in conflict and finding_severity(conflict) == "needs_look"
 
 
 def test_a_continued_unit_keeps_what_the_next_sheet_says_and_flags_conflicts():
@@ -225,6 +262,20 @@ def test_fresh_database_stores_a_lost_log_page_as_one_blocking_placeholder(con):
     lost = store.load_borehole(con, "report:p1-not-extracted")
     assert "log not extracted: page 1 shows 2 logs, 1 came back" in lost.issues
     assert lost.review_status == ReviewStatus.pending_review and [s.page for s in lost.sources] == [1]
+    assert any(finding_severity(i) == "blocking" for i in lost.issues)
+
+
+def test_a_hole_without_layers_on_any_page_is_lost_but_a_layerless_last_sheet_is_not(con):
+    docs, rendered, classes, extractions = inputs(names=("BH1", "BH2"))
+    rendered["report"].append(PageImage("report", 2, "", "", "", 1, 1))
+    classes[("report", 2)] = classes[("report", 1)].model_copy(update={"logs": [LogRef(name="BH1", sheet=None)]})
+    extractions[("report", 2)] = PageExtraction(logs=[_log("BH1", None, None, [])], coordinate_rows=[])
+    assert runner._lost_logs(rendered["report"], classes, extractions) == []
+
+    extractions[("report", 1)].logs[0].layers = []
+    assert runner._store(con, docs, rendered, classes, extractions) == {"report"}
+    lost = store.load_borehole(con, "report:BH1-p1-not-extracted")
+    assert "log not extracted: BH1 came back without layers on every page" in lost.issues
     assert any(finding_severity(i) == "blocking" for i in lost.issues)
 
 

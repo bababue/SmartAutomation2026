@@ -281,14 +281,22 @@ def _carry_properties(prev: Layer, nxt: Layer) -> list[str]:
         a, b = getattr(prev, field), getattr(nxt, field)
         if field == "primary" or b is None or a == b:
             continue
+        where = lambda x, y: (f"'{x}' on page {prev.source.page if prev.source else '?'}, "
+                              f"'{y}' on page {nxt.source.page if nxt.source else '?'}")
         if field == "secondary":
-            known = {s.lithology for s in a}
+            known = {s.lithology: s for s in a}
+            for s in b:
+                if (mine := known.get(s.lithology)) is None or s.qualifier is None:
+                    continue
+                if mine.qualifier is None:
+                    mine.qualifier = s.qualifier
+                elif mine.qualifier != s.qualifier:
+                    conflicts.append(f"{s.lithology.value} qualifier {where(mine.qualifier.value, s.qualifier.value)}")
             prev.secondary = a + [s for s in b if s.lithology not in known]
         elif a is None:
             setattr(prev, field, b)
         else:
-            conflicts.append(f"{field} '{a}' on page {prev.source.page if prev.source else '?'}, "
-                             f"'{b}' on page {nxt.source.page if nxt.source else '?'}")
+            conflicts.append(f"{field} {where(a, b)}")
     return conflicts
 
 
@@ -610,11 +618,17 @@ def _unique_groundwater(observations) -> list[GroundwaterObservation]:
 
 
 FEET = re.compile(r"\b(?:ft|feet|foot)\b|^\s*'\s*$", re.I)
+# The model reports a conversion from feet in its notes and may give the unit as "m" afterwards. In free text
+# "foot"/"Fuß" also means the foot of a slope. An apostrophe is no unit here: the notes quote printed text in
+# single quotes ('Bore Hole: 5').
+NOTES_FEET = re.compile(r"(?:\b|(?<=\d))(?:ft|feet)\b|(?:\d\s*|\b(?:from|in|von|aus)\s+)(?:foot|fu(?:ß|ss))\b", re.I)
 
 
 def unit_findings(xs: list[XLog]) -> list[str]:
     """The model converts feet to metres itself; a person checks that conversion once."""
     units = {x.depth_unit_raw.strip() for x in xs if x.depth_unit_raw and FEET.search(x.depth_unit_raw)}
+    if not units and any(x.notes and NOTES_FEET.search(x.notes) for x in xs):
+        units = {"stated in the notes"}
     return [f"depths printed in feet ({', '.join(sorted(units))}); check the conversion to metres"] if units else []
 
 
@@ -840,7 +854,8 @@ def build_borehole(doc_id: str, logs: list[tuple[XLog, SourceRef]],
         location.crs_raw = None  # not printed on this log
         if resolved in crs_from_hint(doc_crs[0]):
             geo.issues.append(f"coordinate system taken from page {doc_crs[1]} of the document: {doc_crs[0]}")
-            location.confidence = min(location.confidence or 0.0, 0.9)  # stated, but not on this log
+            # Stated in the document, only not on this log: still releasable, just not above the threshold.
+            location.confidence = min(location.confidence or 0.0, 0.9)
     coords_log = next(((x, src) for x, src in logs if x.coords_raw), None)
     location.source = SourceRef(file=coords_log[1].file, page=coords_log[1].page, bbox=_bbox(coords_log[0].coords_bbox)) \
         if coords_log else logs[0][1]
@@ -899,9 +914,9 @@ def build_borehole(doc_id: str, logs: list[tuple[XLog, SourceRef]],
 
 def placeholder(doc_id: str, source_file: str, page: int | None, issue: str, name: str | None = None) -> Borehole:
     """A blocking record for a log the run could not turn into a hole, so its page goes to a person: the hole
-    `name` that failed to assemble, else a log page that came back short. Its id and name never equal a real
-    hole's, so it cannot overwrite one."""
-    what = "not assembled" if name is not None else "not extracted"
+    `name` that failed to assemble or came back without layers, else a log page that came back short. Its id and
+    name never equal a real hole's, so it cannot overwrite one."""
+    what = "not extracted" if name is None or issue.startswith("log not extracted") else "not assembled"
     stem = f"{id_key(name)}-" if name else ""
     bh = Borehole(borehole_id=f"{doc_id}:{stem}p{page}-{what.replace(' ', '-')}",
                   borehole_name=f"{name or 'log'} {what}, {doc_id} p{page}",
@@ -1109,11 +1124,12 @@ def _name_tokens(name: str) -> list[str]:
 def _short_names(boreholes: list[Borehole]) -> dict[str, str]:
     """Record id -> the hole number to match by, for a record whose name ends in the full name of a hole in
     another file of its group ('<project> B 42' and 'B 42'). The short name needs a prefix and a number, and
-    only whole tokens count ('AB 42' is not 'B 42')."""
+    only whole tokens count ('AB 42' is not 'B 42'). A record without layers names no hole to match: a placeholder's
+    name ends in its page ('... p1')."""
     out = {}
     for bh in boreholes:
         mine = _name_tokens(bh.borehole_name)
-        for other in boreholes:
+        for other in filter(lambda r: r.layers, boreholes):
             theirs = _name_tokens(other.borehole_name)
             if (_group(other) == _group(bh) and document_id(other) != document_id(bh) and 2 <= len(theirs) < len(mine)
                     and mine[-len(theirs):] == theirs and any(t.isdigit() for t in theirs)):
@@ -1225,7 +1241,11 @@ def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dic
     else:
         issues.append(f"same hole assumed in {_where(other)}: same name, {', '.join(agree)}; "
                       f"check that both documents show this hole")
-    if not same:
+    if same:
+        pairs = zip(sorted(main.layers, key=lambda x: x.top_m), sorted(other.layers, key=lambda x: x.top_m))
+        issues += [f"sources disagree on the lithology of layer {x.top_m:g}–{x.bottom_m:g} m: {x.primary.value} "
+                   f"({_where(main)}) vs {y.primary.value} ({_where(other)})" for x, y in pairs if x.primary != y.primary]
+    else:
         end = lambda r: max((layer.bottom_m for layer in r.layers), default=0.0)
         issues.append(f"sources disagree on the layer sequence: kept {len(main.layers)} layers to {end(main):g} m "
                       f"from {_where(main)}, {_where(other)} reads {len(other.layers)} layers to {end(other):g} m")
@@ -1262,7 +1282,7 @@ def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dic
         return [x for x in theirs if key(x) not in seen]
 
     samples = new(main.samples, other.samples, lambda s: (s.name, s.top_m, s.bottom_m))
-    spt = new(main.spt, other.spt, lambda s: (s.depth_m, tuple(s.blows or ()), s.n_value))
+    spt = new(main.spt, other.spt, lambda s: (s.depth_m, tuple(s.blows or ()), s.n_value, s.refusal, s.increment_mm))
     runs = new(main.core_runs, other.core_runs, lambda c: (c.top_m, c.bottom_m))
     main.samples, main.spt, main.core_runs = main.samples + samples, main.spt + spt, main.core_runs + runs
     water = _unique_groundwater(main.groundwater + other.groundwater)
@@ -1287,7 +1307,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
     name and type from different documents are combined by `_match`, and in one folder or upload batch also a name
     that ends in another file's hole name (`_short_names`); records whose evidence points both ways stay
     apart and go to a person. Holes of one document were told apart by assembly and are never combined, nor are
-    records whose own sheets disagree. `protected` maps the records a reviewer decided or corrected to what
+    records whose own sheets disagree or that hold no layers (a placeholder for a page that failed). `protected` maps the records a reviewer decided or corrected to what
     identifies that review (uid, correction ids): such a record keeps its id and takes in an unreviewed copy; two
     records reviewed independently of each other both stay. `judged` holds the records as they will be stored, for
     choosing the better-checked copy. Changed records are scored again."""
@@ -1298,7 +1318,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
     for bh in sorted(boreholes, key=lambda b: b.borehole_id):
         entry = {"bh": bh, "ids": {bh.borehole_id}, "docs": {document_id(bh)}, "changed": False}
         kept.append(entry)
-        if any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
+        if not bh.layers or any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
             continue
         kind, number = _kind(bh), short.get(bh.borehole_id) or hole_key(bh.borehole_name, None)[1]
         review = protected.get(bh.borehole_id)
@@ -1310,7 +1330,8 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
             reviews = [protected[i] for i in cluster["ids"] if i in protected]
             if review is not None and reviews and not any(review & r for r in reviews):
                 continue
-            match = _match(other, bh)
+            # Evidence as stored: a reviewer's corrected position can contradict the printed one.
+            match = _match(judged.get(other.borehole_id, other), judged.get(bh.borehole_id, bh))
             if match is None:
                 continue
             how, agree, differ = match

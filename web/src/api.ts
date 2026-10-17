@@ -1,6 +1,6 @@
 import { encodeRange } from './url'
 import type { CorrectionKind, CorrectionScope, CrsGroup, Detail, DetailUpdate, FeatureCollection, FindingFacet, Filters, LayerStrips,
-  LlmUsage, MapPoint, QueuePage, QueuePosition, ReviewFilters, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob,
+  LlmUsage, MapPoint, Quality, QueuePage, QueuePosition, ReviewFilters, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadJob,
   UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -67,6 +67,7 @@ export const fetchSimilar = (id: string, signal?: AbortSignal) =>
 export const fetchStats = () => request<Stats>('/api/stats')
 export const fetchStatsDetail = (f: Filters, signal?: AbortSignal) =>
   request<StatsDetail>(`/api/stats/detail?${filterParams(f)}`, { signal })
+export const fetchQuality = (signal?: AbortSignal) => request<Quality>('/api/stats/quality', { signal })
 /** Waiting records, weakest first, with the total of all that match; or the release audit sample. */
 export function fetchQueue(f: ReviewFilters, signal?: AbortSignal, limit = 200, audit = false): Promise<QueuePage> {
   const params = new URLSearchParams({ limit: String(limit) })
@@ -112,7 +113,7 @@ export const cancelUpload = (jobId: string, files?: string[]) =>
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: files ?? null }),
   })
 
-export const fetchLlmUsage = () => request<LlmUsage>('/api/llm/usage?limit=1')
+export const fetchLlmUsage = () => request<LlmUsage>('/api/llm/usage')
 
 export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/uploads/${enc(jobId)}`)
 

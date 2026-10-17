@@ -309,7 +309,7 @@ def test_cancelling_a_whole_running_batch_stores_nothing(client, monkeypatch):
     assert not (config.UPLOADS_DIR / f"upload-{job['job_id']}").exists()
 
 
-def test_daily_call_limit_refuses_an_upload_and_usage_lists_the_calls(client, monkeypatch):
+def test_daily_call_limit_refuses_an_upload_and_usage_counts_the_calls(client, monkeypatch):
     monkeypatch.setattr("pipeline.runner.run", lambda *a, **k: None)
     monkeypatch.setattr(config, "MAX_DAILY_CALLS", 2)
     con = store.connect()
@@ -322,7 +322,6 @@ def test_daily_call_limit_refuses_an_upload_and_usage_lists_the_calls(client, mo
     assert not any(config.UPLOADS_DIR.iterdir())
     usage = client.get("/api/llm/usage").json()
     assert usage["today"] == 1 and usage["daily_limit"] == 2
-    assert usage["recent"][0]["endpoint"] == "api.example" and usage["recent"][0]["image_bytes"] == 10
 
 
 def test_an_upload_job_stored_in_another_shape_does_not_break_uploads(client, monkeypatch):

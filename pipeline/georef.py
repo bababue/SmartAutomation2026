@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-from pyproj import Transformer
+from pyproj import CRS, Transformer
 
 from schema.borehole import GeorefMethod, Location
 
@@ -65,18 +65,33 @@ COUNTRY_CRS: dict[str, list[Crs]] = {
     "NZ": [2193, 2105],
     "AU": [28348, 28349, 28350, 28351, 28352, 28353, 28354, 28355, 28356],
     "KR": [5185, 5186, 5187, 5188, 5174, 5176, 2097],
-    "DK": [25832, 25833, 10250, 10160, 10254],
+    "DK": [25832, 25833, 10250, 10160, 10254, 23032, 23033],
     "DE": [25832, 25833, 31466, 31467, 31468, 31469],
-    "NO": [25832, 25833],
-    "ES": [25829, 25830, 25831],
+    "NO": [25832, 25833, 23032, 23033],
+    "ES": [25829, 25830, 25831, 23029, 23030, 23031],
+    "PT": [23029],
     "BR": [31981, 31982, 31983, 31984, 31985],
     "AR": [5343, 5344, 5345, 5346, 5347, 5348, 5349],
     "CH": [2056],
     "AT": [31254, 31255, 31256],
     "FR": [2154],
     "NL": [28992],
-    "IT": [6707, 6708],
+    "IT": [6707, 6708, 23032, 23033],
 }
+
+# Datums named beside a UTM zone: (pattern, EPSG base, zones that have a code).
+UTM_DATUMS: list[tuple[str, int, range]] = [
+    (r"etrs ?-?89|euref ?-?89|(?<=\d)e89\b", 25800, range(28, 39)),
+    (r"\bed ?-?50\b|european datum 1950", 23000, range(28, 39)),
+    (r"nad ?-?83", 26900, range(1, 24)),
+    (r"nad ?-?27", 26700, range(3, 23)),
+    (r"wgs ?-?84", 32600, range(1, 61)),
+]
+# Any other datum, as in 'PSAD56 / UTM 18S' or 'Pulkovo 1942 UTM 37': the zone alone then states no datum we know.
+# GRS80 is the ellipsoid of ETRS89 and WGS84 alike, so 'UTM 32 GRS80' names no other datum.
+OTHER_DATUM = re.compile(
+    r"\b(?!utm|zone|sone|zona|huso|fuso|grs)[a-z]{2,6} ?[4-9]\d\b|\b[a-z]{3,} ?1[89]\d\d\b|pulkovo|clarke|bessel|hayford"
+)
 
 GEOGRAPHIC = 4326
 
@@ -89,6 +104,14 @@ def _to_wgs84(crs: Crs) -> Transformer:
     return Transformer.from_crs(crs, GEOGRAPHIC, always_xy=True)
 
 
+@lru_cache(maxsize=None)
+def _is_utm(crs: Crs) -> bool:
+    try:
+        return CRS.from_user_input(crs).utm_zone is not None
+    except Exception:
+        return False
+
+
 def _utm_epsgs(lat: float, lon: float, country: str | None) -> list[int]:
     zone = int((lon + 180) // 6) + 1
     zones = [z for z in (zone, zone - 1, zone + 1) if 1 <= z <= 60]
@@ -99,9 +122,29 @@ def _utm_epsgs(lat: float, lon: float, country: str | None) -> list[int]:
     return epsgs
 
 
-def crs_from_hint(crs_raw: str | None) -> list[Crs]:
+def _utm_hint(text: str) -> tuple[list[int], bool]:
+    """UTM codes the lower-case CRS text names, and whether it names their datum too."""
+    named = [(base, zones) for pattern, base, zones in UTM_DATUMS if re.search(pattern, text)]
+    # Datum names carry digits of their own ('WGS 84'): the zone is read without them.
+    m = re.search(r"utm\D{0,12}(\d{1,2}) ?([c-x])?", re.sub("|".join(p for p, _, _ in UTM_DATUMS), "", text))
+    if not m:
+        return [], False
+    zone = int(m.group(1))
+    south = m.group(2) is not None and m.group(2) < "n" and "south" not in text
+    if "south" in text or re.search(r"\b\d{1,2} ?s\b", text):
+        south = True
+    if not named:
+        if OTHER_DATUM.search(text) or not 1 <= zone <= 60:
+            return [], False
+        return [(32700 if south else 32600) + zone], False
+    # Only WGS84 has southern zones here; beside another datum an 'S' is the latitude band (Spain lies in band S).
+    return [(32700 if south and base == 32600 else base) + zone for base, zones in named if zone in zones], True
+
+
+def _crs_hints(crs_raw: str | None) -> tuple[list[Crs], list[Crs]]:
+    """CRS candidates the printed text names, and those of them whose datum it names (not only a UTM zone)."""
     if not crs_raw:
-        return []
+        return [], []
     text = crs_raw.lower()
     out: list[Crs] = []
     m = re.search(r"(4[89]|5[0-6]) ?[a-z]? ?mga ?94|mga ?94\D*(4[89]|5[0-6])", text)
@@ -112,24 +155,17 @@ def crs_from_hint(crs_raw: str | None) -> list[Crs]:
     m = re.search(r"mga ?2020\D*(4[6-9]|5[0-9])", text)
     if m:
         out.append(7800 + int(m.group(1)))  # GDA2020 / MGA zone 56 = EPSG:7856
-    m = re.search(r"utm\D{0,8}(\d{1,2}) ?([c-x])?", text)
-    if m:
-        zone = int(m.group(1))
-        band = (m.group(2) or "n").lower()
-        south = band < "n" and band != "n" and m.group(2) is not None and "south" not in text
-        if "south" in text or re.search(r"\b\d{1,2} ?s\b", text):
-            south = True
-        if 1 <= zone <= 60:
-            if not south and re.search(r"nad ?83", text) and zone <= 23:
-                out.append(26900 + zone)  # NAD83 / UTM zone N
-            elif not south and re.search(r"nad ?27", text) and 3 <= zone <= 22:
-                out.append(26700 + zone)  # NAD27 / UTM zone N
-            else:
-                out.append((32700 if south else 32600) + zone)
+    utm, datum_named = _utm_hint(text)
+    out += utm
     for pattern, epsgs in CRS_HINTS:
         if re.search(pattern, text):
             out.extend(epsgs)
-    return list(dict.fromkeys(out))
+    out = list(dict.fromkeys(out))
+    return out, [c for c in out if datum_named or c not in utm]
+
+
+def crs_from_hint(crs_raw: str | None) -> list[Crs]:
+    return _crs_hints(crs_raw)[0]
 
 
 # 'ØV-koordinat' and 'NS-koordinat' are Norwegian for the east-west and north-south coordinate.
@@ -239,6 +275,30 @@ GEO_COMPONENT = re.compile(
     r"(?(pre)|(?P<post>[NSEW](?![A-Za-z]))?)",  # 'S 33.9 E 151.2': the E belongs to the next value
     re.IGNORECASE,
 )
+# Degrees followed by bare minutes (and seconds), as in 'N 48 01 12' or 'Lat 47 59.876'. Only after a hemisphere
+# letter, lat/lon label or degree sign, or before a hemisphere letter: '48.1 7.9' stays two values.
+_NUM = r"\d+(?:[.,]\d+)?(?![.,]?\d)"
+SPACED_DMS = re.compile(
+    r"(?P<intro>(?<![A-Za-z])(?:(?:latitude|longitude|lat|long|lon)\.?\s*[:=]?|[NSEW])\s*)?"
+    rf"(?<![\d.,])(?P<deg>-?{_NUM})\s*(?P<degsym>°|º|˚)?(?P<rest>(?:\s+{_NUM})+)"
+    r"(?!\s*(?:\d|['′’\"″”°º˚]|min\b|sec\b))"
+    r"(?(intro)|(?(degsym)|\s*[NSEW](?![A-Za-z])))",
+    re.IGNORECASE,
+)
+
+
+def _mark_spaced_dms(text: str) -> str | None:
+    """'N 48 01 12' → 'N 48° 01′ 12″'. None when bare numbers after a degree value cannot be its minutes and
+    seconds: reading only the degrees would drop digits."""
+    out, end = [], 0
+    for m in SPACED_DMS.finditer(text):
+        groups = m.group("rest").split()
+        if (len(groups) > 2 or not re.fullmatch(r"-?\d{1,3}(?:[.,]\d+)?", m.group("deg"))
+                or not all(re.fullmatch(r"\d{1,2}(?:[.,]\d+)?", g) for g in groups)):
+            return None
+        out += [text[end:m.start("deg")], f"{m.group('deg')}° " + " ".join(g + s for g, s in zip(groups, "′″"))]
+        end = m.end("rest")
+    return "".join(out) + text[end:]
 
 
 def _geo_value(m: re.Match) -> tuple[str | None, float] | None:
@@ -262,7 +322,9 @@ def _geo_value(m: re.Match) -> tuple[str | None, float] | None:
 def geographic_reading(coords_raw: str) -> tuple[float, float, bool] | None:
     """(lat, lon, labelled) when the text is one latitude and one longitude written as degrees with
     hemisphere letters, degree signs or lat/lon labels. labelled=False: order assumed latitude first."""
-    text = coords_raw.replace("−", "-").replace("–", "-")
+    text = _mark_spaced_dms(coords_raw.replace("−", "-").replace("–", "-"))
+    if text is None:
+        return None
     parts = [v for m in GEO_COMPONENT.finditer(text) if m.group("deg") and (v := _geo_value(m))]
     if len(parts) != 2:
         return None
@@ -323,6 +385,7 @@ class Candidate:
     northing: float | None
     note: str
     hinted: bool  # matches printed CRS text
+    datum_stated: bool = False  # the printed text names this CRS's datum, not only a UTM zone
     distance_km: float | None = None
 
 
@@ -353,7 +416,8 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
                 c.distance_km = haversine_km(c.lat, c.lon, place[0], place[1])
         return out
     tokens = parse_tokens(coords_raw)
-    hinted = crs_from_hint(crs_raw) + crs_from_hint(coords_raw)
+    (hinted, stated), (hinted_in_coords, stated_in_coords) = _crs_hints(crs_raw), _crs_hints(coords_raw)
+    hinted, stated = hinted + hinted_in_coords, stated + stated_in_coords
     epsgs = list(hinted)
     if country and country.upper() in COUNTRY_CRS:
         epsgs += COUNTRY_CRS[country.upper()]
@@ -378,6 +442,10 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
                 for crs in epsgs:
                     if crs in X_NORTHING_GRIDS and labelled and north_t.label != "x":
                         continue
+                    # A UTM easting lies within some 1,000 km of 500,000 m. One far outside is a number split
+                    # in transcription ('389.9 40,000') or a swapped axis, which would still resolve to a point.
+                    if not 1000 <= abs(e) < 2_000_000 and _is_utm(crs):
+                        continue
                     # Danish System 34/45 count y towards the west; logs print it with or without the sign.
                     for east in ([e, -e] if crs in WESTING_GRIDS and e > 0 else [e]):
                         try:
@@ -387,7 +455,7 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
                         if math.isfinite(lat) and math.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180:
                             note = "projected" + (" (westing)" if east != e else "") + swap_note
                             name, epsg = (f"EPSG:{crs}", crs) if isinstance(crs, int) else (crs, None)
-                            out.append(Candidate(lat, lon, name, epsg, east, n, note, crs in hinted))
+                            out.append(Candidate(lat, lon, name, epsg, east, n, note, crs in hinted, crs in stated))
     if place:
         for c in out:
             c.distance_km = haversine_km(c.lat, c.lon, place[0], place[1])
@@ -493,6 +561,10 @@ def _georeference(
             # tie-break, otherwise the choice would follow noise in the place estimate.
             if (country or "").upper() in ("US", "CA") and c.epsg and 32601 <= c.epsg <= 32660:
                 penalty += 0.05
+            # ED50 lies some 100-250 m from the current datums, which the place cannot resolve: unstated, an ED50
+            # reading only flags the datum as ambiguous.
+            if not c.hinted and c.epsg and 23028 <= c.epsg <= 23038:
+                penalty += 0.5
             return (c.distance_km or 0) + penalty
 
         cands.sort(key=rank)
@@ -522,8 +594,9 @@ def _georeference(
                 issues.append("CRS ambiguous: " + ", ".join(loc.crs_candidates[:4]))
             else:
                 # Readings too close to tell apart via the place (e.g. decimal minutes vs. seconds,
-                # or another datum), but far enough apart to matter on site.
-                spread = max((d for c in cands[1:] if 0.05 < (d := haversine_km(c.lat, c.lon, best.lat, best.lon)) <= 1.0),
+                # or another datum), but far enough apart to matter on site. A stated datum rules out the others.
+                others = [c for c in cands[1:] if c.hinted or c.crs == best.crs or not best.datum_stated]
+                spread = max((d for c in others if 0.05 < (d := haversine_km(c.lat, c.lon, best.lat, best.lon)) <= 1.0),
                              default=None)
                 if spread is not None:
                     loc.confidence = min(loc.confidence, 0.8)

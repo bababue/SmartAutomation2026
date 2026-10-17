@@ -4,7 +4,7 @@ challenge data (no confidential coordinates in the repo)."""
 import pytest
 from pyproj import Transformer
 
-from pipeline.georef import georeference, haversine_km, parse_tokens
+from pipeline.georef import georeference, haversine_km, parse_tokens, resolve_with
 
 
 def fwd(epsg: int, lat: float, lon: float) -> tuple[float, float]:
@@ -152,6 +152,13 @@ GEO_TEXT = [
     ("Lat: 48 Lon: 7", (48.0, 7.0)),
     ("Location: 48.8584 N, 2.2945 E (WGS84)", (48.8584, 2.2945)),  # Eiffel Tower; 'S84' is no latitude
     ("48.8584 N 2.2945 E ETRS89", (48.8584, 2.2945)),
+    # Bare minutes and seconds after a hemisphere letter, label or degree sign, or before a hemisphere letter
+    ("N 48 51 30, E 2 17 40", (48.858333, 2.294444)),
+    ("N 48 51 30 E 2 17 40", (48.858333, 2.294444)),  # the E opens the longitude, it is no hemisphere of 30
+    ("Lat 48 51.5 Lon 2 17.6667", (48.858333, 2.294444)),
+    ("N 40 41.35 W 074 02.6667", (40.689167, -74.044444)),
+    ("48 51 30 N 2 17 40 E", (48.858333, 2.294444)),
+    ("N 48° 51 30 E 2° 17 40", (48.858333, 2.294444)),
 ]
 
 
@@ -170,6 +177,26 @@ def test_degrees_need_a_marker_and_metres_are_not_degrees():
     assert geographic_reading("E 312456.78 N 6251234.50") is None
     assert geographic_reading("N 29,23,382 E 47,59,898") is None  # degrees + decimal minutes in commas
     assert geographic_reading("48° 51′ 30″, 2° 17′ 40″") == pytest.approx((48.858333, 2.294444, False), abs=1e-5)
+
+
+@pytest.mark.parametrize("text", [
+    "N 48 75 12, E 2 17 40",  # minutes of 60 or more
+    "N 48.5 51 E 2 17",  # decimal degrees followed by minutes
+    "N 48 51.5 30 E 2 17 40",  # decimal minutes followed by seconds
+    "N 48 123 E 2 17",  # three-digit minutes
+    "N 48 51 30 15 E 2 17 40",  # one group too many
+])
+def test_bare_numbers_that_are_no_minutes_give_no_geographic_reading(text):
+    from pipeline.georef import geographic_reading
+
+    assert geographic_reading(text) is None
+
+
+def test_projected_metres_after_axis_letters_are_no_degrees():
+    from pipeline.georef import geographic_reading
+
+    for text in ("E 413000 N 5316000", "R 3412345 H 5316000", "E 413 000 N 5 316 000", "UTM 32N 412345 5316000"):
+        assert geographic_reading(text) is None
 
 
 def test_place_decides_axis_order_without_hemispheres():
@@ -246,3 +273,64 @@ def test_a_utm_zone_beside_norwegian_labels_is_no_coordinate():
     r = georeference(raw, "Kartdatum WGS 84, UTM Sone 32", "NO", 59.91, 10.75, 5.0)
     assert haversine_km(r.location.lat, r.location.lon, 59.9119, 10.7337) < 0.01
     assert r.location.confidence >= 0.9 and not r.issues
+
+
+def test_a_utm_easting_split_in_transcription_resolves_to_no_point():
+    # Brandenburg Gate in ETRS89 / UTM 33N, the easting split by a space as a model may copy it
+    raw = "N= 5.819.670,000 E= 389.9 40,000"
+    assert resolve_with(raw, 25833) is None  # neither 389.9 m nor the swapped axes
+    assert resolve_with("N= 5.819.670,000 E= 389.940,000", 25833) is not None
+    r = georeference(raw, "ETRS89 / UTM 33N", "DE", None, None, None)
+    assert r.location.lat is None
+
+
+def test_datum_named_beside_a_utm_zone_picks_its_code():
+    from pipeline.georef import crs_from_hint
+
+    assert crs_from_hint("ED50 UTM 30") == [23030]
+    assert crs_from_hint("UTM (ED50) Huso 30S") == [23030]  # band S, not the southern hemisphere
+    assert crs_from_hint("ETRS89 / UTM zone 32N") == [25832]
+    assert crs_from_hint("UTM (WGS84) 30N") == [32630]  # the datum's digits are no zone
+    assert crs_from_hint("UTM WGS 84 Zone 30") == [32630]
+    assert crs_from_hint("UTM 30") == [32630]
+    assert crs_from_hint("UTM Zone 32 (GRS 80)") == [32632]
+
+
+def test_ed50_utm_lands_on_the_ed50_point():
+    lat, lon = 40.4169, -3.7035  # Madrid, Puerta del Sol
+    e, n = fwd(23030, lat, lon)
+    wgs_lon, wgs_lat = Transformer.from_crs(32630, 4326, always_xy=True).transform(e, n)
+    assert haversine_km(wgs_lat, wgs_lon, lat, lon) > 0.1  # read as WGS84 the point moves
+    r = georeference(f"X: {e:.1f} Y: {n:.1f}", "ED50 UTM 30", "ES", lat + 0.02, lon - 0.02, 5.0)
+    assert r.location.crs_epsg == 23030, r.issues
+    assert haversine_km(r.location.lat, r.location.lon, lat, lon) < 0.005
+    assert r.location.confidence >= 0.95 and not r.issues
+
+
+def test_etrs89_utm_exports_the_etrs89_code():
+    lat, lon = 47.9959, 7.8522  # Freiburg Minster
+    e, n = fwd(25832, lat, lon)
+    r = georeference(f"E {e:.2f} N {n:.2f}", "ETRS89 / UTM zone 32N", "DE", lat + 0.02, lon - 0.02, 5.0)
+    assert r.location.crs_epsg == 25832
+    assert r.location.confidence >= 0.95 and not r.issues
+
+
+def test_utm_zone_without_datum_where_ed50_is_common_is_flagged():
+    lat, lon = 40.4169, -3.7035
+    e, n = fwd(25830, lat, lon)
+    r = georeference(f"E {e:.1f} N {n:.1f}", "UTM 30", "ES", lat + 0.02, lon - 0.02, 5.0)
+    assert haversine_km(r.location.lat, r.location.lon, lat, lon) < 0.005
+    assert r.location.confidence < 0.9
+    assert any(i.startswith("coordinate notation or datum ambiguous") for i in r.issues)
+
+
+def test_utm_zone_beside_an_unknown_datum_is_no_wgs84_statement():
+    from pipeline.georef import crs_from_hint
+
+    assert crs_from_hint("PSAD56 / UTM zone 18S") == []
+    assert crs_from_hint("Pulkovo 1942 UTM 37") == []
+    lat, lon = -12.0464, -77.0428  # Lima, Plaza Mayor
+    e, n = Transformer.from_crs(4326, 24878, always_xy=True).transform(lon, lat)
+    r = georeference(f"E {e:.1f} N {n:.1f}", "PSAD56 / UTM zone 18S", "PE", lat, lon, 5.0)
+    assert r.location.confidence < 0.9
+    assert any(i.startswith("coordinate system inferred") for i in r.issues)

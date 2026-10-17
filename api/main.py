@@ -27,12 +27,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from datetime import date as date_type
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, StringConstraints, ValidationError, model_validator
 import pymupdf
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, evaluate, export, ingest, llm, scoring, store, uploads
+from pipeline import config, corrections, evaluate, export, ingest, llm, quality, scoring, store, uploads
 from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
 
 from . import models, similar
@@ -93,8 +93,7 @@ def _like_escape(value: str) -> str:
 def _group_facet(r: sqlite3.Row, projects: Counter) -> dict:
     """A document group among the matches, labelled with the project name its holes give most often."""
     return {"group": r["grp"], "project": projects.most_common(1)[0][0] if projects else None,
-            "count": r["total"], "released": r["released"],
-            "bbox": [r["west"], r["south"], r["east"], r["north"]]}
+            "count": r["total"], "released": r["released"]}
 
 
 def _feature(r: sqlite3.Row) -> dict:
@@ -159,7 +158,6 @@ def list_filters(
     lithology: list[str] = Query(default_factory=list,
                                  description="code[:from_m:to_m], e.g. clay:10:20 (a clay layer between 10 and 20 m)"),
     lab: list[str] = Query(default_factory=list, description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
-    min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
     status: StatusFilter = "all",
     group: str | None = Query(None, description="only this document group (see the 'groups' facet)"),
     rock_head_max: float | None = Query(None, description="rock head at most this deep (m)"),
@@ -210,9 +208,6 @@ def list_filters(
                        "OR qualifier = 'range' AND value_upper >= value AND value_upper <= ?)")
             params += [lab_max, lab_max]
         where.append(clause + ")")
-    if min_position is not None:
-        where.append("loc_confidence >= ?")
-        params.append(min_position)
     if status != "all":
         values = STATUS_GROUPS[status]
         where.append(f"review_status IN ({','.join('?' * len(values))})")
@@ -270,8 +265,7 @@ def list_boreholes(
         f"SELECT primary_code, COUNT(DISTINCT rid) n FROM layers WHERE rid IN (SELECT rid FROM boreholes WHERE {sql_where}) "
         "GROUP BY primary_code ORDER BY n DESC", params).fetchall()
     groups = con.execute(
-        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM({RELEASED}) released, "
-        f"MIN(lon) west, MIN(lat) south, MAX(lon) east, MAX(lat) north FROM boreholes WHERE {sql_where} "
+        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM({RELEASED}) released FROM boreholes WHERE {sql_where} "
         "GROUP BY grp ORDER BY grp", params).fetchall()
     projects: dict[str, Counter] = {}
     for r in con.execute(f"SELECT {GROUP} AS grp, TRIM(project) AS project, COUNT(*) n FROM boreholes "
@@ -294,10 +288,8 @@ QUEUE_POSITION = {
 QueuePosition = Literal["printed", "estimated", "crs_inferred", "none"]
 
 
-def _queue_filters(blocking: bool, finding: str | None, position: QueuePosition | None) -> tuple[str, list]:
+def _queue_filters(finding: str | None, position: QueuePosition | None) -> tuple[str, list]:
     where, params = ["review_status = 'pending_review'"], []
-    if blocking:
-        where.append("rid IN (SELECT rid FROM findings WHERE severity = 'blocking')")
     if finding in ("blocking", "needs_look"):
         where.append("rid IN (SELECT rid FROM findings WHERE severity = ?)")
         params.append(finding)
@@ -311,7 +303,6 @@ def _queue_filters(blocking: bool, finding: str | None, position: QueuePosition 
 
 @app.get("/api/review-queue")
 def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
-                 blocking: bool = Query(False, description="only records with a blocking finding"),
                  finding: str | None = Query(None, description="a finding code, or a severity: 'blocking', 'needs_look'"),
                  position: QueuePosition | None = Query(None, description="where the position comes from"),
                  audit: bool = Query(False, description="the release audit sample instead (any status)")
@@ -321,23 +312,34 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
         uids = [r["uid"] for r in (evaluate.load_audit() or {"records": []})["records"]]
         where, params = f"uid IN ({','.join('?' * len(uids)) or 'NULL'})", uids
     else:
-        where, params = _queue_filters(blocking, finding, position)
+        where, params = _queue_filters(finding, position)
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}", params).fetchone()[0]
     rows = con.execute(
-        f"SELECT id, name, project, location_name, country, score, n_layers, {SOURCE_FILE}, reasons "
+        f"SELECT id, name, project, {GROUP} AS grp, location_name, country, score, review_status, loc_method, "
+        f"n_layers, {SOURCE_FILE}, reasons "
         f"FROM boreholes WHERE {where} ORDER BY score ASC, name, id LIMIT ? OFFSET ?",
         (*params, limit, offset),
     ).fetchall()
     items = [{**{k: r[k] for k in r.keys() if k != "reasons"}, "reasons": json.loads(r["reasons"] or "[]")}
              for r in rows]
-    return models.QueuePage.model_validate({"items": items, "total": total})
+    group_rows = con.execute(
+        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM({RELEASED}) released "
+        "FROM boreholes GROUP BY grp ORDER BY grp"
+    ).fetchall()
+    projects: dict[str, Counter] = {}
+    for r in con.execute(f"SELECT {GROUP} AS grp, TRIM(project) AS project, COUNT(*) n FROM boreholes "
+                         "WHERE NULLIF(TRIM(project), '') IS NOT NULL GROUP BY grp, project"):
+        projects.setdefault(r["grp"], Counter())[r["project"]] = r["n"]
+    groups = [{"group": r["grp"], "project": projects[r["grp"]].most_common(1)[0][0] if r["grp"] in projects else None,
+               "count": r["total"], "released": r["released"]} for r in group_rows]
+    return models.QueuePage.model_validate({"items": items, "total": total, "groups": groups})
 
 
 @app.get("/api/review-queue/findings")
 def queue_findings(con: DB, position: QueuePosition | None = None) -> list[models.QueueFinding]:
     """Findings among the waiting records (of one position source, if given), for the queue filter. Notes that
     hold nothing back are left out."""
-    where, params = _queue_filters(False, None, position)
+    where, params = _queue_filters(None, position)
     rows = con.execute(
         "SELECT code, severity, COUNT(DISTINCT rid) records FROM findings WHERE severity != 'info' AND rid IN "
         f"(SELECT rid FROM boreholes WHERE {where}) GROUP BY code, severity ORDER BY records DESC", params)
@@ -351,7 +353,8 @@ def crs_groups(con: DB) -> list[models.CrsGroup]:
     groups: dict[tuple[str, int], dict] = {}
     rows = con.execute(
         f"SELECT boreholes.id, f.epsg, {SOURCE_FILE} FROM findings f JOIN boreholes ON boreholes.rid = f.rid "
-        "WHERE f.code = 'crs_inferred' AND boreholes.review_status = 'pending_review' ORDER BY boreholes.id"
+        "WHERE f.code = 'crs_inferred' AND f.epsg IS NOT NULL AND boreholes.review_status = 'pending_review' "
+        "ORDER BY boreholes.id"
     )
     for r in rows:
         key = (store.document_group(r["id"]), r["epsg"])
@@ -386,9 +389,12 @@ def _blocking(bh: Borehole) -> list[str]:
     return [i for i in bh.issues if scoring.finding_severity(i) == "blocking"]
 
 
+Reviewer = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+
+
 class Review(BaseModel):
     decision: Literal["approved", "rejected", "pending_review"]
-    reviewer: str = Field(min_length=1, max_length=80)
+    reviewer: Reviewer
     comment: str | None = Field(None, max_length=2000)
     content_hash: str = Field(min_length=1, description="Version the reviewer saw; refused if it changed since")
     review_revision: int = Field(description="Review state the reviewer saw; refused if another decision was "
@@ -408,7 +414,7 @@ def _record(con: sqlite3.Connection, borehole_id: str) -> dict:
 @app.post("/api/boreholes/{borehole_id:path}/review")
 def review(borehole_id: str, body: Review, con: DB) -> models.ReviewResult:
     try:
-        bh = store.record_review(con, borehole_id, ReviewStatus(body.decision), body.reviewer.strip(), body.comment,
+        bh = store.record_review(con, borehole_id, ReviewStatus(body.decision), body.reviewer, body.comment,
                                  body.content_hash, body.review_revision)
     except store.StaleReview:
         raise HTTPException(409, "the record changed since you opened it; reload it and check again")
@@ -526,7 +532,7 @@ class Correction(BaseModel):
     kind: Literal["crs", "position", "layer", "layer_add", "field", "groundwater", "test"]
     scope: Literal["borehole", "document"] = "borehole"
     payload: dict
-    reviewer: str = Field(min_length=1, max_length=80)
+    reviewer: Reviewer
     comment: str | None = Field(None, max_length=2000)
 
 
@@ -550,7 +556,7 @@ def correct(borehole_id: str, body: Correction, con: DB) -> models.CorrectionRes
 
     group = store.document_group(borehole_id)
     targets = store.group_borehole_ids(con, group) if body.scope == "document" else [borehole_id]
-    item = {"kind": body.kind, "payload": payload, "reviewer": body.reviewer.strip()}
+    item = {"kind": body.kind, "payload": payload, "reviewer": body.reviewer}
     updated = []
     with con:
         con.execute("BEGIN IMMEDIATE")  # read-modify-write: concurrent corrections and rebuilds wait
@@ -595,7 +601,7 @@ def get_borehole(borehole_id: str, con: DB) -> models.Detail:
     ]
     inferred = con.execute(
         "SELECT f.epsg FROM findings f JOIN boreholes b ON b.rid = f.rid WHERE b.id = ? AND f.code = 'crs_inferred' "
-        "AND b.review_status = 'pending_review'", (borehole_id,)).fetchone()
+        "AND f.epsg IS NOT NULL AND b.review_status = 'pending_review'", (borehole_id,)).fetchone()
     # The document-wide confirmation this waiting hole belongs to, if its document has one.
     crs_group = inferred and next((g for g in crs_groups(con) if g["group"] == store.document_group(borehole_id)
                                    and g["epsg"] == inferred["epsg"]), None)
@@ -658,6 +664,7 @@ async def upload_documents(files: list[UploadFile] = File(...)) -> models.Upload
             docs=[uploads.UploadDoc(doc_id=d.doc_id, path=d.path, kind=d.kind, sha256=digests[d.path]) for d in docs]))
     except Exception as exc:
         shutil.rmtree(upload_dir, ignore_errors=True)
+        shutil.rmtree(ingest.converted_dir(upload_dir), ignore_errors=True)
         for d in docs:
             shutil.rmtree(config.PAGES_DIR / d.doc_id, ignore_errors=True)
         if isinstance(exc, HTTPException):
@@ -841,12 +848,10 @@ def cancel_upload(job_id: str, body: CancelBody, con: DB) -> uploads.UploadResul
 
 
 @app.get("/api/llm/usage")
-def llm_usage(con: DB, limit: int = Query(50, ge=1, le=500)):
-    """Model calls today against the limits, and the latest calls: where they went and what they carried."""
-    recent = con.execute(f"SELECT {', '.join(store.LLM_CALL_FIELDS)} FROM llm_calls ORDER BY id DESC LIMIT ?",
-                         (limit,)).fetchall()
+def llm_usage(con: DB):
+    """Model calls today against the limits, and where they go."""
     return {"today": store.llm_calls_today(con), "daily_limit": config.MAX_DAILY_CALLS,
-            "upload_limit": config.MAX_UPLOAD_CALLS, "endpoint": llm.endpoint(), "recent": [dict(r) for r in recent]}
+            "upload_limit": config.MAX_UPLOAD_CALLS, "endpoint": llm.endpoint()}
 
 
 @app.get("/api/pages/{doc_id}/{page}")
@@ -935,8 +940,19 @@ def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
         "groups": [{"group": r["grp"], "count": r["n"], "released": r["released"],
                     "top_finding": top_finding.get(r["grp"])} for r in group_rows],
         "crs": [[r["epsg"], r["n"]] for r in crs],
-        "audit": evaluate.audit_summary(con),  # the whole database: the sample is drawn from all releases
     })
+
+
+@app.get("/api/stats/quality")
+def stats_quality(con: DB) -> models.Quality:
+    """Extraction quality and model comparison: computed from data/eval where it exists, else the committed
+    snapshot. The release audit and the recorded model calls cover the whole database."""
+    if evaluate.REFERENCE_PATH.exists():
+        source, data = "live", quality.evaluation(con)
+    else:
+        data = quality.load_snapshot()
+        source = "snapshot" if data else "none"
+    return models.Quality(source=source, evaluation=data, audit=evaluate.audit_summary(con), usage=quality.usage(con))
 
 
 @app.get("/api/export.csv")

@@ -99,6 +99,8 @@ def test_review_queue_pages(client):
     con.close()
     page = client.get("/api/review-queue?limit=1").json()
     assert page["total"] == 2 and len(page["items"]) == 1
+    assert page["items"][0]["grp"] == "q"
+    assert next(g for g in page["groups"] if g["group"] == "q")["count"] > len(page["items"])
     assert client.get("/api/corrections/orphans").json() == []
 
 
@@ -107,7 +109,7 @@ def test_review_queue_blocking_only(client):
     store.save_borehole(con, hole("q:G", 47.0, 8.0, [(0, 5, "sand"), (7, 10, "clay")]))  # gap: blocking
     con.close()
     every = {item["id"] for item in client.get("/api/review-queue").json()["items"]}
-    page = client.get("/api/review-queue?blocking=true").json()
+    page = client.get("/api/review-queue?finding=blocking").json()
     assert [item["id"] for item in page["items"]] == ["q:G"] and page["total"] == 1
     assert "q:G" in every
 
@@ -189,7 +191,6 @@ def test_holes_group_by_document_labelled_with_their_most_frequent_project(clien
     groups = {g["group"]: g for g in client.get("/api/boreholes").json()["facets"]["groups"]}
     assert {g: (v["count"], v["project"]) for g, v in groups.items()} == {
         "folder": (4, "Harbour tunnel"), "q": (3, None)}
-    assert groups["q"]["bbox"] == [-179.5, 10.0, 179.5, 48.0]
     assert ids(client.get("/api/boreholes", params={"group": "folder"})) == ["folder__a:D", "folder__b:E",
                                                                              "folder__b:F", "folder__b:G"]
 
@@ -227,3 +228,27 @@ def test_ids_with_colon_and_slash_reach_the_record_and_its_sub_routes(client, pa
         "decision": "approved", "reviewer": "Ana", "content_hash": detail["content_hash"],
         "review_revision": detail["review_revision"]})
     assert review.json()["borehole"]["review_status"] == "approved"
+
+
+@pytest.mark.parametrize("route, body", [
+    ("review", {"decision": "approved", "content_hash": "h", "review_revision": 0}),
+    ("corrections", {"kind": "field", "payload": {"field": "notes", "value": "checked"}}),
+])
+def test_blank_reviewer_is_rejected(client, route, body):
+    assert client.post(f"/api/boreholes/q:A/{route}", json={**body, "reviewer": "   "}).status_code == 422
+
+
+def test_inferred_crs_without_a_code_is_left_out_of_document_confirmations(client):
+    con = store.connect()
+    for bid in ("r:H1", "r:H2"):
+        store.save_borehole(con, hole(bid, 47.0, 8.0, [(0, 9, "gravel")]))
+    con.execute("UPDATE boreholes SET review_status = 'pending_review'")
+    for bid, epsg in [("q:A", None), ("q:B", None), ("r:H1", 25832), ("r:H2", 25832)]:
+        con.execute("INSERT INTO findings (rid, seq, code, severity, epsg, text) SELECT rid, 900, 'crs_inferred', "
+                    "'warning', ?, 'inferred' FROM boreholes WHERE id = ?", (epsg, bid))
+    con.commit()
+    con.close()
+    groups = client.get("/api/review-queue/crs-groups")
+    assert groups.status_code == 200 and [(g["group"], g["epsg"]) for g in groups.json()] == [("r", 25832)]
+    detail = client.get("/api/boreholes/q:A")
+    assert detail.status_code == 200 and detail.json()["crs_group"] is None

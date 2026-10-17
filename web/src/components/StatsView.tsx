@@ -1,13 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { fetchStatsDetail } from '../api'
-import { words } from '../format'
+import { fmtCount as n, percentOf as pct, words } from '../format'
 import { lithStyle, patternId } from '../lithology'
 import { SEVERITY_LABEL } from '../review'
-import { hasFilters } from '../url'
+import { hasFilters, type StatsTab } from '../url'
 import type { Filters, StatsDetail } from '../types'
+import { QualityView } from './QualityView'
+import { Bar, Shares } from './StatsParts'
 
 interface Props {
   filters: Filters
+  tab: StatsTab
+  onTab: (tab: StatsTab) => void
   /** Narrow the map to a document group (the list's group filter). */
   onShowGroup: (group: string) => void
   /** Open the review queue on the release audit sample. */
@@ -15,42 +19,48 @@ interface Props {
   onClose: () => void
 }
 
+const TABS: [StatsTab, string][] = [['data', 'Data'], ['quality', 'Quality & models']]
 const LITH_ROWS = 10
-const n = (v: number) => v.toLocaleString('en')
-const pct = (part: number, whole: number) => (whole ? Math.round((100 * part) / whole) : 0)
 
-/** One stacked bar of shares, each part labelled with its count beside the bar (colour is never the only cue). */
-function Shares({ parts, label }: { parts: { key: string; label: string; value: number; color: string }[]; label: string }) {
-  const total = parts.reduce((s, p) => s + p.value, 0)
+export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onClose }: Props) {
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
+
+  const onKey = (e: KeyboardEvent) => {
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+    if (!step) return
+    e.preventDefault()
+    const next = (TABS.findIndex(([key]) => key === tab) + step + TABS.length) % TABS.length
+    onTab(TABS[next][0])
+    tabRefs.current[next]?.focus()
+  }
+
   return (
-    <figure className="stats-shares">
-      <div className="stats-stack" role="img" aria-label={`${label}: ${parts.map((p) => `${p.label} ${p.value}`).join(', ')}`}>
-        {parts.filter((p) => p.value > 0).map((p) => (
-          <span key={p.key} style={{ flexGrow: p.value, background: p.color }} title={`${p.label}: ${n(p.value)} (${pct(p.value, total)} %)`} />
-        ))}
+    <div className="stats-view">
+      <header className="stats-head">
+        <div className="stats-title">
+          <h2>Statistics</h2>
+          <button className="btn" onClick={onClose}>Back to map</button>
+        </div>
+        <div className="stats-tabs" role="tablist" aria-label="Statistics" onKeyDown={onKey}>
+          {TABS.map(([key, label], i) => (
+            <button key={key} ref={(el) => { tabRefs.current[i] = el }} role="tab" id={`stats-tab-${key}`}
+              aria-selected={tab === key} aria-controls={`stats-panel-${key}`} tabIndex={tab === key ? 0 : -1}
+              className={`stats-tab${tab === key ? ' stats-tab-on' : ''}`} onClick={() => onTab(key)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </header>
+      <div role="tabpanel" id={`stats-panel-${tab}`} aria-labelledby={`stats-tab-${tab}`}>
+        {tab === 'data'
+          ? <DataTab filters={filters} onShowGroup={onShowGroup} />
+          : <QualityView onReviewAudit={onReviewAudit} />}
       </div>
-      <figcaption className="stats-legend">
-        {parts.map((p) => (
-          <span key={p.key}><i style={{ background: p.color }} />{p.label} <b>{n(p.value)}</b> <span className="muted">{pct(p.value, total)} %</span></span>
-        ))}
-      </figcaption>
-    </figure>
+    </div>
   )
 }
 
-/** A horizontal bar on a shared scale. `pattern`: a lithology pattern, drawn in SVG (CSS cannot paint with it). */
-function Bar({ value, max, fill, pattern, title }: { value: number; max: number; fill?: string; pattern?: string; title: string }) {
-  const width = `${max ? (100 * value) / max : 0}%`
-  return (
-    <span className="stats-bar" title={title}>
-      {pattern
-        ? <svg width="100%" height="100%" aria-hidden="true"><rect width={width} height="100%" rx={2} fill={`url(#${pattern})`} /></svg>
-        : <span style={{ width, ...(fill ? { background: fill } : {}) }} />}
-    </span>
-  )
-}
-
-export function StatsView({ filters, onShowGroup, onReviewAudit, onClose }: Props) {
+function DataTab({ filters, onShowGroup }: Pick<Props, 'filters' | 'onShowGroup'>) {
   const [stats, setStats] = useState<StatsDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -74,17 +84,11 @@ export function StatsView({ filters, onShowGroup, onReviewAudit, onClose }: Prop
   const findingMax = Math.max(1, ...findings.map((f) => f.records))
 
   return (
-    <div className="stats-view">
-      <header className="stats-head">
-        <div className="stats-title">
-          <h2>Statistics</h2>
-          <button className="btn" onClick={onClose}>Back to map</button>
-        </div>
-        <p className="muted">
-          {hasFilters(filters) ? 'For the records the current filters select' : 'All records in the database'}, holes without a
-          position included. Change the filters in the list to narrow it.
-        </p>
-      </header>
+    <>
+      <p className="stats-intro muted">
+        {hasFilters(filters) ? 'For the records the current filters select' : 'All records in the database'}, holes without a
+        position included. Change the filters in the list to narrow it.
+      </p>
       {error && <p className="error" role="alert">{error}</p>}
       {!s ? (!error && <p className="muted">Loading…</p>) : (
         <div className="stats-grid">
@@ -128,50 +132,23 @@ export function StatsView({ filters, onShowGroup, onReviewAudit, onClose }: Prop
               released in all: <b>{n(s.funnel.released)}</b></p>
           </section>
 
-          <section className="stats-card" aria-labelledby="stats-audit">
-            <h3 id="stats-audit">Release audit</h3>
-            <p className="muted">How often an automatic release is wrong: a random sample of released records, checked by a
-              person. A correction or rejection counts as wrong. Over the whole database.</p>
-            {!s.audit ? (
-              <p className="stats-note">No sample drawn yet: run <code>python -m pipeline eval audit</code>.</p>
-            ) : (
-              <>
-                {s.audit.reviewed > 0 ? (
-                  <p className="stats-figure">
-                    <b>{Math.round(100 * (s.audit.rate ?? 0))} %</b> wrong
-                    <span className="muted"> ({n(s.audit.wrong)} of {n(s.audit.reviewed)}; 95 % interval
-                      {' '}{Math.round(100 * s.audit.low)}–{Math.round(100 * s.audit.high)} %)</span>
-                  </p>
-                ) : <p className="stats-note">None of the sample checked yet.</p>}
-                <Shares label="Audit progress" parts={[
-                  { key: 'checked', label: 'Checked', value: s.audit.reviewed, color: 'var(--water)' },
-                  { key: 'open', label: 'Not checked yet', value: s.audit.sample - s.audit.reviewed, color: 'var(--grid)' },
-                ]} />
-                {s.audit.reviewed < s.audit.sample && (
-                  <button className="btn stats-action" onClick={onReviewAudit}>Check the sample in the review queue</button>
-                )}
-              </>
-            )}
-          </section>
-
-          <section className="stats-card" aria-labelledby="stats-findings">
-            <h3 id="stats-findings">Findings</h3>
-            <p className="muted">Records per finding, blocking ones first; notes are left out.</p>
-            <table className="stats-table">
-              <thead><tr><th>Finding</th><th>Severity</th><th className="num" colSpan={2}>Records</th></tr></thead>
-              <tbody>
-                {findings.map((f) => (
-                  <tr key={`${f.code}-${f.severity}`}>
-                    <td>{words(f.code)}</td>
-                    <td><span className={`sev sev-${f.severity}`}>{SEVERITY_LABEL[f.severity]}</span></td>
-                    <td className="stats-bar-cell">
-                      <Bar value={f.records} max={findingMax} title={`${words(f.code)}: ${n(f.records)} records, ${n(f.count)} findings`} />
-                    </td>
-                    <td className="num">{n(f.records)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <section className="stats-card" aria-labelledby="stats-depth">
+            <h3 id="stats-depth">Final depth</h3>
+            <p className="muted">Holes per {s.depth_bin_m} m of final depth.</p>
+            <div className="stats-columns" role="img"
+              aria-label={s.depths.map((v, i) => `${i * s.depth_bin_m} m: ${v}`).join(', ')}>
+              {s.depths.map((v, i) => {
+                const range = i === s.depths.length - 1 ? `${i * s.depth_bin_m}+` : `${i * s.depth_bin_m}–${(i + 1) * s.depth_bin_m}`
+                return (
+                  <div key={i} className="stats-column" title={`${range} m: ${n(v)} holes`}>
+                    <span className="stats-column-value">{v || ''}</span>
+                    <span className="stats-column-bar" style={{ height: `${(100 * v) / depthMax}%` }} />
+                    <span className="stats-column-label">{range}</span>
+                  </div>
+                )
+              })}
+            </div>
+            <p className="stats-axis muted">metres</p>
           </section>
 
           <section className="stats-card" aria-labelledby="stats-lith">
@@ -192,23 +169,40 @@ export function StatsView({ filters, onShowGroup, onReviewAudit, onClose }: Prop
             </ol>
           </section>
 
-          <section className="stats-card" aria-labelledby="stats-depth">
-            <h3 id="stats-depth">Final depth</h3>
-            <p className="muted">Holes per {s.depth_bin_m} m of final depth.</p>
-            <div className="stats-columns" role="img"
-              aria-label={s.depths.map((v, i) => `${i * s.depth_bin_m} m: ${v}`).join(', ')}>
-              {s.depths.map((v, i) => {
-                const range = i === s.depths.length - 1 ? `${i * s.depth_bin_m}+` : `${i * s.depth_bin_m}–${(i + 1) * s.depth_bin_m}`
-                return (
-                  <div key={i} className="stats-column" title={`${range} m: ${n(v)} holes`}>
-                    <span className="stats-column-value">{v || ''}</span>
-                    <span className="stats-column-bar" style={{ height: `${(100 * v) / depthMax}%` }} />
-                    <span className="stats-column-label">{range}</span>
-                  </div>
-                )
-              })}
-            </div>
-            <p className="stats-axis muted">metres</p>
+          {s.crs.length > 0 && (
+            <section className="stats-card" aria-labelledby="stats-crs">
+              <h3 id="stats-crs">Coordinate systems</h3>
+              <p className="muted">Holes per coordinate system their position was read in.</p>
+              <ol className="stats-rows">
+                {s.crs.map(([epsg, count]) => (
+                  <li key={epsg}>
+                    <span className="stats-label">EPSG:{epsg}</span>
+                    <Bar value={count} max={s.crs[0][1]} title={`EPSG:${epsg}: ${n(count)} holes`} />
+                    <span className="stats-value">{n(count)}</span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+
+          <section className="stats-card stats-wide" aria-labelledby="stats-findings">
+            <h3 id="stats-findings">Findings</h3>
+            <p className="muted">Records per finding, blocking ones first; notes are left out.</p>
+            <table className="stats-table">
+              <thead><tr><th>Finding</th><th>Severity</th><th className="num" colSpan={2}>Records</th></tr></thead>
+              <tbody>
+                {findings.map((f) => (
+                  <tr key={`${f.code}-${f.severity}`}>
+                    <td>{words(f.code)}</td>
+                    <td><span className={`sev sev-${f.severity}`}>{SEVERITY_LABEL[f.severity]}</span></td>
+                    <td className="stats-bar-cell">
+                      <Bar value={f.records} max={findingMax} title={`${words(f.code)}: ${n(f.records)} records, ${n(f.count)} findings`} />
+                    </td>
+                    <td className="num">{n(f.records)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </section>
 
           <section className="stats-card stats-wide" aria-labelledby="stats-groups">
@@ -231,24 +225,8 @@ export function StatsView({ filters, onShowGroup, onReviewAudit, onClose }: Prop
               </tbody>
             </table>
           </section>
-
-          {s.crs.length > 0 && (
-            <section className="stats-card" aria-labelledby="stats-crs">
-              <h3 id="stats-crs">Coordinate systems</h3>
-              <p className="muted">Holes per coordinate system their position was read in.</p>
-              <ol className="stats-rows">
-                {s.crs.map(([epsg, count]) => (
-                  <li key={epsg}>
-                    <span className="stats-label">EPSG:{epsg}</span>
-                    <Bar value={count} max={s.crs[0][1]} title={`EPSG:${epsg}: ${n(count)} holes`} />
-                    <span className="stats-value">{n(count)}</span>
-                  </li>
-                ))}
-              </ol>
-            </section>
-          )}
         </div>
       )}
-    </div>
+    </>
   )
 }

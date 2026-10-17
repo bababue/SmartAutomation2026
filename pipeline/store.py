@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS boreholes (
     extracted TEXT,  -- model output before reviewer corrections (layers, position), for evaluation
     ground TEXT  -- derived ground model values (pipeline/ground.py)
 );
-CREATE INDEX IF NOT EXISTS boreholes_status ON boreholes (review_status, score);
 CREATE VIRTUAL TABLE IF NOT EXISTS boreholes_rtree USING rtree(rid, min_lat, max_lat, min_lon, max_lon);
 CREATE INDEX IF NOT EXISTS boreholes_doc ON boreholes (doc_id);
 -- Full-text rows share the borehole's rid as rowid, so updates and deletes are point operations.
@@ -202,7 +201,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
         _migrate_v3(con)
     if con.execute("PRAGMA user_version").fetchone()[0] < 4:
         _migrate_v4(con)
-    con.execute("CREATE INDEX IF NOT EXISTS boreholes_queue ON boreholes (review_status, score, name, id)")
+    con.execute("DROP INDEX IF EXISTS boreholes_status")  # a prefix of boreholes_queue
     return con
 
 
@@ -292,8 +291,10 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
         decision = (old, content_hash(old))
     else:  # stored under another id before: the decision follows the uid, as corrections do
         decision = _logged_decision(con, uid)
+    if decision and _blocking(decision[0]) != _blocking(bh):
+        revision += 1  # the content hash leaves findings out: this stops a review screen opened before them
     if decision and decision[0].review_status in HUMAN:
-        revision = _carry_decision(bh, *decision, digest, revision)
+        _carry_decision(bh, *decision, digest)
     version_id = _version(con, uid, digest, bh.model_dump_json())
     _insert(con, bh, digest, extracted_json, uid, version_id, revision)
     _remember_aliases(con, bh, uid)
@@ -317,14 +318,13 @@ def _logged_decision(con: sqlite3.Connection, uid: str) -> tuple[Borehole, str] 
     return old, content_hash(old) if version else event["content_hash"]
 
 
-def _carry_decision(bh: Borehole, old: Borehole, old_digest: str, digest: str, revision: int) -> int:
-    """Carry the human decision on `old` over to `bh`; returns the review revision."""
+def _carry_decision(bh: Borehole, old: Borehole, old_digest: str, digest: str) -> None:
+    """Carry the human decision on `old` over to `bh`."""
     new_blocking = _new_blocking(old, bh) if old.review_status == ReviewStatus.approved else []
     if old_digest == digest and not new_blocking:
         bh.review_status, bh.reviewed_by = old.review_status, old.reviewed_by
         bh.reviewed_at, bh.review_comment = old.reviewed_at, old.review_comment
     elif old_digest == digest:
-        revision += 1  # same hash: only the revision stops a review screen opened before from approving
         bh.review_status = ReviewStatus.pending_review
         bh.score_reasons = [f"New blocking finding since the approval by {old.reviewed_by or 'a reviewer'}: "
                             + "; ".join(new_blocking)] + bh.score_reasons
@@ -332,7 +332,6 @@ def _carry_decision(bh: Borehole, old: Borehole, old_digest: str, digest: str, r
         bh.review_status = ReviewStatus.pending_review
         bh.score_reasons = [f"Data changed since the {old.review_status.value} decision by "
                             f"{old.reviewed_by or 'a reviewer'}"] + bh.score_reasons
-    return revision
 
 
 def _new_blocking(old: Borehole, bh: Borehole) -> list[str]:
@@ -347,6 +346,10 @@ def _new_blocking(old: Borehole, bh: Borehole) -> list[str]:
     return [i for i in bh.issues if rules(i) - seen]
 
 
+def _blocking(bh: Borehole) -> set[str]:
+    return {i for i in bh.issues if scoring.is_blocking(i)}
+
+
 def natural_key(bh: Borehole) -> str:
     """The hole by what it is: document group, type and number ('nk:report|borehole|12')."""
     from .assemble import hole_key  # assembly rules define what counts as the same hole
@@ -355,16 +358,25 @@ def natural_key(bh: Borehole) -> str:
 
 
 def _resolve_uid(con: sqlite3.Connection, bh: Borehole) -> str | None:
-    """The uid this record had before: by its natural key (the same hole by definition, also while its old
-    record under another id is still stored during a rebuild), else by its id unless another current record
-    holds that uid."""
+    """The uid this record had before: by its natural key, else by its id unless another current record holds
+    that uid. Two documents of a group can each have a hole of one natural key, so it names a hole of this
+    record's own document only, and one that no current record of another document holds. A write replaces
+    whole documents: the hole's old record under another id may still be stored then."""
+    doc = doc_of(bh.borehole_id)
     row = con.execute("SELECT uid FROM borehole_aliases WHERE alias = ?", (natural_key(bh),)).fetchone()
-    if row:
+    if row and doc in _documents(con, row["uid"]) and not con.execute(
+            "SELECT 1 FROM boreholes WHERE uid = ? AND doc_id != ?", (row["uid"], doc)).fetchone():
         return row["uid"]
     row = con.execute("SELECT uid FROM borehole_aliases WHERE alias = ?", (bh.borehole_id,)).fetchone()
     if row and not con.execute("SELECT 1 FROM boreholes WHERE uid = ? AND id != ?", (row["uid"], bh.borehole_id)).fetchone():
         return row["uid"]
     return None
+
+
+def _documents(con: sqlite3.Connection, uid: str) -> set[str]:
+    """The documents this hole had a record in, under any id."""
+    return {doc_of(r["alias"]) for r in con.execute("SELECT alias FROM borehole_aliases WHERE uid = ?", (uid,))
+            if not r["alias"].startswith("nk:")}
 
 
 def uid_for(con: sqlite3.Connection, bh: Borehole) -> str | None:
@@ -474,20 +486,29 @@ def record_review(con: sqlite3.Connection, borehole_id: str, decision: ReviewSta
         if expected_revision is not None and row["review_revision"] != expected_revision:
             raise StaleReview(borehole_id)
         bh = Borehole.model_validate_json(row["data"])
+        version_id = row["version_id"]
+        # The content hash leaves findings out: a blocking finding added since the version was stored gets a
+        # version of its own, so the decision names what the reviewer saw.
+        version = con.execute("SELECT data FROM record_versions WHERE id = ?", (version_id,)).fetchone()
+        if row["uid"] and (version is None or _blocking(Borehole.model_validate_json(version["data"])) != _blocking(bh)):
+            version_id = con.execute(
+                "INSERT INTO record_versions (uid, content_hash, data, created_at) VALUES (?, ?, ?, ?)",
+                (row["uid"], row["content_hash"], row["data"], datetime.now(timezone.utc).isoformat())).lastrowid
         now = datetime.now(timezone.utc)
         bh.review_status = decision
         bh.reviewed_by = reviewer if decision in HUMAN else None
         bh.reviewed_at = now if decision in HUMAN else None
         bh.review_comment = comment if decision in HUMAN else None
         con.execute(
-            "UPDATE boreholes SET review_status = ?, data = ?, review_revision = review_revision + 1 WHERE id = ?",
-            (decision.value, bh.model_dump_json(), borehole_id),
+            "UPDATE boreholes SET review_status = ?, data = ?, version_id = ?, review_revision = review_revision + 1 "
+            "WHERE id = ?",
+            (decision.value, bh.model_dump_json(), version_id, borehole_id),
         )
         con.execute(  # the version id records exactly which content the decision was about
             "INSERT INTO review_events (borehole_id, decision, reviewer, comment, at, content_hash, uid, version_id) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (borehole_id, decision.value, reviewer, comment, now.isoformat(), row["content_hash"], row["uid"],
-             row["version_id"]),
+             version_id),
         )
     return bh
 

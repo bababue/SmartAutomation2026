@@ -19,13 +19,14 @@ interface Props {
   onFinishDrawing: () => void
   onCancelDrawing: () => void
   onSelectNearby: () => void
+  onClearBoreholes: () => void
   onToggleHole: (id: string) => void
   onDelete: () => void
   onClose: () => void
 }
 
 export function RoutePanel({ name, project, route, draft, candidates, selectedIds, loading, error, onChange, onRename, onImport,
-  onStartDrawing, onUndo, onFinishDrawing, onCancelDrawing, onSelectNearby, onToggleHole, onDelete, onClose }: Props) {
+  onStartDrawing, onUndo, onFinishDrawing, onCancelDrawing, onSelectNearby, onClearBoreholes, onToggleHole, onDelete, onClose }: Props) {
   const fileInput = useRef<HTMLInputElement>(null)
   const [importError, setImportError] = useState<string | null>(null)
 
@@ -40,6 +41,7 @@ export function RoutePanel({ name, project, route, draft, candidates, selectedId
   }
 
   const set = (change: Partial<TunnelRoute>) => { if (route) onChange({ ...route, ...change }) }
+  const allNearbySelected = candidates.length > 0 && candidates.every((candidate) => selectedIds.includes(candidate.id))
 
   return (
     <section className="tunnel-detail" aria-label="Tunnel details">
@@ -81,7 +83,9 @@ export function RoutePanel({ name, project, route, draft, candidates, selectedId
               onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) set({ corridorM: Math.min(5000, value) }) }} />
           </label>
           <div className="route-actions">
-            <button className="btn" onClick={onSelectNearby} disabled={loading || !candidates.length}>Use {candidates.length} nearby boreholes</button>
+            <button className="btn" onClick={allNearbySelected ? onClearBoreholes : onSelectNearby} disabled={loading || !candidates.length}>
+              {allNearbySelected ? 'Clear boreholes' : `Use ${candidates.length} nearby boreholes`}
+            </button>
           </div>
           {loading && <p className="muted" role="status">Finding boreholes…</p>}
           {error && <p className="error" role="alert">{error}</p>}

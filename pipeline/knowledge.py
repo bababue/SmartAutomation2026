@@ -32,7 +32,7 @@ from schema.borehole import Borehole, GeorefMethod, Lithology
 
 from . import corrections, store
 from .georef import apply_reading, candidates, haversine_km, pairs, parse_tokens, resolve_with
-from .scoring import RELATIVE_PIECE
+from .scoring import RELATIVE_PIECE, finding_severity
 
 TRUSTED_CONFIRMATIONS = 3  # before a learned coordinate system counts as stated
 
@@ -209,8 +209,12 @@ def document_grids(con: sqlite3.Connection, boreholes: list[Borehole]) -> dict[s
 
 
 def _settle_position(bh: Borehole) -> None:
-    bh.issues = [i for i in bh.issues if not i.startswith(corrections.GEOREF_ISSUES)
-                 and not corrections.GEOREF_UNREADABLE.search(i)]
+    """Drop the position doubts a learned system or grid answers. A finding that holds the release by itself
+    (a second reading that disagrees on the digits, an invalid position) stays for a person, except the CRS
+    ambiguity: deciding between systems is what the learned one is for."""
+    bh.issues = [i for i in bh.issues
+                 if not (i.startswith(corrections.GEOREF_ISSUES) or corrections.GEOREF_UNREADABLE.search(i))
+                 or finding_severity(i) in ("blocking", "needs_look") and not i.startswith("CRS ambiguous")]
 
 
 def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str]:

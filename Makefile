@@ -6,6 +6,7 @@ install:
 	python3 -m venv .venv
 	$(PY) -m pip install -r requirements.txt
 	cd web && npm ci
+	@command -v soffice >/dev/null || echo "LibreOffice not found: DOCX files are read from their embedded images only (brew install --cask libreoffice)"
 
 check: test web
 

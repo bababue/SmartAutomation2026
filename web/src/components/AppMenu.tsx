@@ -2,14 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { exportUrl } from '../api'
 
 interface Props {
-  inReview: boolean
   inStats: boolean
   uploading: boolean
   dark: boolean
   view3d: boolean
-  onToggleReview: () => void
   onToggleStats: () => void
-  onCreateTunnel: () => void
   onUpload: () => void
   onToggleDark: () => void
   onToggleView3d: () => void
@@ -18,7 +15,6 @@ interface Props {
 type Sub = 'export'
 
 const ICON = {
-  review: 'M6.5 2.5h5v2h-5zM5 3.5H3.5v12h11v-12H13M6.5 10l1.75 1.75L11.5 8.5',
   map: 'M2.5 4.5 6.5 3l5 1.5 4-1.5v10.5l-4 1.5-5-1.5-4 1.5zM6.5 3v10.5M11.5 4.5V15',
   upload: 'M9 12V3M5.5 6.5 9 3l3.5 3.5M3 12v3h12v-3',
   export: 'M9 3v9M5.5 8.5 9 12l3.5-3.5M3 12v3h12v-3',
@@ -28,15 +24,14 @@ const ICON = {
   file: 'M5 2.5h5.5l3 3v10H5zM10.5 2.5v3h3',
   chevron: 'M7 4.5 11.5 9 7 13.5',
   stats: 'M3 15V9.5M7.5 15V4M12 15v-7M16 15H2',
-  tunnel: 'M2 14.5V11a7 7 0 0 1 14 0v3.5M5 14.5V11a4 4 0 0 1 8 0v3.5M2 14.5h14',
 }
 
 function Icon({ d }: { d: string }) {
   return <svg className="menu-icon" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d={d} /></svg>
 }
 
-export function AppMenu({ inReview, inStats, uploading, dark, view3d, onToggleReview, onToggleStats,
-  onCreateTunnel, onUpload, onToggleDark, onToggleView3d }: Props) {
+export function AppMenu({ inStats, uploading, dark, view3d, onToggleStats,
+  onUpload, onToggleDark, onToggleView3d }: Props) {
   const [open, setOpen] = useState(false)
   const [sub, setSub] = useState<Sub | null>(null)
   const root = useRef<HTMLDivElement>(null)
@@ -103,18 +98,12 @@ export function AppMenu({ inReview, inStats, uploading, dark, view3d, onToggleRe
       </button>
       {open && (
         <div className="app-menu-list" role="menu" aria-label="Menu">
-          <button role="menuitem" className="app-menu-item" onClick={pick(onToggleReview)} onMouseEnter={() => setSub(null)}>
-            <Icon d={inReview ? ICON.map : ICON.review} /><span className="menu-text">{inReview ? 'Back to map' : 'Review'}</span>
-          </button>
           <button role="menuitem" className="app-menu-item" onClick={pick(onToggleStats)} onMouseEnter={() => setSub(null)}>
             <Icon d={inStats ? ICON.map : ICON.stats} /><span className="menu-text">{inStats ? 'Back to map' : 'Statistics'}</span>
           </button>
           <button role="menuitem" className="app-menu-item" onClick={pick(onUpload)} onMouseEnter={() => setSub(null)}
             title="Files chosen together are read as one batch. Or drop them anywhere on the page.">
             <Icon d={ICON.upload} /><span className="menu-text">{uploading ? 'Upload more documents' : 'Upload documents'}</span>
-          </button>
-          <button role="menuitem" className="app-menu-item" onClick={pick(onCreateTunnel)} onMouseEnter={() => setSub(null)}>
-            <Icon d={ICON.tunnel} /><span className="menu-text">New tunnel</span>
           </button>
           <div className="menu-sub" onMouseEnter={() => setSub('export')}>
             {subTrigger('export', 'Export released', ICON.export)}

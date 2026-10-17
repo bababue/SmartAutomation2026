@@ -114,3 +114,13 @@ def test_guard_limits_and_records_calls_but_not_cache_hits(tmp_path, monkeypatch
     with llm.guarded(["d"], stopped), pytest.raises(llm.Cancelled):
         llm._cached("classify", second, lambda m, e: "k2", "m", "e", PageClassification, produce)
     assert len(calls) == 1  # no call for a cancelled document
+
+
+def test_an_extraction_prompt_change_keeps_the_cached_classification(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PAGES_DIR", tmp_path)
+    (tmp_path / "t.jpg").write_bytes(b"\xff\xd8")
+    page = PageImage(doc_id="d", page=1, image="t.jpg", thumb="t.jpg", text="", width=1, height=1)
+    classify, extract = llm._classify_key(page, "m", "e"), llm._extract_key(page, "borehole_log", "", "m", "e")
+    monkeypatch.setattr(config, "PROMPT_VERSION", "next")
+    assert llm._classify_key(page, "m", "e") == classify
+    assert llm._extract_key(page, "borehole_log", "", "m", "e") != extract

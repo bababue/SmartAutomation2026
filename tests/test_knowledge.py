@@ -194,3 +194,35 @@ def test_confirmed_crs_preserves_independent_notation_doubts():
     assert bh.location.confidence == 0.8 and bh.location.accuracy_m > 400
     assert bh.review_status.value == "pending_review"
     assert any(i.startswith("coordinate notation or datum ambiguous") for i in bh.issues)
+
+
+def freiburg_hole(*issues):
+    from pipeline.georef import georeference
+    lat, lon = 47.9955, 7.8529  # Freiburg Minster
+    e, n = Transformer.from_crs(4326, 25832, always_xy=True).transform(lon, lat)
+    geo = georeference(f"E {e:.0f} N {n:.0f}", None, "DE", lat, lon, 3)
+    bh = hole("de:BH1", (lat, lon), f"E {e:.0f} N {n:.0f}")
+    bh.location, bh.issues = geo.location, geo.issues + list(issues)
+    assert bh.location.confidence < 0.9 and any(i.startswith("coordinate system inferred") for i in bh.issues)
+    notes = knowledge.apply(bh, [{"kind": "crs", "scope_type": "region", "confirmations": 3, "payload": {"epsg": 25832}}])
+    bh.issues += notes
+    score(bh, {}, 0)
+    return bh
+
+
+def test_trusted_learned_crs_settles_inferred_and_ambiguous_systems():
+    bh = freiburg_hole("CRS ambiguous: EPSG:25832, EPSG:32632")
+    assert bh.location.crs_epsg == 25832 and bh.location.confidence == 0.9
+    assert not any(i.startswith(("coordinate system inferred", "CRS ambiguous")) for i in bh.issues)
+    assert bh.review_status.value == "auto_approved"
+
+
+@pytest.mark.parametrize("finding", [
+    "coordinates read differently on a second look: 'E 413000 N 5316900', 900 m from the first reading",
+    "coordinate system read differently on a second look: 'Gauss-Krueger zone 3'",
+    "coordinates not found on a second look",
+])
+def test_learned_crs_keeps_a_second_reading_that_disagrees(finding):
+    bh = freiburg_hole(finding)
+    assert finding in bh.issues
+    assert bh.review_status.value == "pending_review"

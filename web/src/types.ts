@@ -108,10 +108,13 @@ export interface ReviewEvent {
 export interface QueueItem {
   id: string
   name: string
+  grp: string
   project: string | null
   location_name: string | null
   country: string | null
   score: number | null
+  review_status: ReviewStatus
+  loc_method: Location['method']
   n_layers: number
   source_file: string | null
   reasons: string[]
@@ -121,6 +124,7 @@ export interface QueueItem {
 export interface QueuePage {
   items: QueueItem[]
   total: number
+  groups: Pick<GroupFacet, 'group' | 'project' | 'count' | 'released'>[]
 }
 
 /** Where a waiting record's position comes from; 'crs_inferred': its coordinate system is only inferred. */
@@ -198,7 +202,7 @@ export interface FindingFacet {
   records: number
 }
 
-/** A document group among all matches: its project, how many holes, how many released, where. */
+/** A document group among all matches: its project, how many holes, how many released. */
 export interface GroupFacet {
   group: string
   /** The project name its holes give most often; null: none gives one. */
@@ -271,8 +275,90 @@ export interface StatsDetail {
   depths: number[]
   groups: { group: string; count: number; released: number; top_finding: { code: string; records: number } | null }[]
   crs: [number, number][]
+}
+
+export interface Share { hit: number; of: number }
+
+/** Reference records compared with one run's model output (pipeline/evaluate.py). */
+export interface QualityMetrics {
+  records: number
+  missing: number
+  corrected: number
+  boundaries: Share
+  precision: Share
+  /** Metres of the reference log with the same lithology at the same depth. */
+  lithology_depth: Share
+  final_depth: Share
+  groundwater: Share
+  lab: Share
+  position_median_m: number | null
+  position_max_m: number | null
+  without_position: number
+  crs_changed: number
+}
+
+/** Per page of an arm's own extractions; tokens are null where the backend does not report them. */
+export interface RunStats {
+  pages: number
+  model: string | null
+  seconds_per_page: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  usd_per_page: number | null
+  /** Billed or priced from tokens; false: the pipeline's estimate for the model. */
+  usd_measured: boolean
+}
+
+export interface ModelEvaluation {
+  generated: string
+  reference: { records: number; documents: number; created: string | null }
+  /** The current database's model output (before reviewer corrections) against the reference. */
+  current: QualityMetrics
+  /** Arms that ran one prompt with different models, on the reference records all of them extracted themselves. */
+  models: { prompt: string; records: number; runs: (RunStats & { arm: string; metrics: QualityMetrics })[] } | null
+  /** Every prompt experiment, scored on the reference records every arm extracted itself. */
+  arms: {
+    records: number
+    documents: number
+    runs: (RunStats & { name: string; date: string; prompt: string | null; covered: number; metrics: QualityMetrics })[]
+  }
+  /** Agreement with `against` on a few pages, not accuracy. Ranges are [low, high] over repeated runs. */
+  benchmark: {
+    pages: number
+    documents: number
+    against: string
+    rows: { model: string; route: string; seconds_per_page: [number, number]; usd_per_page: number;
+      boundaries: [number, number]; lithology: [number, number] }[]
+  }
+  /** Log pages in the corpus, for projections. */
+  log_pages: number
+}
+
+export interface UsageRow {
+  model: string | null
+  endpoint: string | null
+  stage: string | null
+  calls: number
+  errors: number
+  pages: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number | null
+  /** Calls with a known cost. */
+  priced: number
+  seconds: number
+  first: string
+  last: string
+}
+
+export interface Quality {
+  /** live: computed from data/eval; snapshot: the committed fixtures/model_evaluation.json. */
+  source: 'live' | 'snapshot' | 'none'
+  evaluation: ModelEvaluation | null
   /** Release audit over the whole database; null: no sample drawn yet (`pipeline eval audit`). */
   audit: { sample: number; reviewed: number; wrong: number; rate: number | null; low: number; high: number } | null
+  /** Model calls recorded in this database, per model, backend and stage. */
+  usage: UsageRow[]
 }
 
 /** An accepted upload batch: its job, and which files are read or skipped. */
