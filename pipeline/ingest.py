@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -203,35 +204,37 @@ def render(doc: SourceDoc, dataset_dir: Path | None = None) -> list[PageImage]:
     for old in out_dir.glob("*.jpg"):
         old.unlink()  # page count may change
 
-    if converted:
-        d = pymupdf.open(converted)
-        pdf_pages = [(p, p.get_text()) for p in d]
-    elif doc.kind == "docx":
-        print(f"  ! {doc.path}: no PDF rendering; using embedded images only, which can split logs laid out from "
-              "several images", file=sys.stderr)
-        sources = [pymupdf.open(stream=blob, filetype=ext) for blob, ext in _docx_images(src)]
-        pdf_pages = [(d[0], "") for d in sources]
-    else:
-        d = text_pdf(src) if doc.kind == "text" else sheet_pdf(src) if doc.kind == "sheet" else pymupdf.open(src)
-        pdf_pages = [(p, p.get_text() if doc.kind in ("pdf", "text", "sheet") else "") for p in d]
-
     pages = []
-    for i, (page, text) in enumerate(pdf_pages, start=1):
-        full, thumb = out_dir / f"{i:04d}.jpg", out_dir / f"{i:04d}.thumb.jpg"
-        upscale = doc.kind in ("pdf", "text", "sheet")  # raster sources gain nothing from upscaling
-        w, h = _save(page, config.EXTRACT_LONG_EDGE, full, upscale)
-        _save(page, config.THUMB_LONG_EDGE, thumb, upscale)
-        pages.append(
-            PageImage(
-                doc_id=doc.doc_id,
-                page=i,
-                image=str(full.relative_to(config.PAGES_DIR)),
-                thumb=str(thumb.relative_to(config.PAGES_DIR)),
-                text=text.strip(),
-                width=w,
-                height=h,
+    with ExitStack() as opened:
+        if converted:
+            d = opened.enter_context(pymupdf.open(converted))
+            pdf_pages = [(p, p.get_text()) for p in d]
+        elif doc.kind == "docx":
+            print(f"  ! {doc.path}: no PDF rendering; using embedded images only, which can split logs laid out "
+                  "from several images", file=sys.stderr)
+            sources = [opened.enter_context(pymupdf.open(stream=blob, filetype=ext)) for blob, ext in _docx_images(src)]
+            pdf_pages = [(d[0], "") for d in sources]
+        else:
+            d = opened.enter_context(text_pdf(src) if doc.kind == "text" else sheet_pdf(src) if doc.kind == "sheet"
+                                     else pymupdf.open(src))
+            pdf_pages = [(p, p.get_text() if doc.kind in ("pdf", "text", "sheet") else "") for p in d]
+
+        for i, (page, text) in enumerate(pdf_pages, start=1):
+            full, thumb = out_dir / f"{i:04d}.jpg", out_dir / f"{i:04d}.thumb.jpg"
+            upscale = doc.kind in ("pdf", "text", "sheet")  # raster sources gain nothing from upscaling
+            w, h = _save(page, config.EXTRACT_LONG_EDGE, full, upscale)
+            _save(page, config.THUMB_LONG_EDGE, thumb, upscale)
+            pages.append(
+                PageImage(
+                    doc_id=doc.doc_id,
+                    page=i,
+                    image=str(full.relative_to(config.PAGES_DIR)),
+                    thumb=str(thumb.relative_to(config.PAGES_DIR)),
+                    text=text.strip(),
+                    width=w,
+                    height=h,
+                )
             )
-        )
     manifest.write_text(json.dumps([asdict(p) for p in pages], ensure_ascii=False), encoding="utf-8")
     marker.write_text(f"{source}\n{fingerprint}", encoding="utf-8")
     return pages

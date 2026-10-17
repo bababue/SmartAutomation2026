@@ -19,7 +19,7 @@ from enum import Enum
 import math
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 Confidence = Annotated[float, Field(ge=0.0, le=1.0)]
 
@@ -29,7 +29,12 @@ CONTINUITY_TOLERANCE_M = 0.02
 MINOR_DISCONTINUITY_M = 0.10
 
 
-class SourceRef(BaseModel):
+class _Model(BaseModel):
+    # A non-finite number serialises to JSON null, which a required field then refuses on every read.
+    model_config = ConfigDict(allow_inf_nan=False)
+
+
+class SourceRef(_Model):
     file: str = Field(description="File name relative to the dataset root")
     page: int | None = Field(None, description="1-based page number (None for single images)")
     bbox: tuple[float, float, float, float] | None = Field(
@@ -45,7 +50,7 @@ class GeorefMethod(str, Enum):
     manual = "manual"  # set by a human reviewer
 
 
-class Location(BaseModel):
+class Location(_Model):
     coords_raw: str | None = Field(
         None,
         description="Coordinate text exactly as written incl. labels, e.g. 'N: 31,12,345 E: 45,03,210'. "
@@ -191,12 +196,12 @@ class Qualifier(str, Enum):
     very = "very"  # "very sandy"
 
 
-class SecondaryComponent(BaseModel):
+class SecondaryComponent(_Model):
     lithology: Lithology
     qualifier: Qualifier | None = None
 
 
-class Layer(BaseModel):
+class Layer(_Model):
     top_m: float
     bottom_m: float
     description_original: str = Field(description="Description verbatim, original language")
@@ -218,7 +223,7 @@ class Layer(BaseModel):
     source: SourceRef | None = None
 
 
-class CoreRun(BaseModel):
+class CoreRun(_Model):
     top_m: float
     bottom_m: float
     core: bool | None = None
@@ -239,7 +244,7 @@ class SampleType(str, Enum):
     other = "other"
 
 
-class Sample(BaseModel):
+class Sample(_Model):
     name: str | None = Field(None, description="SampleName as written, e.g. 'S1', 'UD4'")
     top_m: float = Field(description="SampleDepth (top)")
     bottom_m: float | None = None
@@ -248,7 +253,7 @@ class Sample(BaseModel):
     source: SourceRef | None = None
 
 
-class SPT(BaseModel):
+class SPT(_Model):
     depth_m: float = Field(description="Test depth (top of seating drive)")
     blows: list[int] = Field([], description="Blow counts per increment as written, e.g. [4, 5, 5]")
     increment_mm: int | None = Field(None, description="Length of one increment, usually 150 (sometimes 75)")
@@ -258,7 +263,7 @@ class SPT(BaseModel):
     source: SourceRef | None = None
 
 
-class GroundwaterObservation(BaseModel):
+class GroundwaterObservation(_Model):
     depth_m: float | None = Field(None, description="Groundwaterlevel below ground surface")
     kind: Literal["struck", "standing", "stable", "unknown"] = "unknown"
     observed_on: date | None = None
@@ -328,7 +333,7 @@ LAB_UNITS: dict[LabParameter, str] = {
 }
 
 
-class LabResult(BaseModel):
+class LabResult(_Model):
     parameter: LabParameter
     parameter_raw: str | None = Field(None, description="Column header as written, e.g. 'Cu (kg/cm2)'")
     value: float = Field(description="Converted to the target unit in LAB_UNITS")
@@ -349,7 +354,7 @@ class ReviewStatus(str, Enum):
     rejected = "rejected"  # rejected by a human
 
 
-class ScoreFactor(BaseModel):
+class ScoreFactor(_Model):
     """One influence on the release score: which part it concerns and whether it raised or lowered trust."""
     part: Literal["extraction", "position", "review"]
     effect: Literal["positive", "negative", "neutral"]
@@ -363,7 +368,7 @@ class InvestigationType(str, Enum):
     other = "other"
 
 
-class Borehole(BaseModel):
+class Borehole(_Model):
     borehole_id: str = Field(description="Stable internal ID, e.g. '<file-stem>:<borehole_name>'")
     borehole_name: str = Field(description="Name as written on the log, e.g. 'BH-1', 'BH-07'")
     investigation_type: InvestigationType | None = None

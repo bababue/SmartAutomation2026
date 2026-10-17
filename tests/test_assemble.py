@@ -348,3 +348,38 @@ def test_a_sheet_stays_with_its_name_when_the_numbering_or_date_does_not_point_e
         records = {b.borehole_name: b for b in assemble(pages, deduplicate=False)}
         assert records["B14"].layers[-1].bottom_m == 27.45
         assert not any(i.startswith("sheet assigned") for b in records.values() for i in b.issues)
+
+
+def test_borehole_and_probing_with_one_number_both_stay():
+    hole = _log("1", "E 412000 N 5320000", 300.0, [(0, 6)])
+    probe = _log("1", "E 412500 N 5320500", 301.0, [(0, 4)])
+    records = assemble([PageResult("r", "r.pdf", 1, "borehole_log", PageExtraction(logs=[hole], coordinate_rows=[])),
+                        PageResult("r", "r.pdf", 2, "probe_log", PageExtraction(logs=[probe], coordinate_rows=[]))],
+                       deduplicate=False)
+    assert len({bh.borehole_id for bh in records}) == 2
+    assert next(bh for bh in records if bh.investigation_type.value == "borehole").borehole_id == "r:1"
+
+
+def test_records_of_one_id_and_type_get_distinct_ids():
+    from pipeline.assemble import _unique_ids_by_type
+
+    records = [Borehole(borehole_id="r:1", borehole_name="1", investigation_type="borehole",
+                        sources=[SourceRef(file="r.pdf", page=p)]) for p in (1, 4, 4)]
+    _unique_ids_by_type(records)
+    assert [bh.borehole_id for bh in records] == ["r:1", "r:1-p4", "r:1-p4-2"]
+
+
+def test_implausible_lab_value_on_a_log_page_is_dropped():
+    from pipeline.extraction_models import XLab
+
+    log = _log("BH1", "E 412000 N 5320000", 300.0, [(0, 6)]).model_copy(update={"lab_results": [
+        XLab(parameter="ucs", parameter_raw="UCS", value_raw=v, unit_raw="MPa", top_m=2.0, bottom_m=None,
+             sample_name=None) for v in ("9100", "42")]})
+    [bh] = assemble([PageResult("r", "r.pdf", 1, "borehole_log", PageExtraction(logs=[log], coordinate_rows=[]))])
+    assert [r.value for r in bh.lab_results] == [42.0]
+
+
+def test_first_layer_without_any_depth_is_reported_when_set_to_the_surface():
+    depths, _, notes = _sheet_layers([(None, None, "Topsoil", "topsoil"), (0.4, 3.0, "Sand", "sand")])
+    assert depths[0] == (0, 0.4, "topsoil")
+    assert "boundary inferred: top of the first layer not readable, set to 0 m" in notes

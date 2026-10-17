@@ -126,11 +126,15 @@ def _utm_hint(text: str) -> tuple[list[int], bool]:
     """UTM codes the lower-case CRS text names, and whether it names their datum too."""
     named = [(base, zones) for pattern, base, zones in UTM_DATUMS if re.search(pattern, text)]
     # Datum names carry digits of their own ('WGS 84'): the zone is read without them.
-    m = re.search(r"utm\D{0,12}(\d{1,2}) ?([c-x])?", re.sub("|".join(p for p, _, _ in UTM_DATUMS), "", text))
+    # A letter after the zone is its latitude band only when attached ('32U') or not followed by a value: in
+    # 'Zone 32 E: 512345' the E labels the easting.
+    m = re.search(r"utm\D{0,12}(\d{1,2})(?!\d)(?:([c-x])(?![a-z])| ([c-x])(?![a-z])(?!\s*[:=]?\s*\d))?",
+                  re.sub("|".join(p for p, _, _ in UTM_DATUMS), "", text))
     if not m:
         return [], False
     zone = int(m.group(1))
-    south = m.group(2) is not None and m.group(2) < "n" and "south" not in text
+    band = m.group(2) or m.group(3)
+    south = band is not None and band < "n" and "south" not in text
     if "south" in text or re.search(r"\b\d{1,2} ?s\b", text):
         south = True
     if not named:
@@ -174,8 +178,12 @@ LABEL = (
     r"x-coord|y-coord|øv|ns|n|e|x|y)(?:-?koordinat(?:e|en)?)?"
 )
 # A UTM zone printed beside the values ('UTM Sone: 32') is no coordinate; the zone is read from the text itself.
-ZONE = re.compile(r"\b(?:utm\s*)?(?:zone|sone|zona)\s*[:=]?\s*\d{1,2}\s*[c-x]?(?![\w.,])", re.IGNORECASE)
+ZONE = re.compile(r"\b(?:utm\s*)?(?:zone|sone|zona)\s*[:=]?\s*\d{1,2}(?:[c-x]|\s+[c-x](?!\s*[:=]?\s*\d))?(?![\w.,])",
+                  re.IGNORECASE)
 TOKEN = r"(?P<num>-?\d[\d.,']*\d|-?\d)"  # no spaces: '48.1 7.9' are two values
+# Thousands separated by spaces ('5 412 345,67'). A run of exactly three digits after a space continues the number;
+# '32 512345' (a zone and a value) and '48 51 30' (degrees, minutes, seconds) stay apart.
+SPACED_THOUSANDS = re.compile(r"(?<![\d.,])\d{1,3}(?: \d{3}(?!\d))+(?:[.,]\d+)?")
 
 
 @dataclass
@@ -184,6 +192,7 @@ class Token:
     raw: str
     values: list[float] = field(default_factory=list)  # alternative readings as plain numbers
     groups: list[str] = field(default_factory=list)  # digit groups if comma/dot-grouped like 31,12,345
+    metres: bool = False  # labelled Northing/Easting, or X/Y with six or more integer digits: no degrees
 
 
 def _norm_label(label: str | None) -> str | None:
@@ -239,18 +248,24 @@ def _safe_readings(raw: str) -> tuple[list[float], list[str]]:
         return [], []
 
 
+def _join_thousands(text: str) -> str:
+    # After 'UTM' the first group is a zone: 'UTM 32 512 345' gives no number 32512345.
+    return SPACED_THOUSANDS.sub(lambda m: m.group(0) if re.search(r"utm\s*$", text[:m.start()], re.IGNORECASE)
+                                else m.group(0).replace(" ", ""), text)
+
+
 def parse_tokens(coords_raw: str) -> list[Token]:
     tokens: list[Token] = []
-    text = coords_raw.replace("−", "-").replace("–", "-")
+    text = _join_thousands(ZONE.sub(" ", coords_raw.replace("−", "-").replace("–", "-")))
     # Suffix labels like '812345.67mN' or '402345.67mE'
     for m in re.finditer(r"(-?\d[\d.,]*\d)\s*m\s*([NE])\b", text):
         values, groups = _safe_readings(m.group(1))
-        tokens.append(Token(m.group(2).lower(), m.group(1), values, groups))
+        tokens.append(Token(m.group(2).lower(), m.group(1), values, groups, metres=True))
     if tokens:
         return tokens
     # A label is a word of its own, not the last letter of one ('Sone 32' has no easting 32).
     pattern = re.compile(rf"(?:(?<![^\W\d_]){LABEL}\s*[:=]?\s*)?{TOKEN}", re.IGNORECASE)
-    for m in pattern.finditer(ZONE.sub(" ", text)):
+    for m in pattern.finditer(text):
         num = m.group("num").strip().rstrip(".,")
         if len(re.sub(r"\D", "", num)) < 2:
             continue
@@ -260,7 +275,9 @@ def parse_tokens(coords_raw: str) -> list[Token]:
         start = m.start()
         if label and start > 0 and text[start - 1] == "-":
             values = [-v for v in values]
-        tokens.append(Token(label, num, values, groups))
+        metres = (m.group("label") or "").lower() in ("northing", "easting") or (
+            label in ("x", "y") and any(abs(v) >= 100_000 for v in values))
+        tokens.append(Token(label, num, values, groups, metres))
     return tokens
 
 
@@ -428,8 +445,9 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
     out: list[Candidate] = []
     for north_t, east_t, labelled in pairs(tokens):
         swap_note = "" if labelled else " (axes as guessed)"
-        lats = [(v, False) for v in north_t.values if abs(v) <= 90] + _sexagesimal(north_t)
-        lons = [(v, False) for v in east_t.values if abs(v) <= 180] + _sexagesimal(east_t)
+        metres = north_t.metres or east_t.metres
+        lats = [] if metres else [(v, False) for v in north_t.values if abs(v) <= 90] + _sexagesimal(north_t)
+        lons = [] if metres else [(v, False) for v in east_t.values if abs(v) <= 180] + _sexagesimal(east_t)
         for lat, lat_alt in lats:
             for lon, lon_alt in lons:
                 if abs(lat) <= 90 and abs(lon) <= 180 and (abs(lat) > 1 or abs(lon) > 1):
@@ -553,6 +571,8 @@ def _georeference(
     loc = Location(coords_raw=coords_raw, crs_raw=crs_raw, country=country, place_name=place_name)
 
     cands = candidates(coords_raw, crs_raw, country, place) if coords_raw else []
+    if coords_raw and not cands and re.search(r"\d\d", coords_raw):
+        issues.append("printed coordinates not resolvable: no reading in a known notation or coordinate system")
     if cands and place:
         # Prefer hinted CRS and labelled axes slightly; then nearest to the named place.
         def rank(c: Candidate) -> float:

@@ -109,3 +109,15 @@ def test_unreadable_queued_job_is_marked_as_error(db_path):
     finally:
         con.close()
     assert row["status"] == "error" and "could not be resumed" in row["error"]
+
+
+def test_job_whose_documents_were_all_cancelled_during_the_run_is_cancelled(db_path, monkeypatch):
+    def run(docs, **kwargs):
+        kwargs["guard"].dropped = {d.doc_id for d in docs}
+
+    monkeypatch.setattr("pipeline.runner.run", run)
+    queue = uploads.UploadQueue(db_path)
+    queue.submit(task("dropped"))
+    queue.close()
+    result = wait_result(db_path, "dropped")
+    assert result.status == "cancelled" and result.error is None

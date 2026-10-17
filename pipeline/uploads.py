@@ -153,6 +153,8 @@ class UploadQueue:
                     progress=lambda stage, done, total: self.progress.__setitem__(
                         job_id, UploadProgress(stage=stage, done=done, total=total)))
                 kept = [d.doc_id for d in docs if d.doc_id not in guard.dropped]
+                if not kept:
+                    raise llm.Cancelled("every document was cancelled")
                 rows = con.execute(f"SELECT id, name, review_status FROM boreholes WHERE doc_id IN "
                                    f"({', '.join('?' * len(kept))}) ORDER BY name, id", kept)
                 result = UploadResult(status="done", boreholes=[UploadedBorehole.model_validate(dict(r)) for r in rows])

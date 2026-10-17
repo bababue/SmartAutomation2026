@@ -343,3 +343,83 @@ def test_a_utm_northing_that_lost_its_leading_digits_resolves_to_no_point():
     split = full.replace("N = 7.", "N = 7. ", 1)
     assert split != full and resolve_with(split, 31983) is None
     assert haversine_km(*(lambda c: (c.lat, c.lon))(resolve_with(full, 31983)), -22.9519, -43.2105) < 0.01
+
+
+@pytest.mark.parametrize("raw", ["Northing 412345.5 Easting 312345.2", "X 512345 Y 412345"])
+def test_projected_metres_without_crs_or_place_are_not_pinned_as_degrees(raw):
+    # Read as packed DDMMSS these would be 41°23'45" and 31°23'45": a pin far from the hole.
+    r = georeference(raw, None, None, None, None, None)
+    assert r.location.lat is None and r.location.method is None, (r.location, r.issues)
+
+
+def test_packed_dms_without_crs_or_place_stays_a_reading_for_review():
+    # Logs that print packed DDMMSS without naming a CRS exist; without a place they are kept, below the threshold.
+    r = georeference("E : 131050.40 N : 324330.10", None, None, None, None, None)
+    assert r.location.method.value == "stated_coordinates" and r.location.confidence < 0.9
+    assert haversine_km(r.location.lat, r.location.lon, 32.7250, 13.1807) < 0.1  # 32°43'30.1" N 13°10'50.4" E
+
+
+def test_northing_and_easting_labels_give_no_degree_readings():
+    from pipeline.georef import candidates
+
+    assert all(c.epsg != 4326 for c in candidates("Northing 412345.5 Easting 312345.2", None, "DE", (48.0, 7.85)))
+    assert any(c.epsg == 4326 for c in candidates("N 512345 E 412345", None, "DE", (48.0, 7.85)))  # packed DMS stays
+
+
+def spaced(v: float, decimals: int) -> str:
+    """5412345.67 → '5 412 345,67', as printed with space thousands."""
+    return f"{v:,.{decimals}f}".replace(",", " ").replace(".", ",")
+
+
+def test_space_separated_thousands_are_one_number():
+    lat, lon = 47.9959, 7.8522  # Freiburg Minster
+    e, n = fwd(25832, lat, lon)
+    r = georeference(f"E {spaced(e, 2)} N {spaced(n, 2)}", "ETRS89 / UTM zone 32N", "DE", lat + 0.02, lon - 0.02, 5.0)
+    assert r.location.method.value == "stated_coordinates", r.issues
+    assert haversine_km(r.location.lat, r.location.lon, lat, lon) < 0.01
+    lat, lon = 59.9075, 10.7531  # Oslo Opera House, integer metres
+    e, n = fwd(25832, lat, lon)
+    raw = f"N {spaced(n, 0)} E {spaced(e, 0)}"
+    assert [(t.label, t.values) for t in parse_tokens(raw)] == [("n", [round(n)]), ("e", [round(e)])]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("E 512345 N 5412345", ["512345", "5412345"]),  # two numbers, not one
+    ("32 512345 5412345", ["32", "512345", "5412345"]),  # a zone before the easting
+    ("UTM 32 512 345 5412345", ["32", "512", "345", "5412345"]),  # zone or thousands: not guessed
+    ("N 48 51 30 E 2 17 40", ["48", "51", "30", "17", "40"]),  # degrees, minutes, seconds
+])
+def test_spaced_numbers_that_are_no_thousands_stay_apart(raw, expected):
+    assert [t.raw for t in parse_tokens(raw)] == expected
+
+
+def test_unreadable_printed_coordinates_are_reported_beside_the_place():
+    r = georeference("UTM 32 512 345 5412345", None, "DE", 48.0, 7.85, 5.0)
+    assert r.location.method.value == "geocoded_place"
+    assert any(i.startswith("printed coordinates not resolvable") for i in r.issues)
+
+
+def test_axis_letters_after_utm_are_no_zone_or_band():
+    from pipeline.georef import crs_from_hint
+
+    assert crs_from_hint("UTM E 512345 N 5412345") == []  # not zone 51
+    assert crs_from_hint("UTM Zone 32 E: 512345 N: 5412345") == [32632]  # E labels the easting, not band E (south)
+    assert crs_from_hint("UTM 32 East 512345") == [32632]
+    assert crs_from_hint("UTM 32U") == crs_from_hint("UTM 32 U") == [32632]
+    assert crs_from_hint("UTM 56H") == [32756]  # band H lies south of the equator
+    assert [t.label for t in parse_tokens("UTM Zone 32 E: 512345 N: 5412345")] == ["e", "n"]
+    assert [t.label for t in parse_tokens("Zone 32U E 512345 N 5412345")] == ["e", "n"]
+
+
+def test_axis_label_after_a_utm_zone_keeps_the_axes_labelled():
+    lat, lon = 47.9959, 7.8522  # Freiburg Minster
+    e, n = fwd(32632, lat, lon)
+    r = georeference(f"UTM Zone 32 E: {e:.1f} N: {n:.1f}", None, "DE", lat + 0.02, lon - 0.02, 5.0)
+    assert r.location.crs_epsg == 32632, r.issues
+    assert haversine_km(r.location.lat, r.location.lon, lat, lon) < 0.01
+    assert not any("axes" in i for i in r.issues)
+
+
+def test_minus_before_a_label_is_read_where_it_stands_beside_a_zone():
+    assert [t.values for t in parse_tokens("Sone: 32 ---------- E: 512345 N: 6650000")] == [[512345.0], [6650000.0]]
+    assert [t.values for t in parse_tokens("UTM Sone 32 -E: 12345 N: 67890")] == [[-12345.0], [67890.0]]

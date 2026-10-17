@@ -126,13 +126,28 @@ def lookup_hole(index: dict[HoleKey, T], key: HoleKey) -> T | None:
     return index.get((None, key[1]))
 
 
+_ID_PREFIX = {"test_pit": "TP", "other": "X"}
+
+
 def _unique_ids_by_type(records: list[Borehole]) -> None:
-    """Borehole '2' and test pit '2' of one report: the test pit's id gets a 'TP' prefix."""
+    """Borehole '2', test pit '2' and probing '2' of one report: all but the borehole get a type prefix. Storing
+    an id a second time replaces the first record, so an id still shared gets the record's first page and count."""
     seen = Counter(bh.borehole_id for bh in records)
     for bh in records:
-        if seen[bh.borehole_id] > 1 and bh.investigation_type and bh.investigation_type.value == "test_pit":
+        prefix = _ID_PREFIX.get(bh.investigation_type.value if bh.investigation_type else "")
+        if seen[bh.borehole_id] > 1 and prefix:
             doc_id, rest = bh.borehole_id.split(":", 1)
-            bh.borehole_id = f"{doc_id}:TP{rest}"
+            bh.borehole_id = f"{doc_id}:{prefix}{rest}"
+    taken, kept = {bh.borehole_id for bh in records}, set()
+    for bh in records:
+        if bh.borehole_id in kept:
+            page = bh.sources[0].page if bh.sources else None
+            base, n = bh.borehole_id + (f"-p{page}" if page else ""), 1
+            while (new := base + (f"-{n}" if n > 1 else "")) in taken:
+                n += 1
+            bh.borehole_id = new
+            taken.add(new)
+        kept.add(bh.borehole_id)
 
 
 def _num(raw: str | None) -> float | None:
@@ -368,10 +383,9 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
     tops = [x.top_m for x, _ in flat]
     bottoms = [x.bottom_m for x, _ in flat]
     for i in range(len(flat)):
+        surface_assumed = i == 0 and tops[i] is None
         if tops[i] is None:
             tops[i] = bottoms[i - 1] if i > 0 else 0.0
-            if i == 0 and bottoms[i] is not None:
-                notes.append("boundary inferred: top of the first layer not readable, set to 0 m")
         if bottoms[i] is None:
             if i + 1 < len(flat):
                 bottoms[i] = tops[i + 1]  # stays None if the next top is unknown too
@@ -384,6 +398,8 @@ def _layers(logs: list[tuple[XLog, SourceRef]], final_depth: float | None,
                 if final_depth is not None and tops[i] is not None:
                     notes.append(f"boundary inferred: bottom of the last layer not readable, "
                                  f"set to the final depth {final_depth:g} m")
+        if surface_assumed and bottoms[i] is not None:  # a layer without either depth is dropped below
+            notes.append("boundary inferred: top of the first layer not readable, set to 0 m")
     layers: list[Layer] = []
     for index, ((x, src), top, bottom) in enumerate(zip(flat, tops, bottoms)):
         if top is None or bottom is None:
@@ -908,7 +924,8 @@ def build_borehole(doc_id: str, logs: list[tuple[XLog, SourceRef]],
             for x, src in logs for g in x.groundwater),
         lab_results=[_lab_result(lab, v, lab.top_m, lab.bottom_m, src)
                      for x, src in logs for lab in x.lab_results
-                     if (v := _lab_value(lab.parameter, lab.value_raw, lab.unit_raw)) is not None],
+                     if (v := _lab_value(lab.parameter, lab.value_raw, lab.unit_raw)) is not None
+                     and plausible(lab.parameter, v)],
         sources=[src for _, src in logs],
     )
     layer_notes += fill_core_loss(bh)

@@ -224,8 +224,12 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
             add("position", "negative" if position < 0.9 else "neutral", i[0].upper() + i[1:],
                 "Check the printed coordinates and their coordinate system on the source page" if position < 0.9 else None)
         if position < 0.9 and (position < 0.8 or not doubts):
-            add("position", "negative", "Printed coordinates only partly match the named place",
-                "Check the printed coordinates against the named place")
+            if any(i.startswith("no place to cross-check") or "no place to decide" in i for i in bh.issues):
+                add("position", "negative", "No named place to check the printed coordinates against",
+                    "Check the printed coordinates and their coordinate system on the source page")
+            else:
+                add("position", "negative", "Printed coordinates only partly match the named place",
+                    "Check the printed coordinates against the named place")
         elif position >= 0.9 and loc.place_name and not doubts and loc.method != GeorefMethod.manual:
             add("position", "positive", "Printed coordinates match the named place")
     if len(loc.crs_candidates) > 1:
@@ -255,7 +259,8 @@ FINDING_CODES: list[tuple[str, str]] = [
     ("coordinate axes inferred", "axes_inferred"), ("coordinate notation or datum ambiguous", "notation_ambiguous"),
     ("coordinate system taken from", "crs_from_document"), ("coordinate system from reviewer knowledge", "crs_from_knowledge"),
     ("position from a local grid", "position_from_grid"), ("position from place name only", "position_from_place"),
-    ("printed coordinates could not be matched", "coords_unmatched"), ("coordinates ", "coords_far_from_place"),
+    ("printed coordinates could not be matched", "coords_unmatched"),
+    ("printed coordinates not resolvable", "coords_unresolvable"), ("coordinates ", "coords_far_from_place"),
     ("position ", "position_outlier"), ("no place to cross-check", "no_place_check"),
     ("place estimate ", "place_disagrees"), ("place name ", "place_ambiguous"),
     ("not georeferenced", "not_georeferenced"), ("invalid WGS84", "invalid_position"), ("unreadable:", "unreadable"),
