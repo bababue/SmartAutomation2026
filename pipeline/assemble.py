@@ -1109,11 +1109,12 @@ def _name_tokens(name: str) -> list[str]:
 def _short_names(boreholes: list[Borehole]) -> dict[str, str]:
     """Record id -> the hole number to match by, for a record whose name ends in the full name of a hole in
     another file of its group ('<project> B 42' and 'B 42'). The short name needs a prefix and a number, and
-    only whole tokens count ('AB 42' is not 'B 42')."""
+    only whole tokens count ('AB 42' is not 'B 42'). A record without layers names no hole to match: a placeholder's
+    name ends in its page ('... p1')."""
     out = {}
     for bh in boreholes:
         mine = _name_tokens(bh.borehole_name)
-        for other in boreholes:
+        for other in filter(lambda r: r.layers, boreholes):
             theirs = _name_tokens(other.borehole_name)
             if (_group(other) == _group(bh) and document_id(other) != document_id(bh) and 2 <= len(theirs) < len(mine)
                     and mine[-len(theirs):] == theirs and any(t.isdigit() for t in theirs)):
@@ -1225,7 +1226,11 @@ def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dic
     else:
         issues.append(f"same hole assumed in {_where(other)}: same name, {', '.join(agree)}; "
                       f"check that both documents show this hole")
-    if not same:
+    if same:
+        pairs = zip(sorted(main.layers, key=lambda x: x.top_m), sorted(other.layers, key=lambda x: x.top_m))
+        issues += [f"sources disagree on the lithology of layer {x.top_m:g}–{x.bottom_m:g} m: {x.primary.value} "
+                   f"({_where(main)}) vs {y.primary.value} ({_where(other)})" for x, y in pairs if x.primary != y.primary]
+    else:
         end = lambda r: max((layer.bottom_m for layer in r.layers), default=0.0)
         issues.append(f"sources disagree on the layer sequence: kept {len(main.layers)} layers to {end(main):g} m "
                       f"from {_where(main)}, {_where(other)} reads {len(other.layers)} layers to {end(other):g} m")
@@ -1262,7 +1267,7 @@ def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dic
         return [x for x in theirs if key(x) not in seen]
 
     samples = new(main.samples, other.samples, lambda s: (s.name, s.top_m, s.bottom_m))
-    spt = new(main.spt, other.spt, lambda s: (s.depth_m, tuple(s.blows or ()), s.n_value))
+    spt = new(main.spt, other.spt, lambda s: (s.depth_m, tuple(s.blows or ()), s.n_value, s.refusal, s.increment_mm))
     runs = new(main.core_runs, other.core_runs, lambda c: (c.top_m, c.bottom_m))
     main.samples, main.spt, main.core_runs = main.samples + samples, main.spt + spt, main.core_runs + runs
     water = _unique_groundwater(main.groundwater + other.groundwater)
@@ -1287,7 +1292,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
     name and type from different documents are combined by `_match`, and in one folder or upload batch also a name
     that ends in another file's hole name (`_short_names`); records whose evidence points both ways stay
     apart and go to a person. Holes of one document were told apart by assembly and are never combined, nor are
-    records whose own sheets disagree. `protected` maps the records a reviewer decided or corrected to what
+    records whose own sheets disagree or that hold no layers (a placeholder for a page that failed). `protected` maps the records a reviewer decided or corrected to what
     identifies that review (uid, correction ids): such a record keeps its id and takes in an unreviewed copy; two
     records reviewed independently of each other both stay. `judged` holds the records as they will be stored, for
     choosing the better-checked copy. Changed records are scored again."""
@@ -1298,7 +1303,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
     for bh in sorted(boreholes, key=lambda b: b.borehole_id):
         entry = {"bh": bh, "ids": {bh.borehole_id}, "docs": {document_id(bh)}, "changed": False}
         kept.append(entry)
-        if any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
+        if not bh.layers or any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
             continue
         kind, number = _kind(bh), short.get(bh.borehole_id) or hole_key(bh.borehole_name, None)[1]
         review = protected.get(bh.borehole_id)
@@ -1310,7 +1315,8 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
             reviews = [protected[i] for i in cluster["ids"] if i in protected]
             if review is not None and reviews and not any(review & r for r in reviews):
                 continue
-            match = _match(other, bh)
+            # Evidence as stored: a reviewer's corrected position can contradict the printed one.
+            match = _match(judged.get(other.borehole_id, other), judged.get(bh.borehole_id, bh))
             if match is None:
                 continue
             how, agree, differ = match

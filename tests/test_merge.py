@@ -4,7 +4,7 @@ from datetime import date
 
 from pipeline.assemble import dedupe, unstack_place_positions
 from pipeline.scoring import finding_severity
-from schema.borehole import SPT, Borehole, GeorefMethod, Layer, Location, ReviewStatus, SourceRef
+from schema.borehole import SPT, Borehole, GeorefMethod, Layer, Lithology, Location, ReviewStatus, SourceRef
 
 # Freiburg Minster; the second point is about 10 m east of it.
 MINSTER = (47.99552, 7.85291)
@@ -126,6 +126,47 @@ def test_spt_of_both_documents_is_kept_once():
     drawing.spt = [SPT(depth_m=1.5, blows=[3, 4, 5], n_value=9), SPT(depth_m=3.0, blows=[6, 7, 8], n_value=15)]
     kept, = merge(log, drawing)
     assert [(s.depth_m, s.n_value) for s in kept.spt] == [(1.5, 9), (3.0, 15)]
+
+
+def test_spt_differing_in_refusal_or_increment_is_kept_from_both():
+    log = record("report", [(0, 9.0)], MINSTER)
+    drawing = record("drawing", [(0, 9.0)], NEAR_MINSTER)
+    log.spt = [SPT(depth_m=1.5, blows=[], n_value=None), SPT(depth_m=3.0, blows=[5, 6, 7], increment_mm=150)]
+    drawing.spt = [SPT(depth_m=1.5, blows=[], n_value=None, refusal=True, raw="R"),
+                   SPT(depth_m=3.0, blows=[5, 6, 7], increment_mm=75)]
+    kept, = merge(log, drawing)
+    assert any(s.refusal for s in kept.spt if s.depth_m == 1.5)
+    assert sorted(s.increment_mm for s in kept.spt if s.depth_m == 3.0) == [75, 150]
+
+
+def test_same_boundaries_with_another_lithology_block():
+    log = record("report", [(0, 2.0), (2.0, 9.0)], MINSTER, depth_m=9.0)
+    drawing = record("drawing", [(0, 2.0), (2.0, 9.0)], NEAR_MINSTER, depth_m=9.0)
+    drawing.layers[1].primary = Lithology.sand
+    kept, = merge(log, drawing)
+    disagree, = [i for i in blocking(kept) if i.startswith("sources disagree on the lithology")]
+    assert disagree.startswith("sources disagree on the lithology of layer 2–9 m:")
+    assert "clay" in disagree and "sand" in disagree
+
+
+def test_a_corrected_position_is_evidence_against_a_merge():
+    log = record("report", [(0, 9.0)], MINSTER, project_id="R-17")
+    drawing = record("drawing", [(0, 9.0)], NEAR_MINSTER, project_id="R-17")
+    moved = drawing.model_copy(deep=True)  # a reviewer put it 1 km north
+    moved.location.lat += 0.009
+    records = dedupe([log, drawing], judged={log.borehole_id: log, drawing.borehole_id: moved})
+    assert len(records) == 2
+    assert all(any(i.startswith("possibly the same hole as") for i in r.issues) for r in records)
+
+
+def test_a_placeholder_never_joins_a_real_hole():
+    from pipeline.assemble import placeholder
+    failed = placeholder("site__a", "site__a.pdf", 1, "log not assembled: BH1 on page 1 (ValueError)", "BH1")
+    real = record("site__b", [(0, 9.0)], MINSTER, name="P1")
+    for protected in ({}, {failed.borehole_id: {"uid-a", failed.borehole_id}}):
+        records = dedupe([failed.model_copy(deep=True), real.model_copy(deep=True)], protected)
+        kept, = [r for r in records if r.borehole_id == real.borehole_id]
+        assert len(records) == 2 and kept.layers and not blocking(kept)
 
 
 def test_same_hole_number_in_one_upload_batch_is_one_hole():
