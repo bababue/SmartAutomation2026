@@ -13,18 +13,19 @@ interface Props {
   selectedId: string | null
   onSelect: (id: string) => void
   loading: boolean
+  grouped: boolean
 }
 
-export function ResultList({ features, groups, activeGroup, onShowGroup, selectedId, onSelect, loading }: Props) {
+export function ResultList({ features, groups, activeGroup, onShowGroup, selectedId, onSelect, loading, grouped }: Props) {
   const [openOverride, setOpenOverride] = useState<Map<string, { open: boolean; selectedId: string | null }>>(new Map())
   const selectedRef = useRef<HTMLButtonElement>(null)
   const selectedGroup = features.find((feature) => feature.properties.id === selectedId)?.properties.grp
   useEffect(() => {
-    if (loading || !selectedGroup) return
+    if (loading || !selectedId) return
     const button = selectedRef.current
     button?.focus({ preventScroll: true })
     button?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [selectedId, selectedGroup, loading, openOverride])
+  }, [selectedId, selectedGroup, loading, openOverride, grouped])
   if (!loading && !features.length) {
     return (
       <div className="empty">
@@ -46,9 +47,26 @@ export function ResultList({ features, groups, activeGroup, onShowGroup, selecte
     })
   }
 
+  function renderItem({ properties: p }: Feature) {
+    return <li key={p.id} className="result-item">
+      <button
+        ref={p.id === selectedId ? selectedRef : undefined}
+        className={`result${p.id === selectedId ? ' result-selected' : ''}`}
+        onClick={() => onSelect(p.id)}
+        aria-current={p.id === selectedId}
+      >
+        <span className="result-name">{p.name}</span>
+        <span className="result-depth">{fmtMetres(p.depth)}</span>
+        <span className="result-place">{p.location_name ?? p.project ?? 'Unnamed site'}{p.country ? `, ${p.country}` : ''}</span>
+        <CoreStrip strip={p.strip} depth={p.depth} />
+      </button>
+    </li>
+  }
+
   return (
     <ul className="results" aria-busy={loading}>
-      {ordered.map((group) => {
+      {!grouped && [...features].sort((a, b) => a.properties.name.localeCompare(b.properties.name, undefined, { numeric: true })).map(renderItem)}
+      {grouped && ordered.map((group) => {
         const items = byGroup.get(group)!.sort((a, b) =>
           a.properties.name.localeCompare(b.properties.name, undefined, { numeric: true }))
         const project = facet.get(group)?.project
@@ -70,21 +88,7 @@ export function ResultList({ features, groups, activeGroup, onShowGroup, selecte
             </div>
             {open && (
               <ul className="group-items">
-                {items.map(({ properties: p }) => (
-                  <li key={p.id} className="result-item">
-                    <button
-                      ref={p.id === selectedId ? selectedRef : undefined}
-                      className={`result${p.id === selectedId ? ' result-selected' : ''}`}
-                      onClick={() => onSelect(p.id)}
-                      aria-current={p.id === selectedId}
-                    >
-                      <span className="result-name">{p.name}</span>
-                      <span className="result-depth">{fmtMetres(p.depth)}</span>
-                      <span className="result-place">{p.location_name ?? p.project ?? 'Unnamed site'}{p.country ? `, ${p.country}` : ''}</span>
-                      <CoreStrip strip={p.strip} depth={p.depth} />
-                    </button>
-                  </li>
-                ))}
+                {items.map(renderItem)}
               </ul>
             )}
           </li>

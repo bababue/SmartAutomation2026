@@ -46,7 +46,6 @@ export function AppMenu({ inStats, uploading, dark, view3d, onToggleStats,
   }, [open])
 
   const close = () => { setOpen(false); setSub(null); button.current?.focus() }
-  const pick = (action: () => void) => () => { action(); close() }
 
   // Submenus open to the left, because the menu sits at the right edge of the window.
   const openSub = (s: Sub) => {
@@ -98,23 +97,23 @@ export function AppMenu({ inStats, uploading, dark, view3d, onToggleStats,
       </button>
       {open && (
         <div className="app-menu-list" role="menu" aria-label="Menu">
-          <button role="menuitem" className="app-menu-item" onClick={pick(onToggleStats)} onMouseEnter={() => setSub(null)}>
-            <Icon d={inStats ? ICON.map : ICON.stats} /><span className="menu-text">{inStats ? 'Back to map' : 'Statistics'}</span>
-          </button>
-          <button role="menuitem" className="app-menu-item" onClick={pick(onUpload)} onMouseEnter={() => setSub(null)}
+          <button role="menuitem" className="app-menu-item" onClick={onUpload} onMouseEnter={() => setSub(null)}
             title="Files chosen together are read as one batch. Or drop them anywhere on the page.">
             <Icon d={ICON.upload} /><span className="menu-text">{uploading ? 'Upload more documents' : 'Upload documents'}</span>
+          </button>
+          <button role="menuitem" className="app-menu-item" onClick={onToggleStats} onMouseEnter={() => setSub(null)}>
+            <Icon d={inStats ? ICON.map : ICON.stats} /><span className="menu-text">{inStats ? 'Back to map' : 'Statistics'}</span>
           </button>
           <div className="menu-sub" onMouseEnter={() => setSub('export')}>
             {subTrigger('export', 'Export released', ICON.export)}
             {sub === 'export' && (
               <div className="menu-flyout" id="menu-export">
                 <div className="app-menu-list" role="menu" aria-label="Export released records">
-                  <a role="menuitem" className="app-menu-item" href={exportUrl('xlsx')} onClick={close}
+                  <a role="menuitem" className="app-menu-item" href={exportUrl('xlsx')}
                     title="Released records in Herrenknecht's BoreholeDataFormat">
                     <Icon d={ICON.table} /><span className="menu-text">Excel</span>
                   </a>
-                  <a role="menuitem" className="app-menu-item" href={exportUrl('csv')} onClick={close}
+                  <a role="menuitem" className="app-menu-item" href={exportUrl('csv')}
                     title="Released records, one row per layer">
                     <Icon d={ICON.file} /><span className="menu-text">CSV</span>
                   </a>
@@ -122,12 +121,12 @@ export function AppMenu({ inStats, uploading, dark, view3d, onToggleStats,
               </div>
             )}
           </div>
-          <button role="menuitemcheckbox" aria-checked={view3d} className="app-menu-item" onClick={pick(onToggleView3d)}
+          <button role="menuitemcheckbox" aria-checked={view3d} className="app-menu-item" onClick={onToggleView3d}
             onMouseEnter={() => setSub(null)} title="Tilted map with depth columns and buildings when zoomed in; off shows a flat map with points">
             <Icon d={ICON.column} /><span className="menu-text">3D view</span>
             <span className={`switch${view3d ? ' switch-on' : ''}`} aria-hidden="true" />
           </button>
-          <button role="menuitemcheckbox" aria-checked={dark} className="app-menu-item" onClick={pick(onToggleDark)}
+          <button role="menuitemcheckbox" aria-checked={dark} className="app-menu-item" onClick={onToggleDark}
             onMouseEnter={() => setSub(null)}>
             <Icon d={ICON.dark} /><span className="menu-text">Dark mode</span>
             <span className={`switch${dark ? ' switch-on' : ''}`} aria-hidden="true" />

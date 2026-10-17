@@ -99,15 +99,12 @@ interface Props {
   setFilters: Dispatch<SetStateAction<Filters>>
   /** Lithology keys with match counts, most frequent first. */
   lithologies: [string, number][]
-  onShowTunnels: () => void
-  onShowReview: () => void
-  onCloseReview?: () => void
   /** Review mode: only the filters of the waiting records, by position source and finding. */
   review?: { filters: ReviewFilters; onChange: (filters: ReviewFilters) => void; findings: FindingFacet[] }
 }
 
 /** Filter pills; each opens a dropdown below the row. */
-export function FilterBar({ filters, setFilters, lithologies, onShowTunnels, onShowReview, onCloseReview, review }: Props) {
+export function FilterBar({ filters, setFilters, lithologies, review }: Props) {
   const [open, setOpen] = useState<Menu | null>(null)
   const [top, setTop] = useState(0)
   const root = useRef<HTMLDivElement>(null)
@@ -172,9 +169,6 @@ export function FilterBar({ filters, setFilters, lithologies, onShowTunnels, onS
     <div className="filters" ref={root}>
       {rf ? (
       <div className="filter-bar" role="group" aria-label="Review filters">
-        {onCloseReview && <button className="pill pill-on pill-mode" onClick={onCloseReview} aria-label="Close review and show boreholes">
-          Review <span aria-hidden="true">×</span>
-        </button>}
         {pill('position', rf.position == null ? 'Position' : POSITION.find(([p]) => p === rf.position)![1], rf.position != null)}
         {pill('findings', rf.finding ? findingLabel(rf.finding) : 'Findings', rf.finding != null)}
         {(rf.position != null || rf.finding != null) && (
@@ -182,10 +176,6 @@ export function FilterBar({ filters, setFilters, lithologies, onShowTunnels, onS
         )}
       </div>
       ) : (<>
-      <div className="filter-bar filter-mode-row" role="group" aria-label="Views">
-        <button className="pill" onClick={onShowTunnels}>Tunnels</button>
-        <button className="pill" onClick={onShowReview}>Review</button>
-      </div>
       <div className="filter-bar" role="group" aria-label="Filters">
         {pill('status', `${statusLabel}${scoreLabel}`, filters.status !== 'all' || scored)}
         {lithologies.length > 0 && pill('lithology', liths.length ? summary(liths, lithName, false) : 'Lithology', liths.length > 0)}

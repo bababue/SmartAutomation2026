@@ -322,6 +322,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove }:
         <p>{byElevation ? 'The vertical axis shows levels above the datum printed on the borehole logs.'
           : ordered.length ? 'The vertical axis shows depth below ground because at least one borehole has no ground level.'
             : 'The vertical axis shows depth below ground until boreholes with ground levels are selected.'}</p>
+        {route.tunnelMode === 'elevation' && <p>For Elevation below datum, enter a positive distance to place the tunnel below the datum. Negative values place it above the datum.</p>}
         <p>Patterned columns are borehole measurements. The coloured areas between them are estimates; lighter areas span more than {MAX_JOIN_GAP_M} m and are less certain.</p>
         <p>Dashed lines show estimated rock head, blue markers show groundwater, and the solid blue line shows the planned tunnel axis. The shaded band shows its diameter when set.</p>
         <p>Dotted lines connect matching layer boundaries in adjacent boreholes up to {MAX_JOIN_GAP_M} m apart. The match uses broad material groups in depth order and omits ambiguous boundaries. These lines are estimates.</p>
