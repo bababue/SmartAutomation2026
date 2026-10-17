@@ -130,3 +130,12 @@ def test_fill_in_missing_data(client):
     rerun = record(bid)
     assert all(corrections.apply(rerun, store.corrections_for(con, bid)))
     assert rerun.surface_elevation_m == 35.7 and len(rerun.layers) == 4 and rerun.groundwater[0].depth_m == 2.4
+
+
+def test_crs_groups_offer_one_confirmation_per_document(client):
+    groups = client.get("/api/review-queue/crs-groups").json()
+    # demo__a and demo__b form the 'demo' document (2 holes); 'other' has a single hole.
+    assert [(g["group"], g["epsg"], g["count"]) for g in groups] == [("demo", 32756, 2)]
+    r = post(client, groups[0]["borehole_id"], kind="crs", scope="document", payload={"epsg": 28356})
+    assert r.json()["updated"] == ["demo__a:BH1", "demo__b:BH2"]
+    assert client.get("/api/review-queue/crs-groups").json() == []

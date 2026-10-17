@@ -392,3 +392,11 @@ tr:hover .btn-edit, .btn-edit:focus-visible { opacity: 1; }
 
 .table-scroll { overflow-x: auto; }
 .review-buttons { flex-wrap: wrap; }
+
+.crs-groups { border: 1px solid var(--grid); border-left: 3px solid var(--water); background: #f4f8fa; padding: 12px 14px; margin: 0 0 18px; border-radius: 3px; }
+.crs-groups h3 { margin: 0 0 4px; font-size: 15px; }
+.crs-groups p { margin: 0 0 8px; font-size: 13px; max-width: 80ch; }
+.crs-groups ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.crs-groups li { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; font-size: 14px; }
+.crs-groups-name { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.crs-groups-name input { height: 28px; border: 1px solid var(--grid); border-radius: 3px; padding: 0 8px; }

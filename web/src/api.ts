@@ -1,4 +1,4 @@
-import type { CorrectionKind, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, Stats } from './types'
+import type { CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, Stats } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -23,6 +23,7 @@ const enc = (id: string) => encodeURIComponent(id)
 export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>(`/api/boreholes/${enc(id)}/detail`, { signal })
 export const fetchStats = () => request<Stats>('/api/stats')
 export const fetchQueue = (signal?: AbortSignal) => request<QueueItem[]>('/api/review-queue', { signal })
+export const fetchCrsGroups = (signal?: AbortSignal) => request<CrsGroup[]>('/api/review-queue/crs-groups', { signal })
 
 export function postCorrection(id: string, kind: CorrectionKind, payload: Record<string, unknown>, reviewer: string,
   scope: 'borehole' | 'document' = 'borehole') {

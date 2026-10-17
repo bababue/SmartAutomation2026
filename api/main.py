@@ -122,6 +122,35 @@ def review_queue(con: DB):
     ]
 
 
+INFERRED_CRS = re.compile(r"^coordinate system inferred, not stated: EPSG:(\d+)")
+
+
+@app.get("/api/review-queue/crs-groups")
+def crs_groups(con: DB):
+    """Documents whose waiting holes share one inferred coordinate system: a reviewer can confirm it
+    for all of them at once (a document-wide CRS correction)."""
+    groups: dict[tuple[str, int], dict] = {}
+    rows = con.execute(
+        "SELECT id, data, (SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file "
+        "FROM boreholes WHERE review_status = 'pending_review' ORDER BY id"
+    )
+    for r in rows:
+        issues = json.loads(r["data"]).get("issues", [])
+        epsg = next((int(m.group(1)) for i in issues if (m := INFERRED_CRS.match(i))), None)
+        if epsg is None:
+            continue
+        key = (store.document_group(r["id"]), epsg)
+        g = groups.setdefault(key, {"group": key[0], "epsg": epsg, "name": export._crs_name(epsg),
+                                    "count": 0, "borehole_id": r["id"], "source_file": r["source_file"]})
+        g["count"] += 1
+    # One CRS per document only: if a document has several inferred systems, a person looks at each hole.
+    per_doc = {}
+    for g in groups.values():
+        per_doc.setdefault(g["group"], []).append(g)
+    return sorted((gs[0] for gs in per_doc.values() if len(gs) == 1 and gs[0]["count"] >= 2),
+                  key=lambda g: -g["count"])
+
+
 @app.get("/api/boreholes/{borehole_id:path}/detail")
 def get_borehole(borehole_id: str, con: DB):
     bh = store.load_borehole(con, borehole_id)

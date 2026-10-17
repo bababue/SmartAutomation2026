@@ -135,6 +135,15 @@ export interface QueueItem {
   reasons: string[]
 }
 
+export interface CrsGroup {
+  group: string
+  epsg: number
+  name: string
+  count: number
+  borehole_id: string
+  source_file: string | null
+}
+
 export interface BoreholeSummary {
   id: string
   name: string

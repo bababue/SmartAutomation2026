@@ -218,7 +218,8 @@ export default function App() {
           />
         )}
         {view === 'review' && (
-          <ReviewQueue items={queue} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9} onSelect={setSelectedId} />
+          <ReviewQueue items={queue} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9} onSelect={setSelectedId}
+            onChanged={() => setRefresh((n) => n + 1)} />
         )}
       </main>
 
