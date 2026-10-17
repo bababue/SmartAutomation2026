@@ -918,20 +918,22 @@ select.field { padding: 0 4px; }
 .principle > .principle-text { margin: 0; color: var(--graphite); }
 .principle > .principle-figure { margin: auto 0 0; padding-top: 14px; font-weight: 600; }
 
-.models-table { width: 100%; margin-top: 6px; border-collapse: collapse; }
-.models-table th, .models-table td { padding: 14px 18px; border-bottom: 1px solid var(--rule-soft); text-align: left; }
-.models-table thead th { font-size: 20px; font-weight: 600; border-bottom: 2px solid var(--grid); vertical-align: bottom; white-space: nowrap; }
-.models-role { margin-left: 10px; padding: 2px 8px; border-radius: 3px; background: var(--water-soft); color: var(--water);
-  font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; vertical-align: 3px; }
-.models-table tbody th { width: 36%; font-size: 16px; font-weight: 600; }
-.models-hint { display: block; font-size: 13px; font-weight: 400; color: var(--graphite); }
-.models-table td { font-size: 30px; font-weight: 500; color: var(--graphite); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.models-table { width: 100%; margin-top: 8px; border-collapse: separate; border-spacing: 0; }
+.models-table th, .models-table td { padding: 12px 14px; border-bottom: 1px solid var(--rule-soft); text-align: left; }
+.models-table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.models-table thead th { font-size: 14px; font-weight: 500; color: var(--graphite); border-bottom: 1px solid var(--grid); vertical-align: bottom; }
+.models-table thead .models-group { padding-bottom: 4px; border-bottom: 2px solid var(--grid); text-align: center; font-size: 13px;
+  font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.models-table tbody th { font-size: 17px; font-weight: 600; white-space: nowrap; }
+.models-table td { font-size: 20px; color: var(--graphite); }
 .models-table td.models-best { font-weight: 700; color: var(--ink); }
-.models-best-tag { margin-left: 10px; padding: 2px 7px; border-radius: 3px; background: var(--approved-soft); color: var(--high);
-  font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; vertical-align: 7px; }
-.stats-grid-models .stats-table { font-size: 16px; }
-.stats-grid-models .stats-table th, .stats-grid-models .stats-table td { padding: 8px 12px; }
-.stats-grid-models .quality-sub { font-size: 13px; }
+.models-hint { display: block; font-size: 13px; font-weight: 400; color: var(--graphite); }
+.models-tag { margin-left: 10px; padding: 2px 8px; border-radius: 3px; background: var(--water); color: var(--on-accent);
+  font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; vertical-align: 2px; }
+/* The outline sits on the cells: table rows cannot carry a border in the separate border model. */
+.models-selected > * { background: var(--water-soft); border-top: 2px solid var(--water); border-bottom: 2px solid var(--water); }
+.models-selected > :first-child { border-left: 2px solid var(--water); border-radius: 6px 0 0 6px; }
+.models-selected > :last-child { border-right: 2px solid var(--water); border-radius: 0 6px 6px 0; }
 .stats-more-link { margin-top: 16px; align-self: flex-start; font-size: 15px; }
 
 .quality-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 18px 28px; margin: 12px 0 4px; }
@@ -966,7 +968,7 @@ select.field { padding: 0 4px; }
   .stats-grid, .stats-grid-method, .funnel, .claims ul { grid-template-columns: minmax(0, 1fr); }
   .claim { padding: 12px 14px 14px; }
   .claim-figure { font-size: 34px; }
-  .models-table td { font-size: 22px; }
+  .models-table td { font-size: 17px; }
   .quality-table th[scope="row"] { white-space: normal; }
 }
 /* On phones the map is a band above the list: the statistics take over both rather than scrolling inside the band. */
