@@ -1187,7 +1187,7 @@ def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dic
         return [x for x in theirs if key(x) not in seen]
 
     samples = new(bh.samples, other.samples, lambda s: (s.name, s.top_m, s.bottom_m))
-    spt = new(bh.spt, other.spt, lambda s: (s.depth_m, s.blows, s.n_value))
+    spt = new(bh.spt, other.spt, lambda s: (s.depth_m, tuple(s.blows or ()), s.n_value))
     runs = new(bh.core_runs, other.core_runs, lambda c: (c.top_m, c.bottom_m))
     bh.samples, bh.spt, bh.core_runs = bh.samples + samples, bh.spt + spt, bh.core_runs + runs
     water = _unique_groundwater(bh.groundwater + other.groundwater)
