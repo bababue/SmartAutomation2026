@@ -34,9 +34,7 @@ from . import corrections, store
 from .georef import apply_reading, candidates, haversine_km, pairs, parse_tokens, resolve_with
 from .scoring import RELATIVE_PIECE
 
-SCOPES = ("document", "project", "region", "global")
-KINDS = ("crs", "term", "note")
-CONFIRMED = 3  # confirmations before a learned coordinate system counts as stated
+TRUSTED_CONFIRMATIONS = 3  # before a learned coordinate system counts as stated
 
 
 def norm_project(name: str | None) -> str | None:
@@ -61,8 +59,6 @@ def applicable(items: list[dict], bh: Borehole, project: str | None = None) -> l
             (keys.get(k["scope_type"]) is not None and k["scope_value"] == keys[k["scope_type"]])]
     return sorted(hits, key=lambda k: (SPECIFICITY[k["scope_type"]], -k["confirmations"]))
 
-
-# --- local grids from reviewer positions -----------------------------------------------------------
 
 def printed_pair(coords_raw: str | None) -> tuple[float, float] | None:
     """The two printed numbers as (easting-like, northing-like) by their labels, else in printed order."""
@@ -212,8 +208,6 @@ def document_grids(con: sqlite3.Connection, boreholes: list[Borehole]) -> dict[s
     return {g: grid for g, pts in points.items() if (grid := fit_grid(list(pts.values())))}
 
 
-# --- applying knowledge ------------------------------------------------------------------------------
-
 def _settle_position(bh: Borehole) -> None:
     bh.issues = [i for i in bh.issues if not i.startswith(corrections.GEOREF_ISSUES)
                  and not corrections.GEOREF_UNREADABLE.search(i)]
@@ -246,7 +240,7 @@ def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str
                 doubts.append(f"coordinate notation or datum ambiguous: readings differ by up to {spread_m:.0f} m")
             apply_reading(loc, c)
             loc.crs_candidates, loc.accuracy_m = [], max(10.0, spread_m, loc.accuracy_m or 0) if doubts else 10.0
-            loc.confidence = 0.9 if k["confirmations"] >= CONFIRMED and not doubts else 0.8
+            loc.confidence = 0.9 if k["confirmations"] >= TRUSTED_CONFIRMATIONS and not doubts else 0.8
             _settle_position(bh)
             bh.issues += doubts
             notes.append(f"coordinate system from reviewer knowledge: EPSG:{epsg} "
