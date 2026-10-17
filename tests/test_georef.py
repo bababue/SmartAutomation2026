@@ -223,3 +223,14 @@ def test_north_america_prefers_nad83_utm():
     for offset in (0.01, -0.01, 0.03):  # whatever the place estimate's noise
         result = georeference(f"N: {n:.1f} E: {e:.1f}", None, "CA", lat + offset, lon - offset, 5.0)
         assert result.location.crs_epsg == 26910
+
+
+def test_oslo_local_grid_reads_x_as_northing():
+    lat, lon = 59.9075, 10.7531  # Oslo Opera House
+    east, north = Transformer.from_crs(4326, "ESRI:102138", always_xy=True).transform(lon, lat)
+    r = georeference(f"X {north:.1f} Y {east:.1f}", "Koordinater og høyder Oslo lokal", "NO", 59.91, 10.75, 2.0)
+    loc = r.location
+    assert loc.crs_epsg is None and loc.crs_proj == "ESRI:102138"
+    assert haversine_km(loc.lat, loc.lon, lat, lon) < 0.01
+    assert loc.confidence >= 0.9
+    assert not any("ambiguous" in i or "inferred" in i for i in r.issues)

@@ -87,3 +87,22 @@ def test_holes_at_different_places_with_the_same_coordinates_are_blocked():
     # Without a place name on one of them there is nothing to contradict.
     assert not any(shared(bh) for bh in assemble([page(1, "BH1", "Elm Street / Oak Road"), page(2, "BH2", None)]))
 
+
+def test_coordinate_table_system_wins_over_the_log_template_but_needs_a_look():
+    from pyproj import Transformer
+
+    from pipeline.extraction_models import XCoordinateRow
+
+    lat, lon = 59.9075, 10.7531  # Oslo Opera House
+    east, north = Transformer.from_crs(4326, "ESRI:102138", always_xy=True).transform(lon, lat)
+    coords = f"X {north:.1f} Y {east:.1f}"
+    log = _log("BH1", coords, 5.0, [(0, 2)]).model_copy(
+        update={"country": "NO", "place_lat": 59.91, "place_lon": 10.75, "place_precision_km": 2.0})
+    table = XCoordinateRow(name="BH1", coords_raw=coords, crs_raw="Oslo lokal", elevation_raw="5,0", is_planned=False)
+    pages = [PageResult("r", "r.pdf", 1, "borehole_log", PageExtraction(logs=[log], coordinate_rows=[])),
+             PageResult("r", "r.pdf", 2, "coordinate_table", PageExtraction(logs=[], coordinate_rows=[table]))]
+    [bh] = assemble(pages)
+    assert bh.location.crs_proj == "ESRI:102138"
+    assert abs(bh.location.lat - lat) < 1e-4 and abs(bh.location.lon - lon) < 1e-4
+    assert bh.location.confidence <= 0.8
+    assert any(i.startswith("coordinate system taken from the coordinate table") for i in bh.issues)

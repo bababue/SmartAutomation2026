@@ -594,6 +594,11 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     crs_raw = _first(x.crs_raw for x in xs)
     method = GeorefMethod.stated_coordinates
     row = lookup(coord_rows, key)
+    # A surveyor's coordinate table can name another system than the log template prints: both are
+    # tried and the named place decides.
+    table_crs = row.crs_raw if row and coords_raw and row.crs_raw and row.crs_raw != crs_raw else None
+    if table_crs and not crs_raw:
+        crs_raw, table_crs = table_crs, None
     if row and not coords_raw:
         coords_raw, crs_raw, method = row.coords_raw, row.crs_raw or crs_raw, GeorefMethod.linked_table
     from_document = bool(coords_raw and not crs_raw and doc_crs)
@@ -606,15 +611,19 @@ def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceR
     own = [(x.place_lat, x.place_lon, x.place_precision_km or 10.0) for x in xs
            if x.place_lat is not None and x.place_lon is not None]
     place = min(own + ([doc_place] if doc_place else []), key=lambda p: p[2], default=None)
-    geo = georeference(coords_raw, crs_raw, country, *(place or (None, None, None)),
-                       place_name=location_name)
+    geo = georeference(coords_raw, "; ".join(filter(None, (crs_raw, table_crs))) or None, country,
+                       *(place or (None, None, None)), place_name=location_name)
     location = geo.location
+    resolved = location.crs_epsg if location.crs_epsg is not None else location.crs_proj
+    if table_crs and resolved in crs_from_hint(table_crs) and resolved not in crs_from_hint(crs_raw):
+        geo.issues.append(f"coordinate system taken from the coordinate table: {table_crs} (the log states {crs_raw})")
+        location.confidence = min(location.confidence or 0.0, 0.8)  # the printed statements contradict
     if location.method == GeorefMethod.stated_coordinates and method == GeorefMethod.linked_table:
         location.method = method
         location.is_planned = row.is_planned if row else None
     if from_document:
         location.crs_raw = None  # not printed on this log
-        if location.crs_epsg in crs_from_hint(doc_crs[0]):
+        if resolved in crs_from_hint(doc_crs[0]):
             geo.issues.append(f"coordinate system taken from page {doc_crs[1]} of the document: {doc_crs[0]}")
             location.confidence = min(location.confidence or 0.0, 0.9)  # stated, but not on this log
     coords_log = next(((x, src) for x, src in logs if x.coords_raw), None)
@@ -700,7 +709,10 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
                 continue
             for row in r.extraction.coordinate_rows:
                 k = hole_key(row.name, None)
-                if k not in coord_rows or (coord_rows[k].is_planned and not row.is_planned):
+                old = coord_rows.get(k)
+                # Actual positions over planned ones, then a table that names its coordinate system.
+                if old is None or (old.is_planned and not row.is_planned) or \
+                        (bool(old.is_planned) == bool(row.is_planned) and row.crs_raw and not old.crs_raw):
                     coord_rows[k] = row
             for log in r.extraction.logs:
                 if r.kind not in LOG_KINDS and log.layers:

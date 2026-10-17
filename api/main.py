@@ -617,7 +617,7 @@ def _csv_record(w, row) -> None:
     """The rows of one record (one per layer)."""
     bh = Borehole.model_validate_json(row["data"])
     loc = bh.location
-    original_crs = f"EPSG:{loc.crs_epsg}" if loc.crs_epsg else loc.crs_raw
+    original_crs = f"EPSG:{loc.crs_epsg}" if loc.crs_epsg else loc.crs_proj or loc.crs_raw
     source_file = row["source_file"]
     pages = {s.page for s in bh.sources if s.page is not None and (source_file is None or s.file == source_file)}
     source_pages = ";".join(str(p) for p in sorted(pages)) or None

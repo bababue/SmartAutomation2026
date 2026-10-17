@@ -26,8 +26,15 @@ from schema.borehole import GeorefMethod, Location
 
 # --- CRS knowledge -----------------------------------------------------------------
 
-# Hints in printed CRS text → EPSG candidates (checked case-insensitively, in order).
-CRS_HINTS: list[tuple[str, list[int]]] = [
+# A CRS is an EPSG code, or 'AUTH:code' for a local grid that has none.
+Crs = int | str
+
+# Oslo kommune's local grid (NGO 1948, axis III, shifted origin); X is the northing, as in all Norwegian surveys.
+OSLO_LOCAL = "ESRI:102138"
+X_NORTHING_GRIDS = {OSLO_LOCAL}
+
+# Hints in printed CRS text → CRS candidates (checked case-insensitively, in order).
+CRS_HINTS: list[tuple[str, list[Crs]]] = [
     (r"mt\.? ?eden", [2105]),
     (r"nztm|nzgd ?2000 ?/ ?new zealand", [2193]),
     (r"osgb|ordnance survey|british national grid", [27700]),
@@ -51,10 +58,11 @@ CRS_HINTS: list[tuple[str, list[int]]] = [
     (r"\bs45b\b|system ?45 ?bornholm", [10254]),
     (r"rd ?new|amersfoort", [28992]),
     (r"lambert.?93", [2154]),
+    (r"oslo ?(?:lokal|kommune)", [OSLO_LOCAL]),
 ]
 
 # Common national grids per country (ISO alpha-2). UTM zones are added from the place.
-COUNTRY_CRS: dict[str, list[int]] = {
+COUNTRY_CRS: dict[str, list[Crs]] = {
     "GB": [27700],
     "NZ": [2193, 2105],
     "AU": [28348, 28349, 28350, 28351, 28352, 28353, 28354, 28355, 28356],
@@ -79,8 +87,8 @@ WESTING_GRIDS = {10250, 10160, 10254}
 
 
 @lru_cache(maxsize=None)
-def _to_wgs84(epsg: int) -> Transformer:
-    return Transformer.from_crs(epsg, GEOGRAPHIC, always_xy=True)
+def _to_wgs84(crs: Crs) -> Transformer:
+    return Transformer.from_crs(crs, GEOGRAPHIC, always_xy=True)
 
 
 def _utm_epsgs(lat: float, lon: float, country: str | None) -> list[int]:
@@ -93,11 +101,11 @@ def _utm_epsgs(lat: float, lon: float, country: str | None) -> list[int]:
     return epsgs
 
 
-def crs_from_hint(crs_raw: str | None) -> list[int]:
+def crs_from_hint(crs_raw: str | None) -> list[Crs]:
     if not crs_raw:
         return []
     text = crs_raw.lower()
-    out: list[int] = []
+    out: list[Crs] = []
     m = re.search(r"(4[89]|5[0-6]) ?[a-z]? ?mga ?94|mga ?94\D*(4[89]|5[0-6])", text)
     if m:
         out.append(28300 + int(m.group(1) or m.group(2)))
@@ -312,7 +320,7 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 class Candidate:
     lat: float
     lon: float
-    crs: str  # 'EPSG:xxxx' or a notation name
+    crs: str  # 'EPSG:xxxx', 'AUTH:code' of a local grid, or a notation name
     epsg: int | None
     easting: float | None
     northing: float | None
@@ -372,16 +380,19 @@ def candidates(coords_raw: str, crs_raw: str | None, country: str | None, place:
             for e in east_t.values:
                 if abs(n) < 1000 and abs(e) < 1000:
                     continue
-                for epsg in epsgs:
+                for crs in epsgs:
+                    if crs in X_NORTHING_GRIDS and labelled and north_t.label != "x":
+                        continue
                     # Danish System 34/45 count y towards the west; logs print it with or without the sign.
-                    for east in ([e, -e] if epsg in WESTING_GRIDS and e > 0 else [e]):
+                    for east in ([e, -e] if crs in WESTING_GRIDS and e > 0 else [e]):
                         try:
-                            lon, lat = _to_wgs84(epsg).transform(east, n)
+                            lon, lat = _to_wgs84(crs).transform(east, n)
                         except Exception:
                             continue
                         if math.isfinite(lat) and math.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180:
                             note = "projected" + (" (westing)" if east != e else "") + swap_note
-                            out.append(Candidate(lat, lon, f"EPSG:{epsg}", epsg, east, n, note, epsg in hinted))
+                            name, epsg = (f"EPSG:{crs}", crs) if isinstance(crs, int) else (crs, None)
+                            out.append(Candidate(lat, lon, name, epsg, east, n, note, crs in hinted))
     if place:
         for c in out:
             c.distance_km = haversine_km(c.lat, c.lon, place[0], place[1])
@@ -515,4 +526,5 @@ def _apply(loc: Location, c: Candidate, method: GeorefMethod) -> None:
     loc.lat, loc.lon = round(c.lat, 7), round(c.lon, 7)
     loc.easting, loc.northing = c.easting, c.northing
     loc.crs_epsg = c.epsg
+    loc.crs_proj = c.crs if c.epsg is None else None
     loc.method = method
