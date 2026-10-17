@@ -140,18 +140,9 @@ export function ModelSummary({ quality, error, onDetails }: {
           On the {n(models.records)} human-checked records every model extracted itself. A run on the Claude subscription
           is not billed per page; its cost is an estimate at API list prices.
         </p>
+        <button className="link-button stats-more-link" onClick={onDetails}>All figures and the prompt versions in Details</button>
       </section>
-      {ev.benchmark.rows.length > 0 && (
-        <section className="stats-card stats-wide" aria-labelledby="models-tested">
-          <h3 id="models-tested">Also tested</h3>
-          <p className="muted">Before there were reviewed records, these models read the same {n(ev.benchmark.pages)} log
-            pages; agreement with {modelName(ev.benchmark.against)} only, not accuracy.</p>
-          <ul className="models-chips">
-            {ev.benchmark.rows.map((r) => <li key={r.model}>{r.model}<span className="muted">{r.route}</span></li>)}
-          </ul>
-          <button className="link-button stats-more-link" onClick={onDetails}>All figures, the benchmark and the prompt versions in Details</button>
-        </section>
-      )}
+      {ev.benchmark.rows.length > 0 && <Benchmark benchmark={ev.benchmark} />}
     </div>
   )
 }

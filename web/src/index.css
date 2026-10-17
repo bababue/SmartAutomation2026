@@ -929,9 +929,9 @@ select.field { padding: 0 4px; }
 .models-table td.models-best { font-weight: 700; color: var(--ink); }
 .models-best-tag { margin-left: 10px; padding: 2px 7px; border-radius: 3px; background: var(--approved-soft); color: var(--high);
   font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; vertical-align: 7px; }
-.models-chips { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
-.models-chips li { padding: 6px 14px; border: 1px solid var(--grid); border-radius: 999px; font-size: 15px; }
-.models-chips li span { margin-left: 8px; font-size: 13px; }
+.stats-grid-models .stats-table { font-size: 16px; }
+.stats-grid-models .stats-table th, .stats-grid-models .stats-table td { padding: 8px 12px; }
+.stats-grid-models .quality-sub { font-size: 13px; }
 .stats-more-link { margin-top: 16px; align-self: flex-start; font-size: 15px; }
 
 .quality-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 18px 28px; margin: 12px 0 4px; }
