@@ -1211,7 +1211,7 @@ def combine(a: Borehole, b: Borehole, how: str, agree: list[str], protected: dic
         issues = [i for i in issues if not i.startswith(POSITION_FINDINGS)]
         issues += [i for i in other.issues if i.startswith(POSITION_FINDINGS)]
     # The other record's own checks are rerun on the combined record below.
-    other_checks = set(other.model_copy(deep=True).validate_log())
+    other_checks = set(other.validate_log())
     issues += [i for i in other.issues if not i.startswith(LAYER_FINDINGS + POSITION_FINDINGS) and i not in other_checks]
 
     depths_moved = False

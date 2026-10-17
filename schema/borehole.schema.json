@@ -1454,7 +1454,7 @@
     },
     "issues": {
       "default": [],
-      "description": "Validation findings, filled by validate_log()",
+      "description": "Findings of validate_log() and of the pipeline steps",
       "items": {
         "type": "string"
       },

@@ -189,7 +189,7 @@ def apply(bh: Borehole, items: list[dict]) -> list[bool]:
         return []
     results = []
     existing = list(bh.issues)
-    before = bh.validate_log()  # note: also overwrites bh.issues
+    before = bh.validate_log()
     notes, georef_fixed, fields_fixed = [], False, set()
     overlapping = _overlapping_fixes(bh, items)
     for n, c in enumerate(items):

@@ -23,9 +23,10 @@ from pydantic import BaseModel, Field
 
 Confidence = Annotated[float, Field(ge=0.0, le=1.0)]
 
-
-# ---------------------------------------------------------------------------
-# Provenance
+# Layer depths closer than this are continuous. A gap or overlap up to MINOR_DISCONTINUITY_M is core loss
+# between runs or rounding of piece depths in core logs: shown, but not treated as a misread.
+CONTINUITY_TOLERANCE_M = 0.02
+MINOR_DISCONTINUITY_M = 0.10
 
 
 class SourceRef(BaseModel):
@@ -35,10 +36,6 @@ class SourceRef(BaseModel):
         None, description="Region on the page image (x0, y0, x1, y1) as fractions of width/height (0-1, origin "
         "top left), if known. Approximate: read by the vision model"
     )
-
-
-# ---------------------------------------------------------------------------
-# Location / georeferencing
 
 
 class GeorefMethod(str, Enum):
@@ -73,7 +70,6 @@ class Location(BaseModel):
     source: SourceRef | None = None
 
 
-# ---------------------------------------------------------------------------
 # Lithology: one key per DIN 4023 hatch pattern. Keys are English; the German DIN
 # terms are kept as data in DIN4023_LABEL_DE (prompting for German logs, pattern lookup).
 
@@ -198,10 +194,6 @@ class Qualifier(str, Enum):
 class SecondaryComponent(BaseModel):
     lithology: Lithology
     qualifier: Qualifier | None = None
-
-
-# ---------------------------------------------------------------------------
-# Log data
 
 
 class Layer(BaseModel):
@@ -353,10 +345,6 @@ class LabResult(BaseModel):
     source: SourceRef | None = None
 
 
-# ---------------------------------------------------------------------------
-# Borehole
-
-
 class ReviewStatus(str, Enum):
     auto_approved = "auto_approved"  # score above the threshold, no blocking findings
     pending_review = "pending_review"  # waits for a human decision
@@ -371,7 +359,6 @@ class InvestigationType(str, Enum):
 
 
 class Borehole(BaseModel):
-    # --- Metadata (BoreholeDataFormat.xlsx) ---
     borehole_id: str = Field(description="Stable internal ID, e.g. '<file-stem>:<borehole_name>'")
     borehole_name: str = Field(description="Name as written on the log, e.g. 'BH-1', 'BH-07'")
     investigation_type: InvestigationType | None = None
@@ -395,23 +382,19 @@ class Borehole(BaseModel):
     inclination_deg: float | None = Field(None, description="From horizontal; 90 = vertical")
     drilling_method: str | None = None
     notes: str | None = None
-
-    # --- Log data ---
     layers: list[Layer] = []
     core_runs: list[CoreRun] = []
     samples: list[Sample] = []
     spt: list[SPT] = []
     groundwater: list[GroundwaterObservation] = []
     lab_results: list[LabResult] = []
-
-    # --- Provenance & quality ---
     sources: list[SourceRef] = Field([], description="All pages this borehole was assembled from")
     field_sources: dict[str, SourceRef] = Field(
         {}, description="Header fields filled from another document of the same hole than the layer log, with "
         "the first page of that document's record"
     )
     confidence: Confidence | None = Field(None, description="Extraction confidence (layers, values)")
-    issues: list[str] = Field([], description="Validation findings, filled by validate_log()")
+    issues: list[str] = Field([], description="Findings of validate_log() and of the pipeline steps")
     score: Confidence | None = Field(None, description="Release score: the weaker of extraction and position")
     score_reasons: list[str] = Field([], description="Why the score is what it is / why review is needed")
     review_status: ReviewStatus = ReviewStatus.pending_review
@@ -419,12 +402,9 @@ class Borehole(BaseModel):
     reviewed_at: datetime | None = None
     review_comment: str | None = None
 
-    def validate_log(self, tol: float = 0.02, minor: float = 0.10) -> list[str]:
-        """Plausibility checks; returns findings instead of raising so data is still stored.
-
-        Run explicitly after normalisation and georeferencing. Layers are checked in depth
-        order without reordering the extracted list (source order stays visible).
-        """
+    def validate_log(self) -> list[str]:
+        """Plausibility findings, returned instead of raised so the data is still stored. Layers are checked in
+        depth order without reordering the extracted list (source order stays visible)."""
         issues: list[str] = []
         layers = sorted(self.layers, key=lambda layer: layer.top_m)
         for layer in layers:
@@ -437,17 +417,15 @@ class Borehole(BaseModel):
         else:
             covered = layers[0].bottom_m
             for layer in layers[1:]:
-                # Up to `minor` metres: core loss between runs or rounding of piece depths in core logs;
-                # shown, but not treated as a misread.
-                if layer.top_m - covered > tol:
-                    kind = "minor discontinuity" if layer.top_m - covered <= minor else "gap"
+                if layer.top_m - covered > CONTINUITY_TOLERANCE_M:
+                    kind = "minor discontinuity" if layer.top_m - covered <= MINOR_DISCONTINUITY_M else "gap"
                     issues.append(f"{kind} {covered}–{layer.top_m} m" + (" (not covered)" if kind != "gap" else ""))
-                elif covered - layer.top_m > tol:
+                elif covered - layer.top_m > CONTINUITY_TOLERANCE_M:
                     end = min(covered, layer.bottom_m)
-                    kind = "minor discontinuity" if end - layer.top_m <= minor else "overlap"
+                    kind = "minor discontinuity" if end - layer.top_m <= MINOR_DISCONTINUITY_M else "overlap"
                     issues.append(f"{kind} {layer.top_m}–{end} m" + (" (covered twice)" if kind != "overlap" else ""))
                 covered = max(covered, layer.bottom_m)
-            if layers[0].top_m > tol:
+            if layers[0].top_m > CONTINUITY_TOLERANCE_M:
                 issues.append(f"log starts at {layers[0].top_m} m, not at surface")
             # Layer depths are measured along the hole, so compare with the length if known.
             final = self.length_m if self.length_m is not None else self.depth_m
@@ -485,7 +463,6 @@ class Borehole(BaseModel):
             issues.append(f"invalid WGS84 position {loc.lat}, {loc.lon}")
         elif len(loc.crs_candidates) > 1 and loc.crs_epsg is None and loc.crs_proj is None:
             issues.append("CRS ambiguous")
-        self.issues = issues
         return issues
 
 
