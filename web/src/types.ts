@@ -255,6 +255,12 @@ export interface Stats {
   demo: boolean
 }
 
+export interface UploadStatus {
+  status: 'processing' | 'done' | 'error'
+  boreholes: { id: string; name: string; review_status: ReviewStatus }[]
+  error: string | null
+}
+
 export type StatusFilter = 'all' | 'released' | 'pending' | 'rejected'
 
 export interface Filters {

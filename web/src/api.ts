@@ -1,4 +1,4 @@
-import type { CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, KnowledgeItem, KnowledgeList, QueueItem, ReviewStatus, Stats } from './types'
+import type { CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, KnowledgeItem, KnowledgeList, QueueItem, ReviewStatus, Stats, UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -80,3 +80,11 @@ export function postReview(id: string, decision: ReviewStatus, reviewer: string,
     body: JSON.stringify({ decision, reviewer, comment, content_hash: contentHash, review_revision: reviewRevision }),
   })
 }
+
+export function postUpload(file: File) {
+  const body = new FormData()
+  body.append('file', file)
+  return request<{ job_id: string; pages: number }>('/api/upload', { method: 'POST', body })
+}
+
+export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/upload/${enc(jobId)}`)

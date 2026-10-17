@@ -61,6 +61,7 @@ button, input, select { font: inherit; color: inherit; }
 .search input:focus { border-color: var(--water); background: #fff; outline: none; box-shadow: 0 0 0 3px var(--water-soft); }
 .stats { margin: 0 0 0 auto; color: var(--graphite); white-space: nowrap; }
 .stats strong { color: var(--ink); font-weight: 600; }
+.upload-note { margin: 0; color: var(--graphite); font-size: 13px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .sidebar {
   display: flex;

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchBoreholes, fetchDetail, fetchMapPoints, fetchQueue, fetchStats } from './api'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { fetchBoreholes, fetchDetail, fetchMapPoints, fetchQueue, fetchStats, fetchUploadStatus, postUpload } from './api'
 import { LithologyPatterns, lithStyle, patternId } from './lithology'
 import { DetailPanel } from './components/DetailPanel'
 import { MapView } from './components/MapView'
@@ -31,6 +31,9 @@ export default function App() {
   const [detail, setDetail] = useState<Detail | null>(null)
   const [refresh, setRefresh] = useState(0) // bump after a review decision
   const [sectionIds, setSectionIds] = useState<string[]>([])
+  const [uploadJobId, setUploadJobId] = useState<string | null>(null)
+  const [uploadNote, setUploadNote] = useState<string | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const t = setTimeout(() => setFilters((f) => ({ ...f, q: query })), 250)
@@ -142,6 +145,39 @@ export default function App() {
     [sectionFeatures],
   )
 
+  const onFileChosen = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-choosing the same file later
+    if (!file) return
+    setUploadNote(`Uploading ${file.name}…`)
+    postUpload(file)
+      .then((res) => { setUploadJobId(res.job_id); setUploadNote(`Processing ${res.pages} page${res.pages === 1 ? '' : 's'} of ${file.name}…`) })
+      .catch((err) => setUploadNote(`Could not upload ${file.name}: ${err.message}`))
+  }, [])
+
+  // Poll until the document is classified, extracted and stored (or fails).
+  useEffect(() => {
+    if (!uploadJobId) return
+    const t = setInterval(() => {
+      fetchUploadStatus(uploadJobId).then((status) => {
+        if (status.status === 'processing') return
+        clearInterval(t)
+        setUploadJobId(null)
+        if (status.status === 'error') {
+          setUploadNote(`Upload failed: ${status.error}`)
+        } else if (status.boreholes.length === 0) {
+          setUploadNote('Processed, but no borehole was recognised in the document.')
+        } else {
+          const [first] = status.boreholes
+          setUploadNote(`Added ${status.boreholes.map((b) => b.name).join(', ')}`)
+          setSelectedId(first.id)
+          setRefresh((n) => n + 1) // reload the map, list and queue
+        }
+      }).catch(() => { clearInterval(t); setUploadJobId(null); setUploadNote('Lost track of the upload.') })
+    }, 1500)
+    return () => clearInterval(t)
+  }, [uploadJobId])
+
   return (
     <div className="app">
       <svg width={0} height={0} style={{ position: 'absolute' }} aria-hidden="true"><LithologyPatterns /></svg>
@@ -164,6 +200,12 @@ export default function App() {
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
+        <button className="btn" onClick={() => fileInput.current?.click()} disabled={!!uploadJobId}>
+          {uploadJobId ? 'Processing…' : 'Upload document'}
+        </button>
+        <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.docx" className="visually-hidden"
+          onChange={onFileChosen} aria-label="Upload a borehole log" />
+        {uploadNote && <p className="upload-note" role="status">{uploadNote}</p>}
         {stats && (
           <p className="stats">
             <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes,{' '}
