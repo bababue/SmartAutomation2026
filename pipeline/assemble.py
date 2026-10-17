@@ -1,6 +1,8 @@
 """Turn per-page extractions into canonical `Borehole` records.
 
 - Sheets of the same hole within a document are merged (continuation layers joined).
+- A sheet that prints another position or ground level than the earlier sheets of its name goes to review,
+  and is a hole of its own when its depths restart at the surface.
 - Coordinates from summary tables are linked to logs by hole name.
 - A coordinate system stated elsewhere in the document (other holes, tables, notes, report text) is used
   when a log does not name one; positions far from the other holes of a document are flagged.
@@ -10,6 +12,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import statistics
 from collections import Counter, defaultdict
@@ -33,7 +36,7 @@ from schema.borehole import (
 )
 
 from .extraction_models import PageExtraction, PageLabResults, XCoordinateRow, XLog
-from .georef import crs_from_hint, georeference, haversine_km
+from .georef import candidates, crs_from_hint, georeference, haversine_km
 from .scoring import score
 
 LOG_KINDS = {"borehole_log", "test_pit_log", "probe_log"}
@@ -480,6 +483,83 @@ def clean_location_text(text: str | None) -> str | None:
     return cleaned or None
 
 
+# Sheets of one hole repeat the same header; beyond these differences a sheet shows another hole.
+POSITION_TOLERANCE_M = 25.0
+ELEVATION_TOLERANCE_M = 0.5
+
+
+def _distance_m(ref: XLog, log: XLog, doc_crs: tuple[str, int] | None,
+                doc_place: tuple[float, float, float] | None) -> float | None:
+    """Distance between the printed coordinates of two sheets: `ref` resolved as for the record, `log` by its
+    reading nearest to that, so a notation that leaves axes or zone open does not create a difference.
+    None if `ref` gives no position, infinity if `log` gives none."""
+    crs = ref.crs_raw or log.crs_raw or (doc_crs[0] if doc_crs else None)
+    country = ref.country or log.country
+    loc = georeference(ref.coords_raw, crs, country, *(doc_place or (None, None, None))).location
+    if loc.lat is None or loc.lon is None or loc.method != GeorefMethod.stated_coordinates:
+        return None
+    readings = candidates(log.coords_raw, crs, country, (loc.lat, loc.lon))
+    return min((haversine_km(loc.lat, loc.lon, c.lat, c.lon) * 1000 for c in readings), default=math.inf)
+
+
+def _header_difference(sheets: list[tuple[XLog, SourceRef]], log: XLog, doc_crs: tuple[str, int] | None,
+                       doc_place: tuple[float, float, float] | None) -> tuple[str, int] | None:
+    """How `log` prints another position or ground level than any earlier sheet of its hole, and the page of
+    the earlier value."""
+    worst: dict[str, tuple[float, int]] = {}
+    for x, src in sheets:
+        if not x.layers:
+            continue
+        if x.coords_raw and log.coords_raw and " ".join(x.coords_raw.split()) != " ".join(log.coords_raw.split()):
+            d = _distance_m(x, log, doc_crs, doc_place)
+            if d is not None and d > max(POSITION_TOLERANCE_M, worst.get("coordinates", (0.0,))[0]):
+                worst["coordinates"] = (d, src.page)
+        if x.elevation_m is not None and log.elevation_m is not None:
+            d = abs(x.elevation_m - log.elevation_m)
+            if d > max(ELEVATION_TOLERANCE_M, worst.get("ground level", (0.0,))[0]):
+                worst["ground level"] = (d, src.page)
+    if not worst:
+        return None
+    parts = ["coordinates give no position" if d == math.inf else f"{what} {d:.0f} m apart" if what == "coordinates"
+             else f"{what} {d:.1f} m apart" for what, (d, _) in worst.items()]
+    return " and ".join(parts), next(iter(worst.values()))[1]
+
+
+def split_holes(logs: list[tuple[XLog, SourceRef]], doc_crs: tuple[str, int] | None = None,
+                doc_place: tuple[float, float, float] | None = None
+                ) -> list[tuple[list[tuple[XLog, SourceRef]], list[str], bool]]:
+    """Sheets grouped under one name, as (sheets, findings, split off) per hole. The model gives an unnamed
+    sheet the name of the previous one, so a sheet that prints another position or ground level and whose
+    depths start again near the surface is another hole. Without the restart the sheets stay together, and
+    either way the difference goes to a person."""
+    runs: list[tuple[list[tuple[XLog, SourceRef]], list[str], bool]] = []
+    for log, src in logs:
+        if not runs:
+            runs.append(([(log, src)], [], False))
+            continue
+        if not log.layers:  # a summary or coordinate table entry belongs to the hole that bears the name
+            runs[0][0].append((log, src))
+            continue
+        diff = _header_difference(runs[-1][0], log, doc_crs, doc_place)
+        if diff is None:
+            runs[-1][0].append((log, src))
+            continue
+        what, ref_page = diff
+        sheets, findings, _ = runs[-1]
+        top = min((x.top_m for x in log.layers if x.top_m is not None), default=None)
+        reached = max((x.bottom_m for s, _ in sheets for x in s.layers if x.bottom_m is not None), default=0.0)
+        if top is not None and top < 0.5 and reached > top + 0.5:
+            findings.append(f"sheet header differs on page {src.page}: {what}; split off as a separate hole")
+            runs.append(([(log, src)], [f"sheet header differs from page {ref_page}: {what}, depths restart at "
+                                        f"{top:g} m; recorded as a separate hole, the name '{log.name}' on this "
+                                        f"sheet may be the previous hole's"], True))
+        else:
+            findings.append(f"sheet header differs on page {src.page} from page {ref_page}: {what}; "
+                            f"check that the sheets belong to one hole")
+            sheets.append((log, src))
+    return runs
+
+
 def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceRef]],
                    coord_rows: dict[str, XCoordinateRow], doc_place: tuple[float, float, float] | None,
                    doc_crs: tuple[str, int] | None = None, kind: str | None = None) -> tuple[Borehole, int]:
@@ -623,11 +703,22 @@ def assemble(results: list[PageResult]) -> list[Borehole]:
             doc_place = (statistics.median(p[0] for p in precise), statistics.median(p[1] for p in precise),
                          statistics.median(p[2] for p in precise))
         doc_records: list[Borehole] = []
-        for (kind, _), logs in groups.items():
-            if any(log.layers for log, _ in logs):
+        split_pages: Counter[int] = Counter()
+        for (kind, _), named in groups.items():
+            for logs, findings, split in split_holes(named, group_crs[group], doc_place):
+                if not any(log.layers for log, _ in logs):
+                    continue
                 try:
-                    bh, unreadable = build_borehole(doc_id, pages[0].source_file, logs, coord_rows, doc_place,
-                                                    group_crs[group], kind)
+                    # The printed name of a split-off hole may be the previous hole's: no table row by name.
+                    bh, unreadable = build_borehole(doc_id, pages[0].source_file, logs, {} if split else coord_rows,
+                                                    doc_place, group_crs[group], kind)
+                    if split:  # a placeholder, so that nothing stored for the named hole follows this one
+                        page = logs[0][1].page
+                        split_pages[page] += 1
+                        suffix = f"-{split_pages[page]}" if split_pages[page] > 1 else ""
+                        bh.borehole_id = f"{doc_id}:p{page}{suffix}"
+                        bh.borehole_name = f"unnamed sheet, {doc_id} p{page}{suffix}"
+                    bh.issues += findings
                     built[group].append((bh, unreadable, page_texts))
                     doc_records.append(bh)
                 except Exception as exc:  # one broken record must not stop the whole run
@@ -652,8 +743,8 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
     for bh in boreholes:
         loc = bh.location
         precise = loc.lat is not None and loc.method in (GeorefMethod.stated_coordinates, GeorefMethod.linked_table)
-        if not precise:
-            kept[(bh.borehole_id,)] = bh  # never merge on approximate positions
+        if not precise or any(i.startswith("sheet header differs") for i in bh.issues):
+            kept[(bh.borehole_id,)] = bh  # never merge on approximate positions or sheets of disputed holes
             continue
         project = re.sub(r"\W+", "", (bh.project_name or "").lower())
         key = (norm_name(bh.borehole_name), project, round(loc.lat, 4), round(loc.lon, 4))

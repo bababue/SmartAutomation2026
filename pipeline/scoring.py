@@ -20,7 +20,7 @@ from . import config
 # Findings that always need a human, whatever the score: anything that suggests a misread.
 BLOCKING = ("no layers extracted", "CRS ambiguous", "invalid interval", "non-finite depth", "invalid WGS84",
             "gap", "overlap", "layers end at", "stale correction", "log starts at", "depths printed in feet",
-            "missing sheets")
+            "missing sheets", "sheet header differs")
 
 # Georeferencing doubts that explain a position confidence below the release threshold.
 GEOREF_DOUBTS = ("coordinate system inferred", "coordinate axes inferred", "coordinate notation or datum ambiguous",
@@ -178,6 +178,7 @@ FINDING_CODES: list[tuple[str, str]] = [
     ("no layers extracted", "no_layers"), ("layer ", "invalid_interval"), ("gap", "gap"), ("overlap", "overlap"),
     ("minor discontinuity", "minor_discontinuity"), ("layers end at", "depth_mismatch"),
     ("log starts at", "log_starts_below_surface"), ("missing sheets", "missing_sheets"),
+    ("sheet header differs", "sheet_header_differs"),
     ("CRS ambiguous", "crs_ambiguous"), ("coordinate system inferred", "crs_inferred"),
     ("coordinate axes inferred", "axes_inferred"), ("coordinate notation or datum ambiguous", "notation_ambiguous"),
     ("coordinate system taken from", "crs_from_document"), ("coordinate system from reviewer knowledge", "crs_from_knowledge"),
