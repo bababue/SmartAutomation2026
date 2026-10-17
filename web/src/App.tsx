@@ -400,8 +400,10 @@ export default function App() {
             <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}/{stats.boreholes.toLocaleString('en')}</strong>{' '}
             (Released/Total) ·{' '}
             {stats.boreholes > stats.located ? <button className="link-button muted" onClick={() => {
+              const f: ReviewFilters = { ...DEFAULT_REVIEW_FILTERS, position: 'none' }
               setRouteActive(false); setSelectedId(null); setListOpen(true); setAuditOnly(false)
-              setReviewFilters({ ...DEFAULT_REVIEW_FILTERS, position: 'none' }); setView('review')
+              setReviewFilters(f); setView('review'); setGrouped(false)
+              fetchQueue(f, undefined, 1).then(({ items }) => { if (items[0]) setSelectedId(items[0].id) }).catch(() => undefined)
             }}>{(stats.boreholes - stats.located).toLocaleString('en')} without position</button>
               : <span>0 without position</span>}
           </p>}

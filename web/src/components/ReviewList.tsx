@@ -28,6 +28,16 @@ export function ReviewList({ items, groups, total, loading, audit, noun, selecte
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const byGroup = new Map<string, QueueItem[]>()
   for (const item of items) byGroup.set(item.grp, [...(byGroup.get(item.grp) ?? []), item])
+  // A record opened from elsewhere shows inside its group.
+  const selectedGroup = items.find((it) => it.id === selectedId)?.grp
+  const [shownFor, setShownFor] = useState<string | undefined>()
+  if (selectedGroup !== shownFor) {
+    setShownFor(selectedGroup)
+    if (selectedGroup && !expanded.has(selectedGroup)) setExpanded(new Set(expanded).add(selectedGroup))
+  }
+  // The selected record's group leads, then the groups with matching records.
+  const rank = (g: string) => (g === selectedGroup ? 0 : byGroup.has(g) ? 1 : 2)
+  const orderedGroups = [...groups].sort((a, b) => rank(a.group) - rank(b.group))
   function toggle(group: string) {
     setExpanded((current) => {
       const next = new Set(current)
@@ -73,7 +83,7 @@ export function ReviewList({ items, groups, total, loading, audit, noun, selecte
       ) : (
         <ul className="results review-list" aria-busy={loading}>
           {!grouped && items.map(renderItem)}
-          {grouped && groups.map((group) => {
+          {grouped && orderedGroups.map((group) => {
             const entries = byGroup.get(group.group) ?? []
             const share = group.count ? Math.round(100 * group.released / group.count) : 0
             const open = expanded.has(group.group)
