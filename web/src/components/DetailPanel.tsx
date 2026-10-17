@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Detail, DetailUpdate, Layer, SourceRef } from '../types'
 import { SHOW_SOURCE_FILE } from '../dev'
 import { lithStyle, patternId } from '../lithology'
-import { CorrectionList, LayerEditor, PositionCorrection } from './Corrections'
+import { CorrectionList, LayerAdder, LayerEditor, PositionCorrection, RecordEditor } from './Corrections'
 import { Profile } from './Profile'
 import { ReviewBox, type QueueNav } from './ReviewBox'
 
@@ -41,6 +41,14 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
   const [hovered, setHovered] = useState<number | null>(null)
   const [coordsHovered, setCoordsHovered] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
+  const [editingRecord, setEditingRecord] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const open = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+  // Findings in the order a reviewer needs them: what blocks the release, other checks, then the model's notes.
+  const blocking = new Set(detail.blocking ?? [])
+  const notes = bh.issues.filter((i) => i.startsWith('unreadable:'))
+  const others = bh.issues.filter((i) => !blocking.has(i) && !i.startsWith('unreadable:') && !i.startsWith('corrected by'))  // corrections are listed below
   const [pageIndex, setPageIndex] = useState(0)
   const pages = detail.source_pages
   const page = pages[Math.min(pageIndex, pages.length - 1)]  // the panel is keyed by id; clamp anyway
@@ -106,15 +114,40 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
 
         <section className="detail-data">
           <ReviewBox detail={detail} onChange={onReviewChange} nav={nav} />
-          {bh.issues.length > 0 && (
+          {bh.review_status !== 'approved' && bh.review_status !== 'rejected' && (
+            <div className="fix-bar">
+              <span>Wrong or missing values? Correct them first, then approve. Corrections are kept when the pipeline runs again.</span>
+              <span className="fix-bar-actions">
+                <button className="btn btn-small" onClick={() => open('detail-record')}>Position</button>
+                <button className="btn btn-small" onClick={() => { setEditingRecord(true); open('detail-record') }}>Header values</button>
+                <button className="btn btn-small" onClick={() => open('detail-layers')}>Layers</button>
+              </span>
+            </div>
+          )}
+          {blocking.size > 0 && (
+            <div className="checks checks-blocking">
+              <h3>Needs a person</h3>
+              <ul>{[...blocking].map((i) => <li key={i}>{i}</li>)}</ul>
+            </div>
+          )}
+          {(others.length > 0 || notes.length > 0) && (
             <div className="checks">
-              <h3>Plausibility findings</h3>
-              <ul>{bh.issues.map((i) => <li key={i}>{i}</li>)}</ul>
+              {others.length > 0 && (<><h3>Other findings</h3><ul>{others.map((i) => <li key={i}>{i}</li>)}</ul></>)}
+              {notes.length > 0 && (
+                <details className="model-notes">
+                  <summary>What the model could not read ({notes.length})</summary>
+                  <ul>{notes.map((i) => <li key={i}>{i.replace(/^unreadable:\s*/, '')}</li>)}</ul>
+                </details>
+              )}
             </div>
           )}
           <CorrectionList items={detail.corrections ?? []} />
 
-          <h3>Record</h3>
+          <h3 id="detail-record" className="section-head">
+            Record
+            {!editingRecord && <button className="btn btn-small" onClick={() => setEditingRecord(true)}>Edit header values</button>}
+          </h3>
+          {editingRecord && <RecordEditor borehole={bh} onChange={onReviewChange} onDone={() => setEditingRecord(false)} />}
           <dl className="record">
             <dt>Coordinates as printed</dt>
             <dd onMouseEnter={() => setCoordsHovered(true)} onMouseLeave={() => setCoordsHovered(false)}>
@@ -136,7 +169,11 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
             {bh.groundwater.length > 0 && (<><dt>Groundwater</dt><dd>{bh.groundwater.map((g) => g.dry ? 'dry' : `${fmt(g.depth_m)} m ${g.reference === 'casing' ? 'below casing ' : ''}(${g.kind})`).join('; ')}</dd></>)}
           </dl>
 
-          <h3>Layers</h3>
+          <h3 id="detail-layers" className="section-head">
+            Layers
+            {!adding && <button className="btn btn-small" onClick={() => setAdding(true)} disabled={editing != null}>Add layer</button>}
+          </h3>
+          <div className="table-scroll">
           <table className="layers">
             <thead>
               <tr><th>From</th><th>To</th><th>Lithology</th><th>Description</th><th>Stratigraphy</th><th><span className="sr-only">Edit</span></th></tr>
@@ -163,8 +200,14 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
                   </td>
                 </tr>
               ))}
+              {adding && (
+                <LayerAdder boreholeId={bh.borehole_id} suggestTop={bh.layers.length ? Math.max(...bh.layers.map((l) => l.bottom_m)) : 0}
+                  onChange={onReviewChange} onDone={() => setAdding(false)} />
+              )}
             </tbody>
           </table>
+          </div>
+          {!bh.layers.length && !adding && <p className="muted">No layers extracted. Use “Add layer” to enter them from the source page.</p>}
 
           {tests.length > 0 && (
             <>

@@ -167,7 +167,7 @@ export interface FeatureCollection {
   features: Feature[]
 }
 
-export type CorrectionKind = 'crs' | 'position' | 'layer'
+export type CorrectionKind = 'crs' | 'position' | 'layer' | 'layer_add' | 'field' | 'groundwater'
 
 export interface CorrectionRecord {
   id: number
@@ -185,11 +185,13 @@ export interface Detail {
   source_pages: { file: string; page: number; url: string }[]
   review_log: ReviewEvent[]
   corrections: CorrectionRecord[]
+  /** Findings that keep the record in the queue whatever its score. */
+  blocking: string[]
   threshold: number
 }
 
 /** What a review decision or a correction changes in the open record. */
-export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log'> & Partial<Pick<Detail, 'corrections'>>
+export type DetailUpdate = Pick<Detail, 'borehole' | 'review_log'> & Partial<Pick<Detail, 'corrections' | 'blocking'>>
 
 export interface Stats {
   boreholes: number

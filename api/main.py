@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
-from pipeline import config, corrections, export, store
+from pipeline import config, corrections, export, scoring, store
 from schema.borehole import DIN4023_LABEL_DE, Borehole, Lithology, ReviewStatus
 
 app = FastAPI(title="Borehole Atlas API")
@@ -140,8 +140,14 @@ def get_borehole(borehole_id: str, con: DB):
         "source_pages": source_pages,
         "review_log": store.review_log(con, borehole_id),
         "corrections": store.corrections_for(con, borehole_id),
+        "blocking": _blocking(bh),
         "threshold": config.AUTO_APPROVE_THRESHOLD,
     }
+
+
+def _blocking(bh: Borehole) -> list[str]:
+    """Findings that keep a record in the queue whatever its score."""
+    return [i for i in bh.issues if any(b in i for b in scoring.BLOCKING)]
 
 
 class Review(BaseModel):
@@ -283,7 +289,7 @@ def correct(borehole_id: str, body: Correction, con: DB):
                              item["reviewer"], body.comment)
     bh = store.load_borehole(con, borehole_id)
     return {"borehole": bh.model_dump(mode="json"), "review_log": store.review_log(con, borehole_id),
-            "corrections": store.corrections_for(con, borehole_id), "updated": updated}
+            "corrections": store.corrections_for(con, borehole_id), "blocking": _blocking(bh), "updated": updated}
 
 
 @app.get("/api/pages/{doc_id}/{page}")

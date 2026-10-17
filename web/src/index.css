@@ -178,8 +178,12 @@ button, input, select { font: inherit; color: inherit; }
   min-height: 0;
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr) minmax(300px, 420px);
+  grid-template-areas: "profile data source";
   overflow: hidden;
 }
+.detail-profile { grid-area: profile; }
+.detail-data { grid-area: data; }
+.detail-source { grid-area: source; }
 .detail-body > section { overflow: auto; padding: 14px 18px 24px; }
 .detail-profile { border-right: 1px solid var(--grid); background: var(--paper); }
 .detail-source { border-left: 1px solid var(--grid); background: var(--paper); }
@@ -263,7 +267,8 @@ button, input, select { font: inherit; color: inherit; }
 .review-meta { margin: 0; font-size: 13px; }
 .review-reasons { margin: 10px 0 0; padding-left: 18px; font-size: 14px; }
 .review-comment { margin: 8px 0 0; font-style: italic; font-size: 14px; }
-.review-form { display: grid; grid-template-columns: minmax(120px, 150px) minmax(140px, 1fr) auto; gap: 8px; align-items: end; margin-top: 12px; }
+.review-form { display: grid; grid-template-columns: minmax(120px, 170px) minmax(140px, 1fr); gap: 8px; align-items: end; margin-top: 12px; }
+.review-form .review-buttons { grid-column: 1 / -1; }
 .review-form label { display: grid; gap: 2px; font-size: 12px; color: var(--graphite); }
 .review-form input { height: 32px; border: 1px solid var(--grid); border-radius: 3px; padding: 0 8px; color: var(--ink); }
 .review-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -328,11 +333,15 @@ button, input, select { font: inherit; color: inherit; }
 .picker-meta { font-weight: 400; color: var(--graphite); font-size: 12px; }
 
 /* Smaller screens --------------------------------------------------------- */
+/* The source page stays next to the data at every width above phones: reviewing means comparing. */
 @media (max-width: 1500px) {
-  .detail-body { grid-template-columns: 230px minmax(0, 1fr); overflow: auto; }
-  .detail-body > section { overflow: visible; }
-  .detail-source { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--grid); }
-  .source-link { max-width: 640px; }  /* the outline is positioned on the link box */
+  .detail-body > section { padding: 12px 14px 20px; }
+  .detail-body {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 46%);
+    grid-template-rows: minmax(0, auto) minmax(0, 1fr);
+    grid-template-areas: "profile source" "data source";
+  }
+  .detail-profile { max-height: 34vh; border-right: 0; border-bottom: 1px solid var(--grid); }
 }
 @media (max-width: 760px) {
   .tabs { order: 3; }
@@ -346,8 +355,10 @@ button, input, select { font: inherit; color: inherit; }
   .sidebar { grid-row: 3; border-right: 0; }
   .legend { display: none; }
   .detail { top: 0; width: 100vw; }
-  .detail-body { grid-template-columns: 1fr; }
-  .detail-profile { border-right: 0; }
+  .detail-body { grid-template-columns: 1fr; grid-template-rows: none; grid-template-areas: "profile" "data" "source"; overflow: auto; }
+  .detail-body > section { overflow: visible; }
+  .detail-profile { border-right: 0; max-height: none; }
+  .detail-source { border-left: 0; border-top: 1px solid var(--grid); }
   .record { grid-template-columns: 1fr; }
 }
 
@@ -365,3 +376,19 @@ tr:hover .btn-edit, .btn-edit:focus-visible { opacity: 1; }
 .row-editing td { background: #fafaf8; vertical-align: top; }
 .num-input { width: 64px; height: 28px; padding: 0 6px; border: 1px solid var(--grid); border-radius: 3px; font: inherit; text-align: right; }
 .row-editing select { height: 28px; max-width: 160px; font: inherit; }
+
+.fix-bar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; margin: -4px 0 14px; padding: 8px 12px; border: 1px dashed var(--grid); border-radius: 3px; font-size: 13px; color: var(--graphite); }
+.fix-bar-actions { display: flex; gap: 6px; }
+.checks-blocking { border-left-color: var(--low); background: #fbeeee; }
+.model-notes { margin-top: 6px; font-size: 13px; color: var(--graphite); }
+.model-notes summary { cursor: pointer; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; scroll-margin-top: 8px; }
+.correction-form-wide { max-width: none; margin: 0 0 10px; }
+.correction-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 12px; }
+.correction-grid input { height: 30px; padding: 0 8px; border: 1px solid var(--grid); border-radius: 3px; font: inherit; }
+.row-editing textarea, .strat-inputs input { width: 100%; border: 1px solid var(--grid); border-radius: 3px; font: inherit; font-size: 13px; padding: 4px 6px; }
+.strat-inputs { display: grid; gap: 4px; min-width: 90px; }
+.correction-buttons-stack { flex-direction: column; align-items: stretch; }
+
+.table-scroll { overflow-x: auto; }
+.review-buttons { flex-wrap: wrap; }
