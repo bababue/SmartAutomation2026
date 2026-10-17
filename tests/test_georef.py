@@ -282,3 +282,55 @@ def test_a_utm_easting_split_in_transcription_resolves_to_no_point():
     assert resolve_with("N= 5.819.670,000 E= 389.940,000", 25833) is not None
     r = georeference(raw, "ETRS89 / UTM 33N", "DE", None, None, None)
     assert r.location.lat is None
+
+
+def test_datum_named_beside_a_utm_zone_picks_its_code():
+    from pipeline.georef import crs_from_hint
+
+    assert crs_from_hint("ED50 UTM 30") == [23030]
+    assert crs_from_hint("UTM (ED50) Huso 30S") == [23030]  # band S, not the southern hemisphere
+    assert crs_from_hint("ETRS89 / UTM zone 32N") == [25832]
+    assert crs_from_hint("UTM (WGS84) 30N") == [32630]  # the datum's digits are no zone
+    assert crs_from_hint("UTM WGS 84 Zone 30") == [32630]
+    assert crs_from_hint("UTM 30") == [32630]
+    assert crs_from_hint("UTM Zone 32 (GRS 80)") == [32632]
+
+
+def test_ed50_utm_lands_on_the_ed50_point():
+    lat, lon = 40.4169, -3.7035  # Madrid, Puerta del Sol
+    e, n = fwd(23030, lat, lon)
+    wgs_lon, wgs_lat = Transformer.from_crs(32630, 4326, always_xy=True).transform(e, n)
+    assert haversine_km(wgs_lat, wgs_lon, lat, lon) > 0.1  # read as WGS84 the point moves
+    r = georeference(f"X: {e:.1f} Y: {n:.1f}", "ED50 UTM 30", "ES", lat + 0.02, lon - 0.02, 5.0)
+    assert r.location.crs_epsg == 23030, r.issues
+    assert haversine_km(r.location.lat, r.location.lon, lat, lon) < 0.005
+    assert r.location.confidence >= 0.95 and not r.issues
+
+
+def test_etrs89_utm_exports_the_etrs89_code():
+    lat, lon = 47.9959, 7.8522  # Freiburg Minster
+    e, n = fwd(25832, lat, lon)
+    r = georeference(f"E {e:.2f} N {n:.2f}", "ETRS89 / UTM zone 32N", "DE", lat + 0.02, lon - 0.02, 5.0)
+    assert r.location.crs_epsg == 25832
+    assert r.location.confidence >= 0.95 and not r.issues
+
+
+def test_utm_zone_without_datum_where_ed50_is_common_is_flagged():
+    lat, lon = 40.4169, -3.7035
+    e, n = fwd(25830, lat, lon)
+    r = georeference(f"E {e:.1f} N {n:.1f}", "UTM 30", "ES", lat + 0.02, lon - 0.02, 5.0)
+    assert haversine_km(r.location.lat, r.location.lon, lat, lon) < 0.005
+    assert r.location.confidence < 0.9
+    assert any(i.startswith("coordinate notation or datum ambiguous") for i in r.issues)
+
+
+def test_utm_zone_beside_an_unknown_datum_is_no_wgs84_statement():
+    from pipeline.georef import crs_from_hint
+
+    assert crs_from_hint("PSAD56 / UTM zone 18S") == []
+    assert crs_from_hint("Pulkovo 1942 UTM 37") == []
+    lat, lon = -12.0464, -77.0428  # Lima, Plaza Mayor
+    e, n = Transformer.from_crs(4326, 24878, always_xy=True).transform(lon, lat)
+    r = georeference(f"E {e:.1f} N {n:.1f}", "PSAD56 / UTM zone 18S", "PE", lat, lon, 5.0)
+    assert r.location.confidence < 0.9
+    assert any(i.startswith("coordinate system inferred") for i in r.issues)
