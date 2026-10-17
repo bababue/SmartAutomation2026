@@ -1,6 +1,7 @@
 # Features
 
 What Borehole Atlas does, and ideas for what it could do next. How to run it is in [README.md](README.md);
+how a document flows through the pipeline, with diagrams, is in [docs/pipeline.md](docs/pipeline.md);
 the challenge owner's priorities are in [docs/challenge-owner-feedback.md](docs/challenge-owner-feedback.md)
 (referenced below as *feedback #n*).
 
