@@ -899,9 +899,9 @@ def build_borehole(doc_id: str, logs: list[tuple[XLog, SourceRef]],
 
 def placeholder(doc_id: str, source_file: str, page: int | None, issue: str, name: str | None = None) -> Borehole:
     """A blocking record for a log the run could not turn into a hole, so its page goes to a person: the hole
-    `name` that failed to assemble, else a log page that came back short. Its id and name never equal a real
-    hole's, so it cannot overwrite one."""
-    what = "not assembled" if name is not None else "not extracted"
+    `name` that failed to assemble or came back without layers, else a log page that came back short. Its id and
+    name never equal a real hole's, so it cannot overwrite one."""
+    what = "not extracted" if name is None or issue.startswith("log not extracted") else "not assembled"
     stem = f"{id_key(name)}-" if name else ""
     bh = Borehole(borehole_id=f"{doc_id}:{stem}p{page}-{what.replace(' ', '-')}",
                   borehole_name=f"{name or 'log'} {what}, {doc_id} p{page}",

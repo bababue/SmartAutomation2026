@@ -29,7 +29,7 @@ def inputs(doc_id="report", names=("BH1",)):
     return [doc], {doc_id: [page]}, {(doc_id, 1): classification}, {(doc_id, 1): extraction}
 
 
-@pytest.mark.parametrize("missing", ["empty", "one_hole", "assembly_error"])
+@pytest.mark.parametrize("missing", ["empty", "one_hole", "layerless", "assembly_error"])
 def test_incomplete_inventory_preserves_records_and_decisions(con, monkeypatch, missing):
     args = inputs(names=("BH1", "BH2"))
     for name in ("BH1", "BH2"):
@@ -45,6 +45,8 @@ def test_incomplete_inventory_preserves_records_and_decisions(con, monkeypatch, 
             return build(doc_id, logs, *args)
 
         monkeypatch.setattr(assembly, "build_borehole", fail_second)
+    elif missing == "layerless":
+        args[3][("report", 1)].logs[1].layers = []
     else:
         args[3][("report", 1)].logs = args[3][("report", 1)].logs[:0 if missing == "empty" else 1]
     assert runner._store(con, *args) == set()
@@ -225,6 +227,20 @@ def test_fresh_database_stores_a_lost_log_page_as_one_blocking_placeholder(con):
     lost = store.load_borehole(con, "report:p1-not-extracted")
     assert "log not extracted: page 1 shows 2 logs, 1 came back" in lost.issues
     assert lost.review_status == ReviewStatus.pending_review and [s.page for s in lost.sources] == [1]
+    assert any(finding_severity(i) == "blocking" for i in lost.issues)
+
+
+def test_a_hole_without_layers_on_any_page_is_lost_but_a_layerless_last_sheet_is_not(con):
+    docs, rendered, classes, extractions = inputs(names=("BH1", "BH2"))
+    rendered["report"].append(PageImage("report", 2, "", "", "", 1, 1))
+    classes[("report", 2)] = classes[("report", 1)].model_copy(update={"logs": [LogRef(name="BH1", sheet=None)]})
+    extractions[("report", 2)] = PageExtraction(logs=[_log("BH1", None, None, [])], coordinate_rows=[])
+    assert runner._lost_logs(rendered["report"], classes, extractions) == []
+
+    extractions[("report", 1)].logs[0].layers = []
+    assert runner._store(con, docs, rendered, classes, extractions) == {"report"}
+    lost = store.load_borehole(con, "report:BH1-p1-not-extracted")
+    assert "log not extracted: BH1 came back without layers on every page" in lost.issues
     assert any(finding_severity(i) == "blocking" for i in lost.issues)
 
 
