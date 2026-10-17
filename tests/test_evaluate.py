@@ -116,7 +116,8 @@ def test_database_without_extracted_column_is_migrated(tmp_path):
     old = sqlite3.connect(path)
     # The schema as it was before the column existed
     old.executescript(store.SCHEMA.replace(
-        "data TEXT,\n    extracted TEXT  -- model output before reviewer corrections (layers, position), for evaluation",
+        "data TEXT,\n    extracted TEXT,  -- model output before reviewer corrections (layers, position), for evaluation\n"
+        "    ground TEXT  -- derived ground model values (pipeline/ground.py)",
         "data TEXT"))
     assert "extracted" not in {r[1] for r in old.execute("PRAGMA table_info(boreholes)")}
     old.execute("INSERT INTO boreholes (id, doc_id, review_status, data) VALUES ('A:B', 'A', 'approved', '{}')")

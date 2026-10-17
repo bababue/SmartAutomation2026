@@ -181,7 +181,7 @@ To use another subscription than the CLI's default login, add `CLAUDE_CONFIG_DIR
 
 ```bash
 .venv/bin/python -m pipeline ingest                    # render all pages, list document ids (no API calls)
-.venv/bin/python -m pipeline estimate                  # page count and rough API cost
+.venv/bin/python -m pipeline estimate                  # page count, rough API cost, cost measured on cached pages
 .venv/bin/python -m pipeline run --doc profile01       # smoke test: one page
 .venv/bin/python -m pipeline run --doc MEA03-jpg --doc AUS01 --max-pages 6
 .venv/bin/python -m pipeline run --all --yes           # everything (~1,000 pages)
@@ -232,6 +232,11 @@ Restart the API after pipeline code changes; the UI picks up new data on reload.
   once, then approve or reject; from the queue the next waiting record opens automatically. Keys: `A` approve,
   `R` reject, `←`/`→` previous/next in the queue, `Esc` close.
 - **Section**: "+ Section" on boreholes shows them side by side along a line, at ground level where known.
+  Each hole marks its rock head (top of the rock that continues to the bottom of the hole; decomposed rock of
+  grades IV–VI above it is dashed) and its groundwater level, both derived from the layers in code
+  (`pipeline/ground.py`). Between neighbours up to 150 m apart they are joined as a linear estimate; the band
+  around the rock head widens with the distance to the nearest hole (±10 %). Layers themselves are not
+  correlated. The synthetic demo data contains a tunnel route ("Demo tunnel route") to try it.
 - **Export**: "Export released (CSV)" – one row per layer, released records only.
 
 ### 9. Tests

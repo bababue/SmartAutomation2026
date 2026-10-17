@@ -165,6 +165,16 @@ export interface CrsGroup {
   source_file: string | null
 }
 
+/** Ground model values derived from the layers (pipeline/ground.py), depths below ground in m. */
+export interface Ground {
+  final_depth_m: number | null
+  /** Top of the rock that continues to the bottom of the hole; null: rock not reached. */
+  rock_head_m: number | null
+  /** Top of decomposed rock (grades IV–VI) above the rock head. */
+  weathered_rock_top_m: number | null
+  groundwater_m: number | null
+}
+
 export interface BoreholeSummary {
   id: string
   name: string
@@ -181,6 +191,7 @@ export interface BoreholeSummary {
   n_issues: number
   lithologies: string | null
   strip: [number, number, Lithology][] | null
+  ground: Ground | null
   score: number | null
   review_status: ReviewStatus
   source_file: string | null

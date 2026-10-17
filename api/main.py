@@ -40,7 +40,7 @@ DB = Annotated[sqlite3.Connection, Depends(db)]
 
 LIGHT_COLUMNS = (
     "id, name, project, location_name, country, lat, lon, depth, elevation, investigation_type, "
-    "confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues, lithologies, strip, "
+    "confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues, lithologies, strip, ground, "
     + "(SELECT path FROM documents d WHERE d.doc_id = boreholes.doc_id) AS source_file"
 )
 
@@ -63,6 +63,7 @@ def _like_escape(value: str) -> str:
 def _feature(r: sqlite3.Row) -> dict:
     props = {k: r[k] for k in r.keys() if k not in ("lat", "lon")}
     props["strip"] = json.loads(r["strip"]) if r["strip"] else None
+    props["ground"] = json.loads(r["ground"]) if r["ground"] else None
     return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]}, "properties": props}
 
 

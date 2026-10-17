@@ -53,6 +53,43 @@ PROFILES = [
 ]
 
 
+# A synthetic tunnel route east of Offenburg: holes 15-25 m apart over a granite rock head that dips
+# and rises again, for the section view. (offset east in m, rock head m, ground level m)
+ROUTE = [(0, 16.0, 151.8), (18, 14.6, 152.0), (36, 12.4, 152.3), (55, 10.8, 152.9), (72, 9.1, 153.4),
+         (90, 9.6, 153.6), (108, 11.2, 153.5), (125, 13.8, 153.1), (145, None, 152.8), (400, 7.5, 155.0)]
+
+
+def tunnel_route(rnd: random.Random) -> list[Borehole]:
+    lat0, lon0 = 48.4690, 7.9600
+    out = []
+    for k, (east, rock, elev) in enumerate(ROUTE):
+        name = f"RB-{k + 1:02d}"
+        sand = round(rnd.uniform(3.0, 5.0), 1)
+        bottom = rock + 6 if rock is not None else 9.0  # one hole stops in the clay
+        rows = [(0.0, 0.8, "fill", None, "Made ground, gravelly"),
+                (0.8, sand, "gravel", None, "Gravel, sandy, medium dense"),
+                (sand, rock - 1.2 if rock else bottom, "clay", None, "Clay, silty, stiff")]
+        if rock is not None:
+            rows += [(rock - 1.2, rock, "plutonic_rock", "completely weathered (W5)", "Granite, decomposed to sand"),
+                     (rock, bottom, "plutonic_rock", "slightly weathered", "Granite, strong, jointed")]
+        layers = [Layer(top_m=round(t, 2), bottom_m=round(b, 2), description_original=d, primary=lith,
+                        weathering=w, source=SourceRef(file="demo", page=1)) for t, b, lith, w, d in rows]
+        bh = Borehole(
+            borehole_id=f"demo-route:{name}", borehole_name=name, investigation_type=InvestigationType.borehole,
+            project_name="Demo tunnel route (synthetic)", location_name="Offenburg",
+            location=Location(lat=lat0, lon=lon0 + east / (111_320 * 0.663), country="DE",
+                              method=GeorefMethod.stated_coordinates, confidence=0.95, crs_epsg=4326,
+                              coords_raw="synthetic"),
+            surface_elevation_m=elev, elevation_datum="mASL", depth_m=bottom, layers=layers,
+            groundwater=[GroundwaterObservation(depth_m=round(rnd.uniform(3.0, 4.2), 1), kind="standing")],
+            sources=[SourceRef(file="demo", page=1)],
+        )
+        bh.issues = bh.validate_log()
+        score(bh, {}, unreadable=0)
+        out.append(bh)
+    return out
+
+
 def build(seed: int = 7) -> list[Borehole]:
     rnd = random.Random(seed)
     out = []
@@ -92,7 +129,7 @@ def build(seed: int = 7) -> list[Borehole]:
             bh.issues = bh.validate_log() + (["position from place name only"] if not j else [])
             score(bh, {}, unreadable=rnd.choice([0, 0, 0, 0, 1, 3]))
             out.append(bh)
-    return out
+    return out + tunnel_route(rnd)
 
 
 def main() -> None:

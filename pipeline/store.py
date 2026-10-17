@@ -10,9 +10,11 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from schema.borehole import Borehole, ReviewStatus
 
-from . import config
+from . import config, ground
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -28,7 +30,8 @@ CREATE TABLE IF NOT EXISTS boreholes (
     lat REAL, lon REAL, depth REAL, elevation REAL, investigation_type TEXT,
     confidence REAL, loc_confidence REAL, loc_method TEXT, score REAL, review_status TEXT,
     n_layers INTEGER, n_issues INTEGER, lithologies TEXT, strip TEXT, content_hash TEXT, data TEXT,
-    extracted TEXT  -- model output before reviewer corrections (layers, position), for evaluation
+    extracted TEXT,  -- model output before reviewer corrections (layers, position), for evaluation
+    ground TEXT  -- derived ground model values (pipeline/ground.py)
 );
 CREATE INDEX IF NOT EXISTS boreholes_status ON boreholes (review_status, score);
 CREATE VIRTUAL TABLE IF NOT EXISTS boreholes_rtree USING rtree(rid, min_lat, max_lat, min_lon, max_lon);
@@ -82,6 +85,15 @@ def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
         con.execute("ALTER TABLE boreholes ADD COLUMN extracted TEXT")  # database from before evaluation
     if "evidence" not in {r["name"] for r in con.execute("PRAGMA table_info(knowledge)")}:
         con.execute("ALTER TABLE knowledge ADD COLUMN evidence TEXT")  # from before independent confirmations
+    if "ground" not in {r["name"] for r in con.execute("PRAGMA table_info(boreholes)")}:
+        with con:  # derived from the stored records, no rebuild needed
+            con.execute("ALTER TABLE boreholes ADD COLUMN ground TEXT")
+            for row in con.execute("SELECT rid, data FROM boreholes").fetchall():
+                try:
+                    summary = ground.summarize(Borehole.model_validate_json(row["data"])).model_dump_json()
+                except ValidationError:
+                    continue  # stays empty until the next rebuild
+                con.execute("UPDATE boreholes SET ground = ? WHERE rid = ?", (summary, row["rid"]))
     return con
 
 
@@ -168,8 +180,8 @@ def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str |
     cur = con.execute(
         """INSERT INTO boreholes (id, name, doc_id, project, location_name, country, lat, lon, depth, elevation,
            investigation_type, confidence, loc_confidence, loc_method, score, review_status, n_layers, n_issues,
-           lithologies, strip, content_hash, data, extracted)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           lithologies, strip, content_hash, data, extracted, ground)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             bh.borehole_id, bh.borehole_name, doc_id, bh.project_name, bh.location_name, loc.country,
             loc.lat, loc.lon, bh.depth_m or (bh.layers[-1].bottom_m if bh.layers else None), bh.surface_elevation_m,
@@ -177,7 +189,7 @@ def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str |
             loc.method.value if loc.method else None, bh.score, bh.review_status.value, len(bh.layers),
             len(bh.issues), ",".join(lithologies),
             as_json([[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers]),
-            digest, bh.model_dump_json(), extracted,
+            digest, bh.model_dump_json(), extracted, ground.summarize(bh).model_dump_json(),
         ),
     )
     if loc.lat is not None and loc.lon is not None:
