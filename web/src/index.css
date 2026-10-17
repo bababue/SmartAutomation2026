@@ -306,9 +306,18 @@ button, input, select { font: inherit; color: inherit; }
 }
 .review-auto_approved .review-status, .review-approved .review-status { background: color-mix(in srgb, var(--high) 18%, transparent); color: var(--high); }
 .review-rejected .review-status { background: color-mix(in srgb, var(--low) 18%, transparent); color: var(--low); }
-.review-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; margin: 0; padding: 0; list-style: none; }
-.chip-pill { padding: 3px 10px; border: 1px solid var(--grid); border-radius: 14px; background: var(--panel); font-size: 13px; }
-.chip-pill .level { font-weight: 400; }
+.checks-score { border-left-color: var(--grid); background: var(--panel); }
+.checks-score h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+.checks-levels { display: inline-flex; flex-wrap: wrap; gap: 4px 14px; font-size: 14px; font-weight: 400; }
+.checks-score .level { font-weight: 400; }
+.review-summary { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); }
+.review-summary .checks { margin-bottom: 10px; }
+.checks h4 { margin: 10px 0 2px; font-size: 14px; }
+.review-toggle { height: 40px; }
+.btn-decide { display: inline-flex; align-items: center; justify-content: center; width: 40px; }
+.btn-decide svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.btn-reject.btn-decide { background: var(--panel); }
+.btn-reject.btn-decide:hover { background: var(--rejected-soft); border-color: var(--low); }
 .review-meta { font-size: 13px; }
 .review-comment { font-style: italic; font-size: 13px; }
 .review-form { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin-top: 10px; }
@@ -317,7 +326,7 @@ button, input, select { font: inherit; color: inherit; }
 .review-form-comment input { width: min(360px, 60vw); }
 .review-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
 .review-buttons .btn { white-space: nowrap; height: 40px; padding: 0 18px; font-weight: 600; }
-.review-buttons kbd { font: inherit; font-size: 10px; opacity: 0.7; margin-left: 2px; }
+.review-buttons .btn-decide { padding: 0; }
 .btn-approve { background: var(--high); border-color: var(--high); color: #fff; }
 .btn-approve:hover { background: #276b43; border-color: #276b43; }
 .btn-reject { color: var(--low); border-color: var(--low); }
@@ -434,7 +443,6 @@ button, input, select { font: inherit; color: inherit; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .btn-small { height: 26px; padding: 0 8px; font-size: 13px; }
 
-.checks-blocking { border-left-color: var(--low); background: #fbeeee; }
 .model-notes { margin-top: 6px; font-size: 13px; color: var(--graphite); }
 .model-notes summary { cursor: pointer; }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; scroll-margin-top: 8px; }

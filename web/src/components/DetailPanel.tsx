@@ -91,9 +91,18 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
           <button className="btn btn-icon" onClick={onClose} aria-label="Close details" title="Close (Esc)">✕</button>
         </div>
       </header>
-      <ReviewBox detail={detail} onChange={onReviewChange} nav={nav}>
-        <li className="chip-pill"><Level value={bh.confidence} label="Extraction" /></li>
-        <li className="chip-pill" title={`Position ${METHOD_TEXT[loc.method ?? ''] ?? 'unknown'}`}><Level value={loc.confidence} label="Position" /></li>
+      <ReviewBox detail={detail} onChange={onReviewChange} nav={nav} findings={<>
+        {blocking.size > 0 && (<><h4>Needs a person</h4><ul>{[...blocking].map((i) => <li key={i}>{i}</li>)}</ul></>)}
+        {others.length > 0 && (<><h4>Other findings</h4><ul>{others.map((i) => <li key={i}>{i}</li>)}</ul></>)}
+        {notes.length > 0 && (
+          <details className="model-notes">
+            <summary>What the model could not read ({notes.length})</summary>
+            <ul>{notes.map((i) => <li key={i}>{i.replace(/^unreadable:\s*/, '')}</li>)}</ul>
+          </details>
+        )}
+      </>}>
+        <Level value={bh.confidence} label="Extraction" />
+        <span title={`Position ${METHOD_TEXT[loc.method ?? ''] ?? 'unknown'}`}><Level value={loc.confidence} label="Position" /></span>
       </ReviewBox>
 
       <div className={`detail-body${sourceOpen ? '' : ' source-closed'}`}>
@@ -103,23 +112,6 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
         </section>
 
         <section className="detail-data">
-          {blocking.size > 0 && (
-            <div className="checks checks-blocking">
-              <h3>Needs a person</h3>
-              <ul>{[...blocking].map((i) => <li key={i}>{i}</li>)}</ul>
-            </div>
-          )}
-          {(others.length > 0 || notes.length > 0) && (
-            <div className="checks">
-              {others.length > 0 && (<><h3>Other findings</h3><ul>{others.map((i) => <li key={i}>{i}</li>)}</ul></>)}
-              {notes.length > 0 && (
-                <details className="model-notes">
-                  <summary>What the model could not read ({notes.length})</summary>
-                  <ul>{notes.map((i) => <li key={i}>{i.replace(/^unreadable:\s*/, '')}</li>)}</ul>
-                </details>
-              )}
-            </div>
-          )}
           <CorrectionList items={detail.corrections ?? []} />
 
           {editing === 'record' ? <RecordEditor borehole={bh} onChange={onReviewChange} onDone={done} /> : (

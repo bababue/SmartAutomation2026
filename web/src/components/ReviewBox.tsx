@@ -16,26 +16,30 @@ interface Props {
   detail: Detail
   onChange: (update: DetailUpdate) => void
   nav?: QueueNav | null
-  /** Extra chips shown before the score reasons. */
+  /** Shown next to the summary heading. */
   children?: ReactNode
+  /** Findings shown in the summary below the score reasons. */
+  findings?: ReactNode
 }
 
 const typing = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
 
 /** Release status, why it needs a human, and the decision controls. */
-export function ReviewBox({ detail, onChange, nav, children }: Props) {
+export function ReviewBox({ detail, onChange, nav, children, findings }: Props) {
   const bh = detail.borehole
   const [reviewer, setReviewer] = useState(loadReviewer)
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [open, setOpen] = useState(false)
   const status = bh.review_status
   const decided = status === 'approved' || status === 'rejected'
 
   async function decide(decision: ReviewStatus) {
     if (busy || decision === status) return
     if (!reviewer.trim()) {
+      setOpen(true)
       setError('Enter your name so the decision can be traced.')
       return
     }
@@ -84,27 +88,37 @@ export function ReviewBox({ detail, onChange, nav, children }: Props) {
             : `Below ${scoreText(detail.threshold)} or a finding that needs a person`}>
           {STATUS_LABEL[status]}
         </span>
-        <ul className="review-chips">
-          {children}
-          {bh.score_reasons.map((r) => <li key={r} className="chip-pill">{r}</li>)}
-        </ul>
         <div className="review-buttons">
+          <button className="btn review-toggle" aria-expanded={open} aria-controls="review-summary" onClick={() => setOpen(!open)}>
+            Review summary <span aria-hidden="true">{open ? '▴' : '▾'}</span>
+          </button>
           {decided && (
             <button className="btn" disabled={busy} onClick={() => decide('pending_review')}>Reopen</button>
           )}
           {status !== 'rejected' && (
-            <button className="btn btn-reject" disabled={busy} onClick={() => decide('rejected')} title="Shortcut: R">
-              {nav ? 'Reject and next' : 'Reject'} <kbd>R</kbd>
+            <button className="btn btn-decide btn-reject" disabled={busy} onClick={() => decide('rejected')}
+              aria-label={nav ? 'Reject and next' : 'Reject'} title={`${nav ? 'Reject and next' : 'Reject'} (R)`}>
+              <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
             </button>
           )}
           {status !== 'approved' && (
-            <button className="btn btn-approve" disabled={busy} onClick={() => decide('approved')} title="Shortcut: A">
-              {nav ? 'Approve and next' : 'Approve'} <kbd>A</kbd>
+            <button className="btn btn-decide btn-approve" disabled={busy} onClick={() => decide('approved')}
+              aria-label={nav ? 'Approve and next' : 'Approve'} title={`${nav ? 'Approve and next' : 'Approve'} (A)`}>
+              <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.8" /></svg>
             </button>
           )}
         </div>
       </div>
+      {error && <p className="error" role="alert">{error}</p>}
 
+      {open && <div id="review-summary" className="review-summary">
+      <div className="checks checks-score">
+        <h3>Summary <span className="checks-levels">{children}</span></h3>
+        <ul>
+          {bh.score_reasons.map((r) => <li key={r}>{r}</li>)}
+        </ul>
+        {findings}
+      </div>
       <div className="review-form">
         <label>
           Your name
@@ -117,7 +131,6 @@ export function ReviewBox({ detail, onChange, nav, children }: Props) {
         {decided && <span className="muted review-meta">by {bh.reviewed_by ?? 'unknown'}, {fmtDateTime(bh.reviewed_at)}</span>}
         {bh.review_comment && <span className="review-comment">“{bh.review_comment}”</span>}
       </div>
-      {error && <p className="error" role="alert">{error}</p>}
 
       {detail.review_log.length > 0 && (
         <details className="review-log">
@@ -132,6 +145,7 @@ export function ReviewBox({ detail, onChange, nav, children }: Props) {
           </ul>
         </details>
       )}
+      </div>}
     </section>
   )
 }
