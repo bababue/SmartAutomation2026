@@ -136,10 +136,13 @@ def crs_from_hint(crs_raw: str | None) -> list[Crs]:
 
 # --- number parsing -----------------------------------------------------------------
 
+# 'ØV-koordinat' and 'NS-koordinat' are Norwegian for the east-west and north-south coordinate.
 LABEL = (
     r"(?P<label>latitude|longitude|lat|lon|long|northing|easting|nord|norte|este|øst|ost|"
-    r"x-coord|y-coord|n|e|x|y)"
+    r"x-coord|y-coord|øv|ns|n|e|x|y)(?:-?koordinat(?:e|en)?)?"
 )
+# A UTM zone printed beside the values ('UTM Sone: 32') is no coordinate; the zone is read from the text itself.
+ZONE = re.compile(r"\b(?:utm\s*)?(?:zone|sone|zona)\s*[:=]?\s*\d{1,2}\s*[c-x]?(?![\w.,])", re.IGNORECASE)
 TOKEN = r"(?P<num>-?\d[\d.,']*\d|-?\d)"  # no spaces: '48.1 7.9' are two values
 
 
@@ -155,9 +158,9 @@ def _norm_label(label: str | None) -> str | None:
     if not label:
         return None
     label = label.lower()
-    if label in ("n", "northing", "nord", "norte", "lat", "latitude", "y-coord"):
+    if label in ("n", "ns", "northing", "nord", "norte", "lat", "latitude", "y-coord"):
         return "n" if label not in ("y-coord",) else "y"
-    if label in ("e", "easting", "este", "øst", "ost", "lon", "long", "longitude"):
+    if label in ("e", "øv", "easting", "este", "øst", "ost", "lon", "long", "longitude"):
         return "e"
     if label in ("x", "x-coord"):
         return "x"
@@ -213,8 +216,9 @@ def parse_tokens(coords_raw: str) -> list[Token]:
         tokens.append(Token(m.group(2).lower(), m.group(1), values, groups))
     if tokens:
         return tokens
-    pattern = re.compile(rf"(?:{LABEL}\s*[:=]?\s*)?{TOKEN}", re.IGNORECASE)
-    for m in pattern.finditer(text):
+    # A label is a word of its own, not the last letter of one ('Sone 32' has no easting 32).
+    pattern = re.compile(rf"(?:(?<![^\W\d_]){LABEL}\s*[:=]?\s*)?{TOKEN}", re.IGNORECASE)
+    for m in pattern.finditer(ZONE.sub(" ", text)):
         num = m.group("num").strip().rstrip(".,")
         if len(re.sub(r"\D", "", num)) < 2:
             continue

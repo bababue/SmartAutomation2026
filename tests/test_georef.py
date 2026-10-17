@@ -236,3 +236,13 @@ def test_oslo_local_grid_reads_x_as_northing():
     assert haversine_km(loc.lat, loc.lon, lat, lon) < 0.01
     assert loc.confidence >= 0.9
     assert not any("ambiguous" in i or "inferred" in i for i in r.issues)
+
+
+def test_a_utm_zone_beside_norwegian_labels_is_no_coordinate():
+    # Oslo City Hall in UTM 32N, written as Norwegian logs print it.
+    e, n = Transformer.from_crs(4326, 32632, always_xy=True).transform(10.7337, 59.9119)
+    raw = f"UTM Sone: 32 ØV-koordinat: {e:.0f} NS-koordinat: {n:.0f}"
+    assert [(t.label, t.raw) for t in parse_tokens(raw)] == [("e", f"{e:.0f}"), ("n", f"{n:.0f}")]
+    r = georeference(raw, "Kartdatum WGS 84, UTM Sone 32", "NO", 59.91, 10.75, 5.0)
+    assert haversine_km(r.location.lat, r.location.lon, 59.9119, 10.7337) < 0.01
+    assert r.location.confidence >= 0.9 and not r.issues
