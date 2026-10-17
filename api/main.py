@@ -32,7 +32,7 @@ from pyproj import CRS
 from pyproj.exceptions import CRSError
 
 from pipeline import config, corrections, evaluate, export, ingest, scoring, store, uploads
-from schema.borehole import DIN4023_LABEL_DE, Borehole, LabParameter, Lithology, ReviewStatus
+from schema.borehole import Borehole, LabParameter, Lithology, ReviewStatus
 
 from . import similar
 
@@ -140,7 +140,7 @@ def _conditions(values: list[str], name: str) -> list[tuple[str, float | None, f
     return out
 
 
-def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, ids,
+def _filters(q, bbox, lithology, lab, min_position, status, ids,
              group=None, located=True) -> tuple[list[str], list]:
     """WHERE clauses of the list filters; `located`: only holes with a position (the map and the list)."""
     where, params = ["lat IS NOT NULL"] if located else ["1"], []
@@ -184,12 +184,6 @@ def _filters(q, bbox, lithology, lab, country, min_depth, min_position, status, 
                        "OR qualifier = 'range' AND value_upper >= value AND value_upper <= ?)")
             params += [lab_max, lab_max]
         where.append(clause + ")")
-    if country:
-        where.append("country = ?")
-        params.append(country.upper())
-    if min_depth is not None:
-        where.append("depth >= ?")
-        params.append(min_depth)
     if min_position is not None:
         where.append("loc_confidence >= ?")
         params.append(min_position)
@@ -208,8 +202,6 @@ def list_boreholes(
     lithology: list[str] = Query(default_factory=list,
                                  description="code[:from_m:to_m], e.g. clay:10:20 (a clay layer between 10 and 20 m)"),
     lab: list[str] = Query(default_factory=list, description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
-    country: str | None = None,
-    min_depth: float | None = None,
     min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
     status: Literal["all", "released", "pending", "rejected"] = "all",
     id: list[str] = Query(default_factory=list, max_length=500, description="only these borehole ids"),
@@ -226,8 +218,8 @@ def list_boreholes(
     frequent project name, count, released count and bounding box) of all matches, ordered by group."""
     if fields == "layers" and not bbox:
         raise HTTPException(422, "bbox is required for layer strips")
-    where, params = _filters(q, bbox, _conditions(lithology, "lithology"), _conditions(lab, "lab"), country,
-                             min_depth, min_position, status, id, group)
+    where, params = _filters(q, bbox, _conditions(lithology, "lithology"), _conditions(lab, "lab"),
+                             min_position, status, id, group)
     ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max,
                                                          similar.material_conditions(material))
     where, params = where + ground_where, params + ground_params
@@ -768,7 +760,7 @@ def stats_detail(
 ):
     """Aggregates for the statistics view over the records the list filters select, holes without a position
     included: key figures, release funnel, findings, logged metres per lithology, final depths and groups."""
-    where, params = _filters(q, None, _conditions(lithology, "lithology"), _conditions(lab, "lab"), None, None,
+    where, params = _filters(q, None, _conditions(lithology, "lithology"), _conditions(lab, "lab"),
                              min_position, status, [], group, located=False)
     ground_where, ground_params = similar.ground_filters(rock_head_max, groundwater_max,
                                                          similar.material_conditions(material))
@@ -830,11 +822,6 @@ def stats_detail(
         "crs": [[r["epsg"], r["n"]] for r in crs],
         "audit": evaluate.audit_summary(con),  # the whole database: the sample is drawn from all releases
     }
-
-
-@app.get("/api/lithologies")
-def lithologies():
-    return [{"key": lith.value, "label_de": DIN4023_LABEL_DE.get(lith)} for lith in Lithology]
 
 
 @app.get("/api/export.csv")
