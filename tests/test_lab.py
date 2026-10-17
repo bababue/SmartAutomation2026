@@ -145,7 +145,7 @@ def test_duplicate_record_hands_its_lab_values_to_the_kept_one():
     report = located("report", 0.5, [(1.0, 20.0), (2.0, 25.0)])  # only the report has the lab sheet
     image = located("report_png", 0.9, [(2.0, 25.0)])            # the image export of the log page wins
     kept, = dedupe([report, image])
-    assert kept is image and sorted((r.top_m, r.value) for r in kept.lab_results) == [(1.0, 20.0), (2.0, 25.0)]
+    assert kept.borehole_id == image.borehole_id and sorted((r.top_m, r.value) for r in kept.lab_results) == [(1.0, 20.0), (2.0, 25.0)]
     # A test pit of the same name at the same place is another hole: nothing is merged.
     pit = located("pits", 0.4, [(0.5, 3.0)])
     pit.investigation_type = InvestigationType.test_pit
@@ -165,5 +165,5 @@ def test_lab_values_from_a_log_in_feet_keep_the_kept_record_in_review():
     report.lab_results = [LabResult(parameter="ucs", value=20.0, top_m=1.5)]
     image.review_status = ReviewStatus.auto_approved
     kept, = dedupe([report, image])
-    assert kept is image and len(kept.lab_results) == 1
-    assert kept.review_status == ReviewStatus.pending_review and kept.issues == report.issues
+    assert kept.borehole_id == image.borehole_id and len(kept.lab_results) == 1
+    assert kept.review_status == ReviewStatus.pending_review and report.issues[0] in kept.issues

@@ -1428,6 +1428,15 @@
       "title": "Sources",
       "type": "array"
     },
+    "field_sources": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SourceRef"
+      },
+      "default": {},
+      "description": "Header fields filled from another document of the same hole than the layer log, with the first page of that document's record",
+      "title": "Field Sources",
+      "type": "object"
+    },
     "confidence": {
       "anyOf": [
         {
