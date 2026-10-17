@@ -315,3 +315,36 @@ def test_a_conversion_from_feet_stated_only_in_the_notes_goes_to_a_person(notes,
     feet = [i for i in bh.issues if i.startswith("depths printed in feet")]
     assert bool(feet) == blocked
     assert all(finding_severity(i) == "blocking" for i in feet)
+
+
+def _sheet(page: int, name: str, sheet: str, layers, drilled: str | None = None) -> PageResult:
+    log = _log(name, None, None, layers).model_copy(update={"sheet": sheet, "start_date": drilled,
+                                                           "crs_raw": None})
+    return PageResult("r", "r.pdf", page, "borehole_log", PageExtraction(logs=[log], coordinate_rows=[]))
+
+
+def test_a_sheet_whose_hole_number_lost_a_digit_joins_the_hole_it_continues():
+    # B4 has two sheets; the page after B14's sheet 2 of 3 names 'B4' but is sheet 3 of 3 of B14.
+    pages = [_sheet(1, "B4", "1 of 2", [(0, 5), (5, 10.45)], "2001-05-02"),
+             _sheet(2, "B4", "2 of 2", [(11.5, 20)], "2001-05-02"),
+             _sheet(3, "B14", "1 of 3", [(0, 6), (6, 12.45)], "2001-05-07"),
+             _sheet(4, "B14", "2 of 3", [(13.5, 27.45)], "2001-05-07"),
+             _sheet(5, "B4", "3 of 3", [(28.5, 37.6)], "2001-05-07")]
+    records = {b.borehole_name: b for b in assemble(pages, deduplicate=False)}
+    assert records["B4"].layers[-1].bottom_m == 20
+    assert records["B14"].layers[-1].bottom_m == 37.6
+    finding = next(i for i in records["B14"].issues if i.startswith("sheet assigned by its numbering"))
+    assert finding_severity(finding) == "needs_look"
+
+
+def test_a_sheet_stays_with_its_name_when_the_numbering_or_date_does_not_point_elsewhere():
+    base = [_sheet(1, "B4", "1 of 2", [(0, 10.45)], "2001-05-02"),
+            _sheet(3, "B14", "1 of 3", [(0, 12.45)], "2001-05-07"),
+            _sheet(4, "B14", "2 of 3", [(13.5, 27.45)], "2001-05-07")]
+    other_day = base + [_sheet(5, "B4", "3 of 3", [(28.5, 37.6)], "2001-05-03")]
+    own_count = base[:1] + [_sheet(2, "B4", "2 of 3", [(11.5, 20)], "2001-05-02")] + base[1:] + [
+        _sheet(5, "B4", "3 of 3", [(28.5, 37.6)])]
+    for pages in (other_day, own_count):
+        records = {b.borehole_name: b for b in assemble(pages, deduplicate=False)}
+        assert records["B14"].layers[-1].bottom_m == 27.45
+        assert not any(i.startswith("sheet assigned") for b in records.values() for i in b.issues)

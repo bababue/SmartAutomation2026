@@ -938,7 +938,9 @@ def _file_order(doc_id: str) -> list:
     return [(0, int(t), "") if t.isdigit() else (1, 0, t) for t in re.split(r"(\d+)", doc_id) if t]
 
 
-SHEET_GAP_M = 1.0  # a continuation sheet starts at most this far below where the previous sheet ends
+# A continuation sheet starts at most this far below where the previous sheet ends: SPT forms take a 0.45 m sample
+# every 1.5 m, so a sheet ending with a sample leaves 1.05 m to the next one.
+SHEET_GAP_M = 1.5
 
 
 def join_image_sheets(by_doc: dict[str, list[PageResult]], group_crs: dict[str, tuple[str, int] | None]) -> None:
@@ -988,6 +990,34 @@ def _continues_sheet(sheets: list[tuple[XLog, SourceRef]], log: XLog) -> bool:
         return False
     last_top, bottom = max(ends, key=lambda e: e[1])
     return (last_top if last_top is not None else bottom) - 0.01 <= top <= bottom + SHEET_GAP_M
+
+
+def reassign_misnamed_sheets(groups: dict[HoleKey, list[tuple[XLog, SourceRef]]]) -> dict[HoleKey, list[str]]:
+    """A handwritten hole number can lose a digit on one sheet ('B-4' for 'B-14'). Sheet 'k of n' moves to the
+    hole whose sheet 'k-1 of n' comes right before it when no sheet of its own name counts n sheets, the depths
+    continue and the drilling date agrees. Returns the findings per hole that received a sheet."""
+    entries = sorted(((src.page, n, key, log, src) for key, logs in groups.items()
+                      for n, (log, src) in enumerate(logs) if log.layers), key=lambda e: (e[0], e[1]))
+    findings: dict[HoleKey, list[str]] = defaultdict(list)
+    prev: tuple[HoleKey, XLog] | None = None
+    for _, _, key, log, src in entries:
+        sheet = _sheet_number(log)
+        if prev and sheet and sheet[0] > 1 and prev[0] != key and prev[0][0] == key[0] \
+                and _sheet_number(prev[1]) == (sheet[0] - 1, sheet[1]) \
+                and not any((s := _sheet_number(x)) and s[1] == sheet[1] for x, _ in groups[key] if x is not log) \
+                and not (log.start_date and prev[1].start_date and log.start_date != prev[1].start_date):
+            target = groups[prev[0]]
+            if _continues_sheet(target, log) and _header_difference(target, log, None, None) is None:
+                groups[key] = [(x, s) for x, s in groups[key] if x is not log]
+                if not groups[key]:
+                    del groups[key]
+                target.append((log, src))
+                target.sort(key=lambda e: e[1].page)
+                findings[prev[0]].append(f"sheet assigned by its numbering: page {src.page} names '{log.name}', "
+                                         f"taken as sheet {sheet[0]} of {sheet[1]} of '{prev[1].name}'")
+                key = prev[0]
+        prev = (key, log)
+    return findings
 
 
 def _document_inputs(pages: list[PageResult]) -> tuple[dict[HoleKey, XCoordinateRow],
@@ -1057,11 +1087,15 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
         group = store.document_group(doc_id)
         pages.sort(key=lambda r: r.page)
         coord_rows, groups, doc_place = _document_inputs(pages)
+        reassigned = reassign_misnamed_sheets(groups)
         page_texts = {(r.source_file, r.page): r.text for r in pages}
         doc_records: list[Borehole] = []
         split_pages: Counter[int] = Counter()
-        for (kind, _), named in groups.items():
+        for key, named in groups.items():
+            kind = key[0]
             for logs, findings, naming in split_holes(named, group_crs[group], doc_place):
+                if naming == "named":
+                    findings = findings + reassigned.get(key, [])
                 if not any(log.layers for log, _ in logs):
                     continue
                 try:

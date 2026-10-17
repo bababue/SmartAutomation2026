@@ -105,7 +105,7 @@ def counts_against(unreadable: str) -> bool:
 
 # Findings that need a look before release, without blocking: they cap the extraction confidence.
 NEEDS_LOOK = ("coordinates not found on a second look", "boundary inferred", "core loss inferred", "lithology of layer", "properties differ",
-              "sources differ on", "possibly the same hole as")
+              "sources differ on", "possibly the same hole as", "sheet assigned by its numbering")
 NEEDS_LOOK_RE = re.compile(r"^core run .*: (?:(?:SCR|RQD) [\d.]+% above TCR|\w+ [\d.]+% outside)")
 
 
@@ -236,7 +236,8 @@ FINDING_CODES: list[tuple[str, str]] = [
     ("corrected by", "correction"), ("stale correction", "stale_correction"), ("depths printed in feet", "feet"),
     ("core run", "core_run_inconsistent"), ("sample", "test_below_final_depth"), ("SPT at", "test_below_final_depth"),
     ("groundwater marked dry", "groundwater_inconsistent"), ("combined with the record from", "combined_records"),
-    ("same hole assumed", "same_hole_assumed"), ("sources disagree on", "sources_disagree"),
+    ("same hole assumed", "same_hole_assumed"), ("sheet assigned by its numbering", "sheet_reassigned"),
+    ("sources disagree on", "sources_disagree"),
     ("sources differ on", "sources_differ"), ("possibly the same hole as", "possibly_same_hole"),
     ("possible prompt injection", "prompt_injection"),
 ]
