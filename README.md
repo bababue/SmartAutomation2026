@@ -258,25 +258,48 @@ Measures extraction quality against records a human has checked.
 
 `snapshot` writes `data/eval/reference.json` (git-ignored, confidential like all of `data/`). It adds to and
 updates the existing reference, so a record approved earlier stays in it even if a later run changes it and
-sends it back to review. Per record it keeps the layers (top, bottom, primary lithology), the position and the
-EPSG code.
+sends it back to review. Per record it keeps the natural key, the layers (top, bottom, primary lithology), the
+position and EPSG code, the final depth, the groundwater levels and the lab values.
 
 `eval` prints, per document and overall:
 
 | Column | Meaning |
 |---|---|
-| `holes` / `miss` / `extra` | reference records, of those not found by ID, records of the same documents not in the reference (often just not reviewed yet) |
-| `bounds` | share of reference layer boundaries with a current boundary within 0.1 m |
+| `holes` / `miss` / `extra` | reference records, of those not found (by ID, else by natural key), records of the same documents not in the reference (often just not reviewed yet) |
+| `bounds` | share of reference layer boundaries with a current boundary within 0.1 m; a missing record counts all of its boundaries as missed |
+| `prec` | share of the model's boundaries that are in the reference (extra boundaries lower it) |
 | `lith` | same primary lithology on layers whose top and bottom both match |
+| `lith m` | share of the reference log length with the same lithology at the same depth (robust to different splits) |
 | `med m` / `max m` | median and maximum position error in metres |
-| `no pos` / `crs≠` | records that lost their position / have a different EPSG code |
+| `no pos` / `crs≠` | records without a position (missing ones included) / with a different EPSG code |
+| `depth` / `gw` / `lab` | final depth within 0.1 m; groundwater levels found; lab values with the same parameter, value and sample depth |
 | `corr` | compared records with reviewer corrections |
 
-Every run keeps the model output before reviewer corrections (layers and position, column `boreholes.extracted`).
+Every run keeps the model output before reviewer corrections (column `boreholes.extracted`).
 `eval` compares that by default, so a record a reviewer fixed still counts the model's mistake. With
 `--corrected` it compares the final values instead; corrected records then match the reference by construction.
-Records stored before this column existed are compared with their final values until the next `rebuild`.
-Typical use: snapshot after a review session, change prompts or code, `rebuild`/`run`, then `eval`.
+Fields a stored record or reference entry does not have yet are not counted until the next `rebuild` or snapshot.
+
+`eval holdout --doc GROUP` (repeatable) marks document groups that are kept out of prompt tuning; the reports
+then show the tuning and holdout documents separately. Tune on the rest, check the combined change once on the
+holdout.
+
+### Prompt experiments
+
+A prompt change is tried on the reference documents before it becomes the next `PROMPT_VERSION`:
+
+```bash
+.venv/bin/python -m pipeline experiment baseline          # the main cache into a fresh DB (free)
+.venv/bin/python -m pipeline experiment init units        # copies the current prompt to data/eval/experiments/units/prompt.md
+# edit that prompt.md
+.venv/bin/python -m pipeline experiment run units         # shows the page count; add --yes to extract
+.venv/bin/python -m pipeline experiment compare           # every arm against the reference, per document
+```
+
+Each arm has its own extraction cache (keyed by the prompt's hash, so an edited prompt never reuses pages) and a
+fresh database without corrections or knowledge, so the scores are the model's alone. Classifications and lab
+sheets come from the main cache. The main cache, database and review work are not touched. Model and effort
+follow `EXTRACT_MODEL` / `EXTRACT_EFFORT`, so the same command compares models.
 
 ## Configuration
 

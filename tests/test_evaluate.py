@@ -45,13 +45,52 @@ def test_compare_per_document():
     assert set(scores) == {"DOC1", "DOC2"}
     doc1 = scores["DOC1"]
     assert doc1.missing == ["DOC1:BH2"] and doc1.extra == ["DOC1:BH3"]
-    assert doc1.boundaries_matched == doc1.boundaries == 4 and doc1.lithology_same == 3
+    assert (doc1.boundaries_matched, doc1.boundaries) == (4, 8)  # the missing record's boundaries count as missed
+    assert doc1.lithology_same == 3 and doc1.no_position == 1
     assert doc1.position_errors_m == [pytest.approx(111, abs=1)]
     doc2 = scores["DOC2"]
     assert (doc2.boundaries_matched, doc2.boundaries) == (2, 4)
     assert doc2.no_position == 1 and doc2.crs_changed == 1 and doc2.corrected == 1
     text = evaluate.report(scores)
     assert "overall" in text and "DOC1:BH2" in text
+
+
+def test_renamed_hole_is_matched_by_natural_key_and_extra_boundaries_lower_precision():
+    reference = {"DOC1:BH1": {**ref(), "key": "nk:DOC1|borehole|1"}}
+    current = {"DOC1:B-1": {**ref(layers=[[0, 1.2, "fill"], [1.2, 3.0, "sand"], [3.0, 4.5, "sand"],
+                                         [4.5, 9.0, "clay"]]), "key": "nk:DOC1|borehole|1"}}
+    s = evaluate.compare(reference, current)["DOC1"]
+    assert s.missing == [] and s.extra == []
+    assert (s.boundaries_matched, s.boundaries, s.boundaries_current) == (4, 4, 5)
+    assert s.metres_same == pytest.approx(9.0) and s.lithology_same == 2  # split layer: per-layer check misses it
+
+
+def test_ambiguous_natural_key_is_not_matched():
+    reference = {"DOC1:BH1": {**ref(), "key": "nk:DOC1|borehole|1"}}
+    twins = {bid: {**ref(), "key": "nk:DOC1|borehole|1"} for bid in ("DOC1:BH1a", "DOC1:BH1b")}
+    assert evaluate.compare(reference, twins)["DOC1"].missing == ["DOC1:BH1"]
+
+
+def test_final_depth_groundwater_and_lab_values():
+    reference = {"DOC1:BH1": {**ref(), "depth_m": 9.0, "groundwater": [2.4], "lab": [["ucs", 42.0, 6.0], ["water_content", 18.0, None]]}}
+    current = {"DOC1:BH1": {**ref(), "depth_m": 9.05, "groundwater": [2.4, 3.1], "lab": [["ucs", 42.0, 6.0], ["water_content", 18.0, 2.0]]}}
+    s = evaluate.compare(reference, current)["DOC1"]
+    assert (s.depths_ok, s.depths, s.groundwater_matched, s.groundwater) == (1, 1, 1, 1)
+    assert (s.lab_matched, s.lab) == (1, 2)  # a value at another sample depth is not the same value
+    old = evaluate.compare({"DOC1:BH1": ref()}, current)["DOC1"]  # reference without these fields: not counted
+    assert (old.depths, old.groundwater, old.lab) == (0, 0, 0)
+
+
+def test_holdout_survives_snapshots(tmp_path):
+    path = tmp_path / "reference.json"
+    evaluate.set_holdout(["DOC2"], path)
+    con = store.connect(tmp_path / "test.sqlite")
+    evaluate.snapshot(con, path)
+    assert evaluate.load_holdout(path) == {"DOC2"}
+    scores = evaluate.compare({"DOC1:BH1": ref(), "DOC2:BH1": ref(doc="DOC2")}, {"DOC1:BH1": ref()})
+    assert evaluate.total(scores, {"DOC2"}).missing == ["DOC2:BH1"]
+    assert "holdout" in evaluate.report(scores, {"DOC2"})
+    con.close()
 
 
 def test_snapshot_keeps_earlier_approvals(tmp_path):

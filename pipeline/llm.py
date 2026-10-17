@@ -131,7 +131,7 @@ def _image_block(path: Path) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
 
 
-def _cache_path(stage: str, page: PageImage) -> Path:
+def cache_path(stage: str, page: PageImage) -> Path:
     return config.CACHE_DIR / stage / page.doc_id / f"{page.page:04d}.json"
 
 
@@ -344,7 +344,7 @@ def _strip_fences(text: str) -> str:
 
 
 def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
-    path = _cache_path(stage, page)
+    path = cache_path(stage, page)
     if path.exists():
         cached = json.loads(path.read_text())
         if cached.get("key") == key:
@@ -365,7 +365,7 @@ def _cached(stage: str, page: PageImage, key: str, out: type[T], produce) -> T:
 
 def _from_cache(stage: str, page: PageImage, key: str, out: type[T]) -> T | None:
     """Cached result only if it was produced from the same input and settings."""
-    path = _cache_path(stage, page)
+    path = cache_path(stage, page)
     if not path.exists():
         return None
     cached = json.loads(path.read_text())

@@ -208,10 +208,14 @@ def content_hash(bh: Borehole) -> str:
 
 
 def extracted_summary(bh: Borehole) -> dict:
-    """What the model produced, kept before reviewer corrections are applied: layers and position."""
+    """What the model produced, kept before reviewer corrections are applied, in the form `eval` compares.
+    `key` (the natural key) matches the same hole when a variant names it differently."""
     loc = bh.location
-    return {"layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
-            "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg}
+    return {"key": natural_key(bh),
+            "layers": [[layer.top_m, layer.bottom_m, layer.primary.value] for layer in bh.layers],
+            "lat": loc.lat, "lon": loc.lon, "crs_epsg": loc.crs_epsg, "depth_m": bh.depth_m,
+            "groundwater": sorted(gw.depth_m for gw in bh.groundwater if gw.depth_m is not None),
+            "lab": [[r.parameter.value, r.value, r.top_m] for r in bh.lab_results]}
 
 
 def _delete(con: sqlite3.Connection, borehole_id: str) -> dict | None:

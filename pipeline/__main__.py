@@ -9,6 +9,7 @@
     python -m pipeline eval snapshot          # approved records become the evaluation reference
     python -m pipeline eval                   # model output (before corrections) against that reference
     python -m pipeline eval --corrected       # final values, reviewer corrections included
+    python -m pipeline experiment run NAME    # a prompt variant on the reference documents (see experiment.py)
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import config, corrections, evaluate, ingest, knowledge, llm, store
+from . import config, corrections, evaluate, experiment, ingest, knowledge, llm, store
 from .assemble import LOG_KINDS, PageResult, assemble, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
@@ -155,9 +156,7 @@ def cmd_estimate(args) -> None:
 def cmd_run(args) -> None:
     if not args.doc and not args.all:
         sys.exit("choose documents with --doc NAME (repeatable) or --all")
-    if config.LLM_BACKEND == "api" and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
-        sys.exit("No Anthropic credentials: put ANTHROPIC_API_KEY=... into .env (git-ignored), "
-                 "or set LLM_BACKEND=claude-code to use the local Claude Code login.")
+    _require_credentials()
     con = store.connect()
     docs = _select(args)
     print(f"Ingest {len(docs)} documents (LLM backend: {config.LLM_BACKEND})")
@@ -186,6 +185,12 @@ def cmd_run(args) -> None:
         print(f"Extract {len(lab_pages)} lab result pages")
     labs = _parallel(llm.extract_lab_results, lab_pages, "lab results")
     _store(con, docs, rendered, classes, extractions, labs)
+
+
+def _require_credentials() -> None:
+    if config.LLM_BACKEND == "api" and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
+        sys.exit("No Anthropic credentials: put ANTHROPIC_API_KEY=... into .env (git-ignored), "
+                 "or set LLM_BACKEND=claude-code to use the local Claude Code login.")
 
 
 def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool = False) -> None:
@@ -282,21 +287,70 @@ def rebuild(docs, max_pages: int | None = None, dry_run: bool = False) -> None:
     rendered = {d.doc_id: ingest.render(d) for d in docs}
     if max_pages:  # same page limit as the run that filled the cache
         rendered = {doc_id: ps[: max_pages] for doc_id, ps in rendered.items()}
-    classes, extractions = {}, {}
-    for ps in rendered.values():
-        for p in ps:
-            c = llm.cached_classification(p)
-            if c is not None:
-                classes[(p.doc_id, p.page)] = c
-    todo = [p for ps in rendered.values() for p in ps
-            if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
-    for chain in _chains(todo, classes):  # same chains and context as the run, so the cache keys match
+    classes, labs = cached_inputs(rendered)
+    extractions = {}
+    for chain in _chains(extract_todo(rendered, classes), classes):  # same chains and context as the run
         extractions.update(_walk(chain, classes, llm.cached_extraction)[0])
+    print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")
+    _store(con, docs, rendered, classes, extractions, labs, dry_run=dry_run)
+
+
+def cached_inputs(rendered):
+    """Cached classifications and lab-sheet results of the rendered pages."""
+    classes = {(p.doc_id, p.page): c for ps in rendered.values() for p in ps
+               if (c := llm.cached_classification(p)) is not None}
     labs = {(p.doc_id, p.page): x for ps in rendered.values() for p in ps
             if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"
             and (x := llm.cached_lab_results(p)) is not None}
-    print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")
-    _store(con, docs, rendered, classes, extractions, labs, dry_run=dry_run)
+    return classes, labs
+
+
+def extract_todo(rendered, classes) -> list[ingest.PageImage]:
+    return [p for ps in rendered.values() for p in ps
+            if (c := classes.get((p.doc_id, p.page))) and c.kind.value in EXTRACT_KINDS]
+
+
+def cmd_experiment(args) -> None:
+    if args.action in ("init", "run") and args.name in (None, experiment.BASELINE):
+        sys.exit(f"name the experiment: python -m pipeline experiment {args.action} NAME (not '{experiment.BASELINE}')")
+    if args.action == "init":
+        print(f"edit {experiment.init(args.name)}, then run `python -m pipeline experiment run {args.name}`")
+        return
+    if args.action == "compare":
+        print(experiment.compare_arms())
+        return
+    reference = evaluate.load_reference()
+    if not args.doc and not reference:
+        sys.exit("no reference yet: approve records, run `python -m pipeline eval snapshot`, or pass --doc")
+    args.doc = args.doc or sorted({store.document_group(r["doc_id"]) for r in reference.values()})
+    docs = _select(args)
+    rendered = {d.doc_id: ingest.render(d) for d in docs}
+    classes, labs = cached_inputs(rendered)  # from the main cache, before switching to the arm's cache
+    unclassified = sum((p.doc_id, p.page) not in classes for ps in rendered.values() for p in ps)
+    if unclassified:
+        sys.exit(f"{unclassified} pages have no cached classification: run `python -m pipeline run` on these "
+                 "documents first")
+    todo = extract_todo(rendered, classes)
+    if args.action == "baseline":
+        name, extractions = experiment.BASELINE, {}
+        for chain in _chains(todo, classes):
+            extractions.update(_walk(chain, classes, llm.cached_extraction)[0])
+        con = experiment.fresh_db(name)
+    else:
+        name = args.name
+        fingerprint = experiment.use_prompt(name)
+        new = [p for p in todo if not llm.cache_path("extract", p).exists()]
+        if new and not args.yes:
+            sys.exit(f"{len(new)} of {len(todo)} pages to extract with prompt {name} ({fingerprint}), "
+                     f"≈ ${len(new) * COST_EXTRACT:.0f} on the API or subscription quota. Re-run with --yes.")
+        if new:
+            _require_credentials()
+        con = experiment.fresh_db(name)
+        extractions = _extract(todo, classes, con)  # empty DB: no reviewer knowledge in the prompt
+    _store(con, docs, rendered, classes, extractions, labs)
+    con.close()
+    print()
+    print(experiment.compare_arms())
 
 
 SHARE_README = """# Borehole Atlas data package
@@ -377,9 +431,16 @@ def main() -> None:
     p.add_argument("--with-cache", action="store_true", help="include the model cache, for rebuilds")
     p.set_defaults(fn=cmd_share)
     p = sub.add_parser("eval", help="extraction quality against human-checked records")
-    p.add_argument("action", nargs="?", choices=["compare", "snapshot"], default="compare")
+    p.add_argument("action", nargs="?", choices=["compare", "snapshot", "holdout"], default="compare")
     p.add_argument("--corrected", action="store_true", help="compare final values instead of the model output")
     p.set_defaults(fn=evaluate.cmd_eval)
+    p.add_argument("--doc", action="append", help="holdout: document group (repeatable; none clears it)")
+    p = sub.add_parser("experiment", help="try an extraction prompt on the reference documents, isolated")
+    p.add_argument("action", choices=["baseline", "init", "run", "compare"])
+    p.add_argument("name", nargs="?")
+    p.add_argument("--doc", action="append", help="documents to use instead of the reference documents")
+    p.add_argument("--yes", action="store_true", help="confirm the extraction cost")
+    p.set_defaults(fn=cmd_experiment)
     args = parser.parse_args()
     args.fn(args)
 
