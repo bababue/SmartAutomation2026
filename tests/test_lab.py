@@ -4,7 +4,7 @@ import pytest
 
 from pipeline.assemble import PageResult, link_lab_results
 from pipeline.extraction_models import PageLabResults, XLabRow
-from schema.borehole import Borehole, Layer, Location, Sample, SourceRef
+from schema.borehole import Borehole, InvestigationType, Layer, Location, Sample, SourceRef
 
 
 def hole(name: str, samples=()) -> Borehole:
@@ -78,3 +78,76 @@ def test_hole_id_in_sample_column_suffixes_and_implausible_values():
     linked, unmatched, implausible = link_lab_results(holes, [page])
     assert (linked, unmatched, implausible) == (2, 2, 1)
     assert len(holes[0].lab_results) == 2 and not holes[1].lab_results and not holes[2].lab_results
+
+
+def test_number_shared_by_borehole_and_test_pit_takes_the_type_that_fits_the_whole_sheet():
+    def typed(name: str, kind: str, depth: float) -> Borehole:
+        bh = hole(name)
+        bh.investigation_type, bh.layers[0].bottom_m = InvestigationType(kind), depth
+        return bh
+    bh1, bh2, tp1, tp2 = typed("1", "borehole", 6), typed("2", "borehole", 6), typed("1", "test_pit", 2.5), \
+        typed("2", "test_pit", 1.5)
+    # The 4.5 m samples fit only the boreholes, so the shallow samples of the same sheet are theirs too.
+    rocks = lab_page(*(row(h, None, "ucs", str(10 + top), "MPa", top=top) for h, top in
+                       [("1", 1.5), ("1", 3.0), ("1", 4.5), ("2", 0.5), ("2", 4.5)]))
+    assert link_lab_results([bh1, bh2, tp1, tp2], [rocks]) == (5, 0, 0)
+    assert [r.top_m for r in bh1.lab_results] == [1.5, 3.0, 4.5] and len(bh2.lab_results) == 2
+    assert not tp1.lab_results and not tp2.lab_results
+    # Shallow samples alone fit both types: they stay unmatched rather than go to a guessed hole.
+    assert link_lab_results([bh1, bh2, tp1, tp2], [lab_page(row("1", None, "water_content", "12", "%", top=1.0))]) \
+        == (0, 1, 0)
+    # A sheet that names the type keeps it for its bare numbers, even where another type would fit deeper rows.
+    pits = lab_page(row("TP 1", None, "water_content", "15", "%", top=1.0),
+                    row("2", None, "water_content", "9", "%", top=4.0))
+    assert link_lab_results([bh1, bh2, tp1, tp2], [pits]) == (1, 1, 0) and len(bh2.lab_results) == 2
+
+
+def test_chemistry_rows_with_the_same_detection_limit_are_kept_apart():
+    def chem(name: str, value: str, unit: str = "ug/l") -> XLabRow:
+        return XLabRow(hole_name="MW-3", sample_name=None, top_m=None, bottom_m=None, parameter="other",
+                       parameter_raw=name, value_raw=value, unit_raw=unit)
+    a = hole("MW-3")
+    first = lab_page(chem("Benzene", "<1"), chem("Toluene", "<1"), chem("Xylene", "<1e-3"))
+    # The same certificate printed again; this copy repeats the unit in the row name.
+    second = lab_page(chem("Benzene ug/l", "<1"), chem("Toluene (ug/l)", "<1"), chem("Xylene ug/l", "<1e-3"))
+    link_lab_results([a], [first, second])
+    assert sorted(r.parameter_raw for r in a.lab_results) == ["Benzene", "Toluene", "Xylene"]
+    # Another unit or a detected value instead of the detection limit is another result.
+    link_lab_results([a], [lab_page(chem("Benzene", "<1", "mg/l"), chem("Toluene", "1"))])
+    assert len(a.lab_results) == 5
+
+
+def test_duplicate_record_hands_its_lab_values_to_the_kept_one():
+    from pipeline.assemble import dedupe
+    from schema.borehole import GeorefMethod, LabResult
+    def located(doc: str, confidence: float, labs: list[tuple[float, float]]) -> Borehole:
+        bh = hole("BH-4")
+        bh.borehole_id, bh.confidence = f"{doc}:BH4", confidence
+        bh.location = Location(lat=48.0, lon=8.0, method=GeorefMethod.stated_coordinates)
+        bh.lab_results = [LabResult(parameter="ucs", value=v, top_m=t) for t, v in labs]
+        return bh
+    report = located("report", 0.5, [(1.0, 20.0), (2.0, 25.0)])  # only the report has the lab sheet
+    image = located("report_png", 0.9, [(2.0, 25.0)])            # the image export of the log page wins
+    kept, = dedupe([report, image])
+    assert kept is image and sorted((r.top_m, r.value) for r in kept.lab_results) == [(1.0, 20.0), (2.0, 25.0)]
+    # A test pit of the same name at the same place is another hole: nothing is merged.
+    pit = located("pits", 0.4, [(0.5, 3.0)])
+    pit.investigation_type = InvestigationType.test_pit
+    assert len(dedupe([pit, located("report_png", 0.9, [])])) == 2
+
+
+def test_lab_values_from_a_log_in_feet_keep_the_kept_record_in_review():
+    from pipeline.assemble import dedupe
+    from schema.borehole import GeorefMethod, LabResult, ReviewStatus
+    def located(doc: str, confidence: float) -> Borehole:
+        bh = hole("BH-4")
+        bh.borehole_id, bh.confidence = f"{doc}:BH4", confidence
+        bh.location = Location(lat=48.0, lon=8.0, method=GeorefMethod.stated_coordinates)
+        return bh
+    report, image = located("report", 0.5), located("report_png", 0.95)
+    report.issues = ["depths printed in feet (ft); check the conversion to metres"]
+    report.lab_results = [LabResult(parameter="ucs", value=20.0, top_m=1.5)]
+    image.review_status = ReviewStatus.auto_approved
+    kept, = dedupe([report, image])
+    assert kept is image and len(kept.lab_results) == 1
+    assert kept.review_status == ReviewStatus.pending_review and kept.issues == report.issues
