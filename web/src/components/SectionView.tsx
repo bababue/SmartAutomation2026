@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { estimationTooltip, tooltipContent } from '../boreholeTooltip'
 import { lithStyle, patternId } from '../lithology'
-import { correlateLayers } from '../sectionLayers'
+import { MAX_JOIN_GAP_M, correlateBoundaries, correlateLayers } from '../sectionLayers'
 import type { SectionBand } from '../sectionLayers'
 import type { BoreholeSummary, Feature } from '../types'
 
@@ -72,8 +72,6 @@ export function orderAlongLine(features: Feature[]): Feature[] {
   return bestRoute.map((i) => holes[i])
 }
 
-/** Neighbouring holes farther apart than this are not joined: the ground between them is unknown. */
-const MAX_JOIN_GAP_M = 150
 /** Half-width of the band around a joined rock head, as a share of the distance to the nearest hole. */
 const UNCERTAINTY = 0.1
 const SAMPLES = 12
@@ -99,6 +97,7 @@ export function SectionView({ features, selectedId, onSelect, onRemove, onClear 
   const [width, setWidth] = useState(900)
   const [viewport, setViewport] = useState<Viewport | null>(null)
   const [selection, setSelection] = useState<ZoomSelection | null>(null)
+  const [correlate, setCorrelate] = useState(true)
   useEffect(() => {
     const el = box.current
     if (!el) return
@@ -111,6 +110,10 @@ export function SectionView({ features, selectedId, onSelect, onRemove, onClear 
   const sectionKey = ordered.map((f) => f.properties.id).join('|')
   const layerBands = useMemo(() => ordered.slice(1).map((f, j) =>
     correlateLayers(ordered[j].properties.strip ?? [], f.properties.strip ?? []),
+  ), [ordered])
+  const boundaries = useMemo(() => ordered.slice(1).map((f, j) =>
+    correlateBoundaries(ordered[j].properties.strip ?? [], f.properties.strip ?? [],
+      distance(ordered[j].geometry.coordinates, f.geometry.coordinates)),
   ), [ordered])
   const byElevation = ordered.every((f) => f.properties.elevation != null)
   const height = 290
@@ -147,26 +150,35 @@ export function SectionView({ features, selectedId, onSelect, onRemove, onClear 
   /** Plot value of a depth below ground in hole i: a level, or the depth itself. */
   const at = (i: number, depth: number) => (byElevation ? layout.tops[i] - depth : depth)
 
-  /** Joins a ground value between neighbours: [pairIndex, line points, band polygon points or null]. */
-  const joins = (pick: (g: NonNullable<Feature['properties']['ground']>) => number | null, band: boolean) =>
+  /** Line and uncertainty band from depth da in hole j to depth db in hole j + 1. */
+  const joinPath = (j: number, da: number, db: number) => {
+    const xa = xs[j], xb = xs[j + 1]
+    const pts = Array.from({ length: SAMPLES + 1 }, (_, k) => {
+      const t = k / SAMPLES
+      const v = at(j, da) + (at(j + 1, db) - at(j, da)) * t
+      return { x: xa + (xb - xa) * t, v, half: UNCERTAINTY * layout.gaps[j] * Math.min(t, 1 - t) }
+    })
+    return {
+      line: pts.map((q) => `${q.x},${y(q.v)}`).join(' '),
+      band: [...pts.map((q) => `${q.x},${y(q.v + q.half)}`), ...[...pts].reverse().map((q) => `${q.x},${y(q.v - q.half)}`)].join(' '),
+    }
+  }
+  /** Joins a ground value between neighbours: [pairIndex, line points, band polygon points]. */
+  const joins = (pick: (g: NonNullable<Feature['properties']['ground']>) => number | null) =>
     ordered.slice(1).flatMap((f, j) => {
       const va = ordered[j].properties.ground, vb = f.properties.ground
       const da = va ? pick(va) : null, db = vb ? pick(vb) : null
       if (da == null || db == null || layout.gaps[j] > MAX_JOIN_GAP_M) return []
-      const xa = xs[j], xb = xs[j + 1]
-      const pts = Array.from({ length: SAMPLES + 1 }, (_, k) => {
-        const t = k / SAMPLES
-        const v = at(j, da) + (at(j + 1, db) - at(j, da)) * t
-        return { x: xa + (xb - xa) * t, v, half: UNCERTAINTY * layout.gaps[j] * Math.min(t, 1 - t) }
-      })
-      const line = pts.map((q) => `${q.x},${y(q.v)}`).join(' ')
-      const poly = band
-        ? [...pts.map((q) => `${q.x},${y(q.v + q.half)}`), ...[...pts].reverse().map((q) => `${q.x},${y(q.v - q.half)}`)].join(' ')
-        : null
-      return [[j, line, poly] as const]
+      const { line, band } = joinPath(j, da, db)
+      return [[j, line, band] as const]
     })
-  const rockJoins = joins((g) => g.rock_head_m, true)
-  const waterJoins = joins((g) => g.groundwater_m, false)
+  const rockJoins = joins((g) => g.rock_head_m)
+  const waterJoins = joins((g) => g.groundwater_m)
+  const boundaryJoins = correlate ? boundaries.flatMap((list, j) => list
+    // The rock head is drawn already where both holes reach rock at this boundary.
+    .filter((b) => !(b.below === 'rock' && ordered[j].properties.ground?.rock_head_m === b.leftDepth
+      && ordered[j + 1].properties.ground?.rock_head_m === b.rightDepth))
+    .map((b, k) => ({ key: `${j}-${k}`, j, b, ...joinPath(j, b.leftDepth, b.rightDepth) }))) : []
 
   const ticks: number[] = []
   for (let v = Math.ceil(low / step) * step; v <= high; v += step) ticks.push(v)
@@ -287,8 +299,12 @@ export function SectionView({ features, selectedId, onSelect, onRemove, onClear 
           {' '}Rock head (dashed) and groundwater (blue) are joined between holes up to {MAX_JOIN_GAP_M} m apart,
           with a band of ±{UNCERTAINTY * 100} % of the distance to the nearest hole
           {byElevation ? '' : ', assuming level ground'}. Coloured layers between holes are estimates matched by material, not confirmed geology.
+          {correlate && ' Dotted lines join layer boundaries where both logs show the same material groups in the same order; where the match is not unique, the units stay open.'}
           {' '}Drag across an area to zoom both axes.
         </p>
+        <label className="section-correlate">
+          <input type="checkbox" checked={correlate} onChange={(e) => setCorrelate(e.target.checked)} /> Correlate layers
+        </label>
         <button className="btn" onClick={() => setViewport(null)} disabled={!active}>Reset zoom</button>
         <button className="btn" onClick={onClear}>Clear section</button>
       </header>
@@ -343,6 +359,14 @@ export function SectionView({ features, selectedId, onSelect, onRemove, onClear 
             <g key={`rock-${j}`}>
               <polygon points={poly!} className="section-band" />
               <polyline points={line} className="section-rock-join" />
+            </g>
+          ))}
+          {boundaryJoins.map(({ key, j, b, line, band }) => (
+            <g key={`boundary-${key}`}>
+              <polygon points={band} className="section-band" />
+              <polyline points={line} className="section-boundary-join">
+                <title>{`Estimated boundary ${b.above} over ${b.below} between ${ordered[j].properties.name} (${b.leftDepth} m) and ${ordered[j + 1].properties.name} (${b.rightDepth} m), ±${UNCERTAINTY * 100} % of the distance to the nearest hole`}</title>
+              </polyline>
             </g>
           ))}
           {waterJoins.map(([j, line]) => <polyline key={`water-${j}`} points={line} className="section-water-join" />)}

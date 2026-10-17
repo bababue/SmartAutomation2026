@@ -71,3 +71,80 @@ export function correlateLayers(leftStrip: Strip, rightStrip: Strip): SectionBan
   }
   return bands.filter((band) => !['unknown', 'no_recovery'].includes(band.lithology))
 }
+
+/** Neighbouring holes farther apart than this are not joined: the ground between them is unknown. */
+export const MAX_JOIN_GAP_M = 150
+
+/** Coarse material groups, so that 'fine sand' in one log and 'medium sand' in the next count as one unit. */
+const GROUP: Record<string, string> = Object.fromEntries([
+  ...['topsoil', 'fill'].map((c) => [c, 'made ground']),
+  ...['gravel', 'coarse_gravel', 'medium_gravel', 'fine_gravel', 'cobbles', 'boulders', 'scree'].map((c) => [c, 'gravel']),
+  ...['sand', 'coarse_sand', 'medium_sand', 'fine_sand', 'volcanic_ash'].map((c) => [c, 'sand']),
+  ...['silt', 'loess', 'loess_loam', 'slope_loam', 'meadow_lime'].map((c) => [c, 'silt']),
+  ...['clay', 'marsh_clay', 'varved_clay', 'boulder_clay', 'till_marl'].map((c) => [c, 'clay']),
+  ...['peat_humus', 'gyttja', 'lignite'].map((c) => [c, 'organic']),
+])
+
+/** Material group of a lithology; null for core loss and unreadable layers, which match nothing. */
+export const lithologyGroup = (code: string) =>
+  code === 'unknown' || code === 'no_recovery' ? null : GROUP[code] ?? 'rock'
+
+interface Unit { top: number; bottom: number; group: string | null }
+
+function units(strip: Strip): Unit[] {
+  const result: Unit[] = []
+  for (const { top, bottom, lithology } of intervals(strip)) {
+    const group = lithologyGroup(lithology), previous = result[result.length - 1]
+    if (previous && group !== null && previous.group === group) previous.bottom = bottom
+    else result.push({ top, bottom, group })
+  }
+  return result
+}
+
+export interface BoundaryJoin {
+  leftDepth: number // metres below ground in the left hole
+  rightDepth: number
+  above: string // material group above the boundary
+  below: string
+}
+
+/**
+ * Layer boundaries to join between adjacent holes: the units of both logs are matched by material group in
+ * top-down order (longest common sequence, so matches never cross), and only matches that every best
+ * sequence shares count. A boundary is joined where the units on both sides of it are matched to adjacent
+ * units in the other hole; everywhere else the units stay open.
+ */
+export function correlateBoundaries(leftStrip: Strip, rightStrip: Strip, gapM: number): BoundaryJoin[] {
+  if (gapM > MAX_JOIN_GAP_M) return []
+  const a = units(leftStrip), b = units(rightStrip)
+  const n = a.length, m = b.length
+  const same = (i: number, j: number) => a[i].group !== null && a[i].group === b[j].group
+  const table = (skip: [number, number] | null) => {
+    const t = Array.from({ length: n + 1 }, () => Array<number>(m + 1).fill(0))
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        const match = same(i, j) && !(skip && skip[0] === i && skip[1] === j) ? 1 + t[i + 1][j + 1] : 0
+        t[i][j] = Math.max(match, t[i + 1][j], t[i][j + 1])
+      }
+    }
+    return t
+  }
+  const best = table(null)
+  const length = best[0]?.[0] ?? 0
+  const pairs = new Map<number, number>()
+  for (let i = 0, j = 0; i < n && j < m;) {
+    if (same(i, j) && best[i][j] === 1 + best[i + 1][j + 1]) {
+      // Kept only if no equally long sequence leaves this match out: otherwise the logs allow another reading.
+      if (table([i, j])[0][0] < length) pairs.set(i, j)
+      i++; j++
+    } else if (best[i + 1][j] >= best[i][j + 1]) i++
+    else j++
+  }
+  const joins: BoundaryJoin[] = []
+  for (const [i, j] of pairs) {
+    if (pairs.get(i + 1) === j + 1) {
+      joins.push({ leftDepth: a[i].bottom, rightDepth: b[j].bottom, above: a[i].group!, below: a[i + 1].group! })
+    }
+  }
+  return joins
+}
