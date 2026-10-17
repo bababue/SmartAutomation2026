@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { estimationTooltip, tooltipContent } from '../boreholeTooltip'
+import { el } from '../dom'
+import { fmtDistance, fmtNum } from '../format'
 import { lithStyle, patternId } from '../lithology'
 import { MAX_JOIN_GAP_M, correlateBoundaries, correlateLayers } from '../sectionLayers'
 import type { SectionBand } from '../sectionLayers'
@@ -15,19 +17,10 @@ interface Props {
   onClear: () => void
 }
 
-const R = 6_371_000
-function distance([lon1, lat1]: [number, number], [lon2, lat2]: [number, number]) {
-  const p1 = (lat1 * Math.PI) / 180, p2 = (lat2 * Math.PI) / 180
-  const dp = p2 - p1, dl = ((lon2 - lon1) * Math.PI) / 180
-  const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2
-  return 2 * R * Math.asin(Math.sqrt(a))
-}
-
 /** Half-width of the band around a joined rock head, as a share of the distance to the nearest hole. */
 const UNCERTAINTY = 0.1
 const SAMPLES = 12
 
-const fmtDist = (m: number) => (m >= 1000 ? `${(m / 1000).toLocaleString('en', { maximumFractionDigits: 1 })} km` : `${m > 0 && m < 1 ? m.toFixed(2) : m < 10 && m > 0 ? m.toFixed(1) : Math.round(m)} m`)
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
 const tickStep = (range: number) => {
   const base = 10 ** Math.floor(Math.log10(Math.max(range, 0.001) / 5))
@@ -78,7 +71,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
   ), [ordered])
   const boundaries = useMemo(() => ordered.slice(1).map((f, j) =>
     correlateBoundaries(ordered[j].properties.strip ?? [], f.properties.strip ?? [],
-      distance(ordered[j].geometry.coordinates, f.geometry.coordinates)),
+      routeLength([ordered[j].geometry.coordinates, f.geometry.coordinates])),
   ), [ordered])
   const byElevation = ordered.every((f) => f.properties.elevation != null)
   const height = 290
@@ -193,18 +186,11 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     const content = tooltipContent(layer ? { ...p, layer_top: layer[0], layer_bottom: layer[1], layer_lithology: layer[2] } : p)
     const elevation = p.elevation
     if (layer && elevation != null) {
-      const line = document.createElement('div')
-      line.className = 'tip-line'
-      const level = (depth: number) => (elevation - depth).toLocaleString('en', { maximumFractionDigits: 1 })
-      line.textContent = `Level ${level(layer[0])} to ${level(layer[1])} m`
-      content.append(line)
+      content.append(el('div', 'tip-line', `Level ${fmtNum(elevation - layer[0], 1)} to ${fmtNum(elevation - layer[1], 1)} m`))
     }
     const position = routePositions.get(p.id)
     if (route && position) {
-      const line = document.createElement('div')
-      line.className = 'tip-line'
-      line.textContent = `Station ${fmtDist(position.chainageM)} · ${Math.round(position.offsetM)} m from route`
-      content.append(line)
+      content.append(el('div', 'tip-line', `Station ${fmtDistance(position.chainageM)} · ${Math.round(position.offsetM)} m from route`))
     }
     placeTooltip(event, content)
   }
@@ -226,10 +212,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
     const bottom = band.leftBottom + (band.rightBottom - band.leftBottom) * fraction
     const content = estimationTooltip(band.lithology, top, bottom, ordered[j].properties.name, ordered[j + 1].properties.name)
     if (layout.gaps[j] > MAX_JOIN_GAP_M) {
-      const warning = document.createElement('span')
-      warning.className = 'tip-line'
-      warning.textContent = `${fmtDist(layout.gaps[j])} between boreholes · lower confidence`
-      content.append(warning)
+      content.append(el('span', 'tip-line', `${fmtDistance(layout.gaps[j])} between boreholes · lower confidence`))
     }
     placeTooltip(event, content)
   }
@@ -299,7 +282,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
           aria-expanded={helpOpen} aria-controls="section-help" aria-label="How to read the section">?</button>
         <p id="section-help" className={`muted section-help${helpOpen ? ' section-help-open' : ''}`}>
           {byElevation ? 'Levels in m above datum as printed on each log.' : 'Depth below ground: not every log states its ground level.'}
-          {` Stations follow the tunnel route (${fmtDist(layout.total)}); borehole offsets appear on hover.`}
+          {` Stations follow the tunnel route (${fmtDistance(layout.total)}); borehole offsets appear on hover.`}
           {' '}Rock head (dashed) and groundwater (blue) are joined between holes up to {MAX_JOIN_GAP_M} m apart,
           with a band of ±{UNCERTAINTY * 100} % of the distance to the nearest hole
           {byElevation ? '' : ', assuming level ground'}. Coloured layers connect adjacent logs along the route;
@@ -316,7 +299,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
         <button className="btn" onClick={onClear}>Clear boreholes</button>
       </header>
       <div ref={box} className="section-plot">
-        <svg width={layout.svgWidth} height={height} role="img" aria-label={`Section with ${ordered.length} boreholes over ${fmtDist(layout.total)}`}
+        <svg width={layout.svgWidth} height={height} role="img" aria-label={`Section with ${ordered.length} boreholes over ${fmtDistance(layout.total)}`}
           onPointerDown={startSelection} onPointerMove={moveSelection} onPointerUp={finishSelection}
           onPointerCancel={cancelSelection}
           onClickCapture={(event) => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false } }}>
@@ -340,7 +323,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
           {ticks.map((v) => (
             <g key={v}>
               <line x1={m.left - 4} x2={layout.svgWidth - m.right} y1={y(v)} y2={y(v)} className="section-grid" />
-              <text x={m.left - 8} y={y(v) + 4} textAnchor="end" className="section-tick">{v.toLocaleString('en', { maximumFractionDigits: 3 })}</text>
+              <text x={m.left - 8} y={y(v) + 4} textAnchor="end" className="section-tick">{fmtNum(v, 3)}</text>
             </g>
           ))}
           <text x={14} y={m.top + plotH / 2} className="section-tick" transform={`rotate(-90 14 ${m.top + plotH / 2})`} textAnchor="middle">
@@ -351,7 +334,7 @@ export function SectionView({ features, route, selectedId, onSelect, onRemove, o
             const x = m.left + col / 2 + (v - from) / (to - from) * layout.plotWidth
             return <g key={v}>
               <line x1={x} x2={x} y1={height - 33} y2={height - 27} className="section-axis" />
-              <text x={x} y={height - 14} textAnchor="middle" className="section-tick">{fmtDist(v)}</text>
+              <text x={x} y={height - 14} textAnchor="middle" className="section-tick">{fmtDistance(v)}</text>
             </g>
           })}
           <text x={layout.svgWidth - m.right} y={height - 2} textAnchor="end" className="section-tick">

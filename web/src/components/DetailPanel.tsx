@@ -6,6 +6,7 @@ import { Profile } from './Profile'
 import { SimilarHoles } from './SimilarHoles'
 import { ReviewBox, type QueueNav } from './ReviewBox'
 import { withSuffix } from '../review'
+import { fmtNum, words } from '../format'
 
 interface Props {
   detail: Detail
@@ -16,9 +17,6 @@ interface Props {
   onSelect?: (id: string) => void
   onFindLike?: (like: NonNullable<SimilarGround['like']>) => void
 }
-
-const fmt = (v: number | null | undefined, digits = 2) =>
-  v == null ? '–' : v.toLocaleString('en', { maximumFractionDigits: digits })
 
 const METHOD_TEXT: Record<string, string> = {
   stated_coordinates: 'from coordinates printed on the log',
@@ -72,8 +70,8 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
   const tests = useMemo(() => {
     const rows: TestRow[] = []
     bh.spt.forEach((s) => rows.push({ test: 'spt', depth: s.depth_m, value: s.n_value, label: 'SPT N', text: `SPT ${s.refusal ? 'refusal' : `N = ${s.n_value ?? '–'}`}${s.raw ? ` (${s.raw})` : ''}` }))
-    bh.core_runs.forEach((c) => rows.push({ test: 'core', depth: c.top_m, value: c.total_core_recovery_pct, rqd: c.rqd_pct, label: 'Core TCR %', text: `Core ${fmt(c.top_m)}–${fmt(c.bottom_m)} m: TCR ${fmt(c.total_core_recovery_pct, 0)} %, RQD ${fmt(c.rqd_pct, 0)} %` }))
-    bh.lab_results.forEach((l) => rows.push({ test: 'lab', depth: l.top_m ?? 0, parameter: l.parameter, value: l.value, label: l.parameter.replaceAll('_', ' '), text: `${l.parameter.replaceAll('_', ' ')}: ${fmt(l.value, 3)}${l.value_raw ? ` (printed ${l.value_raw})` : ''}` }))
+    bh.core_runs.forEach((c) => rows.push({ test: 'core', depth: c.top_m, value: c.total_core_recovery_pct, rqd: c.rqd_pct, label: 'Core TCR %', text: `Core ${fmtNum(c.top_m)}–${fmtNum(c.bottom_m)} m: TCR ${fmtNum(c.total_core_recovery_pct, 0)} %, RQD ${fmtNum(c.rqd_pct, 0)} %` }))
+    bh.lab_results.forEach((l) => rows.push({ test: 'lab', depth: l.top_m ?? 0, parameter: l.parameter, value: l.value, label: words(l.parameter), text: `${words(l.parameter)}: ${fmtNum(l.value, 3)}${l.value_raw ? ` (printed ${l.value_raw})` : ''}` }))
     return rows.sort((a, b) => a.depth - b.depth)
   }, [bh])
 
@@ -128,17 +126,17 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
             </dd>
             <dt>Position (WGS84)</dt>
             <dd>
-              {loc.lat != null ? `${fmt(loc.lat, 6)}, ${fmt(loc.lon, 6)}` : '–'}
+              {loc.lat != null ? `${fmtNum(loc.lat, 6)}, ${fmtNum(loc.lon, 6)}` : '–'}
               {loc.crs_epsg ? <span className="muted"> via EPSG:{loc.crs_epsg}</span> : null}
               {loc.crs_candidates.length > 1 && <span className="muted"> (also possible: {loc.crs_candidates.slice(1).join(', ')})</span>}
             </dd>
-            <dt>Ground level</dt><dd>{withSuffix(bh.surface_elevation_raw ?? fmt(bh.surface_elevation_m), bh.elevation_datum)}</dd>
-            <dt>Final depth</dt><dd>{fmt(bh.depth_m)} m{bh.inclination_deg != null && bh.inclination_deg !== 90 && Math.abs(bh.inclination_deg) !== 90 ? `, inclined ${bh.inclination_deg}°` : ''}</dd>
+            <dt>Ground level</dt><dd>{withSuffix(bh.surface_elevation_raw ?? fmtNum(bh.surface_elevation_m), bh.elevation_datum)}</dd>
+            <dt>Final depth</dt><dd>{fmtNum(bh.depth_m)} m{bh.inclination_deg != null && bh.inclination_deg !== 90 && Math.abs(bh.inclination_deg) !== 90 ? `, inclined ${bh.inclination_deg}°` : ''}</dd>
             <dt>Drilled</dt><dd>{bh.start_date ?? '–'}{bh.end_date && bh.end_date !== bh.start_date ? ` to ${bh.end_date}` : ''}</dd>
             <dt>Method</dt><dd>{bh.drilling_method ?? '–'}</dd>
             <dt>Client</dt><dd>{bh.client ?? '–'}</dd>
             <dt>Contractor</dt><dd>{bh.contractor ?? '–'}</dd>
-            {bh.groundwater.length > 0 && (<><dt>Groundwater</dt><dd>{bh.groundwater.map((g) => g.dry ? 'dry' : `${fmt(g.depth_m)} m ${g.reference === 'casing' ? 'below casing ' : ''}(${g.kind})`).join('; ')}</dd></>)}
+            {bh.groundwater.length > 0 && (<><dt>Groundwater</dt><dd>{bh.groundwater.map((g) => g.dry ? 'dry' : `${fmtNum(g.depth_m)} m ${g.reference === 'casing' ? 'below casing ' : ''}(${g.kind})`).join('; ')}</dd></>)}
           </dl>
           </div>
           )}
@@ -154,7 +152,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
             <tbody ref={layerRows}>
               {bh.layers.map((l: Layer, i) => (
                 <tr key={i} className={hovered === i ? 'row-active' : undefined} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}>
-                  <td className="num depth">{fmt(l.top_m)}–{fmt(l.bottom_m)}</td>
+                  <td className="num depth">{fmtNum(l.top_m)}–{fmtNum(l.bottom_m)}</td>
                   <td>
                     <svg width={14} height={14} className="swatch" aria-hidden="true"><rect width={14} height={14} fill={`url(#${patternId(l.primary)})`} /></svg>
                     {lithStyle(l.primary).label}
@@ -176,7 +174,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
           {tests.length > 0 && (editing === 'tests' ? <TestsEditor boreholeId={bh.borehole_id} rows={tests} onChange={onReviewChange} onDone={done} /> : (
             <div className="card">
               <CardHead title="Tests" onEdit={editing ? undefined : () => setEditing('tests')} />
-              <ul className="tests">{tests.map((t, i) => <li key={i}><span className="num">{fmt(t.depth)} m</span> {t.text}</li>)}</ul>
+              <ul className="tests">{tests.map((t, i) => <li key={i}><span className="num">{fmtNum(t.depth)} m</span> {t.text}</li>)}</ul>
             </div>
           ))}
           {editing === 'notes' ? <NotesEditor borehole={bh} onChange={onReviewChange} onDone={done} /> : (
@@ -219,7 +217,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceTogg
               </a>
               <p className="muted source-hint">
                 {hovered != null && bh.layers[hovered]
-                  ? <>Selected: <strong>{lithStyle(bh.layers[hovered].primary).label}</strong> · {fmt(bh.layers[hovered].top_m)}–{fmt(bh.layers[hovered].bottom_m)} m{!highlight && ' · not located on this page'}</>
+                  ? <>Selected: <strong>{lithStyle(bh.layers[hovered].primary).label}</strong> · {fmtNum(bh.layers[hovered].top_m)}–{fmtNum(bh.layers[hovered].bottom_m)} m{!highlight && ' · not located on this page'}</>
                   : 'Hover a layer or the coordinates to outline where they were read.'}
               </p>
             </>

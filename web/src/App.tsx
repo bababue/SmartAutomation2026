@@ -11,7 +11,8 @@ import { StatsView } from './components/StatsView'
 import { SectionView } from './components/SectionView'
 import type { QueueNav } from './components/ReviewBox'
 import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats } from './types'
-import { readUrl, writeUrl, type View } from './url'
+import { DEFAULT_FILTERS, readUrl, writeUrl, type View } from './url'
+import { detailSheetRect, isTyping } from './dom'
 import { SheetResizer } from './components/SheetResizer'
 import { FilterBar } from './components/FilterBar'
 import { AppMenu } from './components/AppMenu'
@@ -73,7 +74,7 @@ export default function App() {
   const onSourceToggle = useCallback((open: boolean) => {
     if (open) {
       beforeSource.current = { listOpen, sheetWidth }
-      const current = document.querySelector('.detail')?.getBoundingClientRect().width ?? 0
+      const current = detailSheetRect()?.width ?? 0
       setListOpen(false)
       setSheetWidth(Math.round(Math.max(current, Math.min(window.innerWidth * 0.75, window.innerWidth - 200))))
     } else {
@@ -97,7 +98,7 @@ export default function App() {
     if (!routeActive) return
     const controller = new AbortController()
     setRouteLoading(true)
-    fetchMapPoints(readUrl('').filters, controller.signal)
+    fetchMapPoints(DEFAULT_FILTERS, controller.signal)
       .then((collection) => { setRoutePoints(collection); setRouteError(null) })
       .catch((cause) => { if (cause.name !== 'AbortError') setRouteError(`Could not load nearby boreholes (${cause.message}).`) })
       .finally(() => { if (!controller.signal.aborted) setRouteLoading(false) })
@@ -238,8 +239,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+      if (isTyping(e.target)) return
       if (e.key === 'Escape') setSelectedId(null)
       if (e.key === 'ArrowRight' && nav?.next) { e.preventDefault(); nav.next() }
       if (e.key === 'ArrowLeft' && nav?.prev) { e.preventDefault(); nav.prev() }
@@ -250,8 +250,7 @@ export default function App() {
 
   // The start page: map view, default filters, nothing open; the reload fits the map to all matches.
   const goHome = useCallback(() => {
-    const start = readUrl('')
-    setView(start.view)
+    setView('map')
     setRouteActive(false)
     setRouteDraft(null)
     setSelectedId(null)
@@ -259,7 +258,7 @@ export default function App() {
     setBlockingOnly(false)
     setAuditOnly(false)
     setListOpen(true)
-    setFilters(start.filters)
+    setFilters(DEFAULT_FILTERS)
     setQuery('')
     setRefresh((n) => n + 1)
   }, [])

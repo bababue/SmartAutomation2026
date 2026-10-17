@@ -135,6 +135,12 @@ export interface QueueItem {
   reasons: string[]
 }
 
+/** One page of the review queue, with the number of all records in it. */
+export interface QueuePage {
+  items: QueueItem[]
+  total: number
+}
+
 export interface CrsGroup {
   group: string
   epsg: number
@@ -178,6 +184,11 @@ export interface BoreholeSummary {
   source_file: string | null
 }
 
+/** Layer strips of the holes in a map box, for the 3D columns. */
+export interface LayerStrips {
+  items: { id: string; strip: BoreholeSummary['strip'] }[]
+}
+
 export interface Feature {
   type: 'Feature'
   geometry: { type: 'Point'; coordinates: [number, number] }
@@ -206,9 +217,12 @@ export interface GroupFacet {
 
 export type CorrectionKind = 'crs' | 'position' | 'layer' | 'layer_add' | 'field' | 'groundwater' | 'test'
 
+/** One hole, or every hole of its document (e.g. a coordinate system). */
+export type CorrectionScope = 'borehole' | 'document'
+
 export interface CorrectionRecord {
   id: number
-  scope: 'borehole' | 'document'
+  scope: CorrectionScope
   target: string
   kind: CorrectionKind
   payload: Record<string, number | string | boolean>
@@ -270,6 +284,14 @@ export interface StatsDetail {
   crs: [number, number][]
   /** Release audit over the whole database; null: no sample drawn yet (`pipeline eval audit`). */
   audit: { sample: number; reviewed: number; wrong: number; rate: number | null; low: number; high: number } | null
+}
+
+/** An accepted upload batch: its job, and which files are read or skipped. */
+export interface UploadJob {
+  job_id: string
+  pages: number
+  files: string[]
+  skipped: string[]
 }
 
 export interface UploadStatus {

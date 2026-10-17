@@ -6,10 +6,11 @@ import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { fetchLayerStrips } from '../api'
 import { tooltipContent } from '../boreholeTooltip'
+import { detailSheetRect, el } from '../dom'
 import { LITHOLOGY, lithStyle, patternId } from '../lithology'
 import { STATUS_LABEL } from '../review'
 import type { BoreholeSummary, FeatureCollection, ReviewStatus } from '../types'
-import type { RoutePoint, TunnelRoute } from '../tunnelRoute'
+import { M_PER_DEG_LAT, M_PER_DEG_LON, offsetPoint, type RoutePoint, type TunnelRoute } from '../tunnelRoute'
 
 // MapLibre resolves its worker next to its own module, which does not exist in the production bundle.
 // Importing it as an asset makes Vite emit it in both dev and build.
@@ -83,13 +84,6 @@ function fitRoute(m: MapLibre, coordinates: RoutePoint[]) {
   m.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 450 })
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string) {
-  const node = document.createElement(tag)
-  node.className = className
-  if (text != null) node.textContent = text  // textContent: names come from documents, never as HTML
-  return node
-}
-
 function pickerList(items: BoreholeSummary[], onPick: (id: string) => void) {
   const root = el('div', 'picker')
   root.append(el('p', 'picker-head', `${items.length} boreholes at this position`))
@@ -110,9 +104,7 @@ function circlePolygon(lon: number, lat: number, radiusM: number, segments = 64)
   const coords: [number, number][] = []
   for (let i = 0; i <= segments; i++) {
     const a = (i / segments) * 2 * Math.PI
-    const dLat = (radiusM / 111_320) * Math.sin(a)
-    const dLon = (radiusM / (111_320 * Math.max(0.01, Math.cos((lat * Math.PI) / 180)))) * Math.cos(a)
-    coords.push([lon + dLon, lat + dLat])
+    coords.push(offsetPoint([lon, lat], radiusM * Math.cos(a), radiusM * Math.sin(a)))
   }
   return { type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [coords] } }
 }
@@ -255,7 +247,7 @@ function columnOffsets(data: FeatureCollection) {
     .filter((f) => f.properties.depth != null && Number.isFinite(f.properties.depth) && f.properties.depth > 0)
     .map((f) => {
       const [lon, lat] = f.geometry.coordinates
-      return { id: f.properties.id, x: lon * 111_320 * Math.cos((lat * Math.PI) / 180), y: lat * 111_320 }
+      return { id: f.properties.id, x: lon * M_PER_DEG_LON * Math.cos((lat * Math.PI) / 180), y: lat * M_PER_DEG_LAT }
     })
   const spots = new Map<string, number[]>()
   holes.forEach((h, i) => {
@@ -329,8 +321,7 @@ function drawColumns(m: MapLibre, columns: Column[], t: number) {
     const east = c.from[0] + (c.to[0] - c.from[0]) * t
     const north = c.from[1] + (c.to[1] - c.from[1]) * t
     drawn.set(c.props.id, [east, north])
-    const lon = c.lon + east / (111_320 * Math.cos((c.lat * Math.PI) / 180))
-    const lat = c.lat + north / 111_320
+    const [lon, lat] = offsetPoint([c.lon, c.lat], east, north)
     const geometry = circlePolygon(lon, lat, COLUMN_RADIUS_M, 24).geometry
     for (const properties of c.sections) features.push({ type: 'Feature', geometry, properties })
     if (c.to !== NO_OFFSET) {
@@ -736,7 +727,7 @@ function recenter(m: MapLibre, focus: Props['focus']) {
 /** Padding that keeps the centre in the part of the map the detail sheet leaves visible. */
 function uncovered(m: MapLibre) {
   const map = m.getContainer().getBoundingClientRect()
-  const sheet = document.querySelector('.detail')?.getBoundingClientRect()
+  const sheet = detailSheetRect()
   const right = sheet && sheet.left > map.left ? Math.max(0, map.right - sheet.left) : 0
   return { left: 0, right, top: 0, bottom: 0 }
 }

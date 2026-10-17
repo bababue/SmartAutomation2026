@@ -1,3 +1,4 @@
+import { parseDecimal } from './format'
 import type { Filters, RangeFilter, StatusFilter } from './types'
 
 export type View = 'map' | 'review' | 'stats'
@@ -18,10 +19,16 @@ export interface UrlState {
 const STATUSES: StatusFilter[] = ['all', 'released', 'pending', 'rejected']
 const VIEWS: View[] = ['map', 'review', 'stats']
 
-function num(v: string | null): number | null {
-  if (v == null || v === '') return null
-  const n = Number(v)
-  return Number.isFinite(n) ? n : null
+const num = (v: string | null) => (v == null ? null : parseDecimal(v))
+
+export const DEFAULT_FILTERS: Filters = {
+  q: '', lithology: [], lab: [], minPosition: null, status: 'all', group: null, rockMax: null, waterMax: null, material: [],
+}
+
+/** Whether the filters narrow the records at all. */
+export function hasFilters(f: Filters): boolean {
+  return Boolean(f.q.trim() || f.lithology.length || f.lab.length || f.minPosition != null || f.status !== 'all' || f.group ||
+    f.rockMax != null || f.waterMax != null || f.material.length)
 }
 
 /** 'key', or 'key:min:max' with either bound left empty; the format the API reads too. */
