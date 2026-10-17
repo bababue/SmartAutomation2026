@@ -146,11 +146,20 @@ class CorrectionRecord(BaseModel):
     at: str
 
 
+class ReviewChanges(BaseModel):
+    """What changed since the latest human decision on the hole."""
+    decision: Literal["approved", "rejected"]
+    reviewer: str
+    at: str
+    changes: list[str]
+
+
 class ReviewResult(BaseModel):
     borehole: Borehole
     review_log: list[ReviewEvent]
     content_hash: str  # the version a next decision is bound to
     review_revision: int
+    changes_since_review: ReviewChanges | None
 
 
 class CorrectionResult(ReviewResult):

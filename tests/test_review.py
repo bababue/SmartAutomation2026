@@ -559,3 +559,69 @@ def test_a_sample_wise_description_is_extended_to_the_next_one():
                       Layer(top_m=12.0, bottom_m=12.45, description_original="b", primary="silt"),
                       Layer(top_m=13.5, bottom_m=15.0, description_original="c", primary="silt")])
     assert len(extend_sampled_layers(bh)) == 1 and bh.layers[1].bottom_m == 13.5
+
+
+def test_changes_since_the_human_decision_are_listed(con):
+    from api.main import app
+
+    bh = make()
+    score(bh, {}, 0)
+    store.save_borehole(con, bh)
+    uid = store.uid_for(con, bh)
+    assert store.changes_since_review(con, uid, bh) is None  # never reviewed
+    store.record_review(con, bh.borehole_id, ReviewStatus.approved, "Anna", None)
+
+    same = make()
+    score(same, {}, 0)
+    store.save_borehole(con, same)
+    assert store.changes_since_review(con, uid, same) is None
+
+    changed = make()
+    changed.layers[1].bottom_m = changed.layers[2].top_m = 4.7
+    changed.depth_m = 9.5
+    score(changed, {}, 0)
+    store.save_borehole(con, changed)
+    expected = ["Final depth: 9 → 9.5 m", "Layer 2: bottom 4.5 → 4.7 m", "Layer 3: top 4.5 → 4.7 m"]
+    listed = store.changes_since_review(con, uid, changed)
+    assert (listed["decision"], listed["reviewer"], listed["changes"]) == ("approved", "Anna", expected)
+
+    client = TestClient(app)
+    seen = client.get("/api/boreholes/demo:BH1").json()
+    assert seen["changes_since_review"]["changes"] == expected
+    res = client.post("/api/boreholes/demo:BH1/review", json={
+        "decision": "approved", "reviewer": "Ben", "content_hash": seen["content_hash"],
+        "review_revision": seen["review_revision"]})
+    assert res.json()["changes_since_review"] is None
+
+
+def test_an_inserted_layer_is_listed_as_added_not_as_a_shift(con):
+    bh = make()
+    score(bh, {}, 0)
+    store.save_borehole(con, bh)
+    store.record_review(con, bh.borehole_id, ReviewStatus.rejected, "Ben", None)
+
+    changed = make()
+    changed.layers[1].bottom_m = 3.0
+    changed.layers.insert(2, Layer(top_m=3.0, bottom_m=4.5, description_original="Gravel", primary="gravel"))
+    score(changed, {}, 0)
+    store.save_borehole(con, changed)
+    assert store.changes_since_review(con, store.uid_for(con, changed), changed)["changes"] == [
+        "Layer 2: bottom 4.5 → 3 m", "Layer 3 added: 3–4.5 m, gravel"]
+
+    con.execute("DELETE FROM record_versions")
+    assert store.changes_since_review(con, store.uid_for(con, changed), changed)["changes"] == [
+        "The rejected version is not stored, so the changes cannot be listed"]
+
+
+def test_a_moved_source_box_alone_is_one_line(con):
+    bh = make()
+    score(bh, {}, 0)
+    store.save_borehole(con, bh)
+    store.record_review(con, bh.borehole_id, ReviewStatus.approved, "Anna", None)
+
+    moved = make()
+    moved.layers[0].source = SourceRef(file="demo.pdf", page=1, bbox=(0.1, 0.2, 0.3, 0.4))
+    score(moved, {}, 0)
+    store.save_borehole(con, moved)
+    assert store.changes_since_review(con, store.uid_for(con, moved), moved)["changes"] == [
+        "Only the references to the source pages changed"]

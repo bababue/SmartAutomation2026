@@ -531,6 +531,7 @@ button, input, select { font: inherit; color: inherit; }
 .checks-score h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
 .checks-levels { display: inline-flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-weight: 400; color: var(--graphite); }
 .review-summary { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); }
+.review-changes { margin: 12px 0 0; background: var(--panel); }
 .review-summary .checks { margin-bottom: 10px; }
 .checks h4 { margin: 10px 0 2px; font-size: 14px; }
 .review-toggle { border-color: transparent; background: none; color: var(--graphite); }

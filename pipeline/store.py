@@ -4,6 +4,7 @@ log for the human-in-the-loop decisions."""
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import sqlite3
@@ -16,6 +17,7 @@ from pydantic import ValidationError
 from schema.borehole import Borehole, ReviewStatus
 
 from . import config, ground, scoring
+from .georef import haversine_km
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -246,12 +248,15 @@ def llm_calls_today(con: sqlite3.Connection) -> int:
     return con.execute("SELECT COUNT(*) FROM llm_calls WHERE at >= ?", (today,)).fetchone()[0]
 
 
+def _reviewed_content(bh: Borehole) -> dict:
+    """Everything a reviewer judged and the export publishes (not review fields)."""
+    return bh.model_dump(mode="json", exclude={"borehole_id", "confidence", "issues", "score", "score_reasons",
+                                               "review_status", "reviewed_by", "reviewed_at", "review_comment"})
+
+
 def content_hash(bh: Borehole) -> str:
-    """Hash of everything a reviewer judged and the export publishes (not review fields): an approval
-    stays only while exactly this content is stored."""
-    payload = bh.model_dump(mode="json", exclude={"borehole_id", "confidence", "issues", "score", "score_reasons",
-                                                  "review_status", "reviewed_by", "reviewed_at", "review_comment"})
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    """An approval stays only while exactly this content is stored."""
+    return hashlib.sha256(json.dumps(_reviewed_content(bh), sort_keys=True).encode()).hexdigest()
 
 
 def _delete(con: sqlite3.Connection, borehole_id: str) -> dict | None:
@@ -610,6 +615,161 @@ def review_log(con: sqlite3.Connection, borehole_id: str) -> list[dict]:
         "SELECT decision, reviewer, comment, at, version_id FROM review_events WHERE borehole_id = ? OR "
         "(uid IS NOT NULL AND uid = ?) ORDER BY id DESC", (borehole_id, uid or ""),
     )]
+
+
+MAX_CHANGES = 20
+
+
+def changes_since_review(con: sqlite3.Connection, uid: str | None, bh: Borehole) -> dict | None:
+    """The latest human decision on this hole with what changed since in `bh`, so a reviewer re-checks only
+    that; None without such a decision or without a change."""
+    event = con.execute("SELECT decision, reviewer, at, content_hash, version_id FROM review_events WHERE uid = ? "
+                        "AND decision IN (?, ?) ORDER BY id DESC LIMIT 1", (uid, *(s.value for s in HUMAN))).fetchone()
+    if not event:
+        return None
+    version = con.execute("SELECT data FROM record_versions WHERE id = ?", (event["version_id"],)).fetchone()
+    try:
+        old = Borehole.model_validate_json(version["data"]) if version else None
+    except ValidationError:
+        old = None
+    if old is None:
+        if event["content_hash"] == content_hash(bh):
+            return None
+        changes = [f"The {event['decision']} version is not stored, so the changes cannot be listed"]
+    else:
+        changes = _changes(_reviewed_content(old), _reviewed_content(bh))
+        if not changes:
+            return None
+    if len(changes) > MAX_CHANGES:
+        changes = changes[:MAX_CHANGES - 1] + [f"… and {len(changes) - MAX_CHANGES + 1} more changes"]
+    return {"decision": event["decision"], "reviewer": event["reviewer"], "at": event["at"], "changes": changes}
+
+
+HEADINGS = {"depth_m": "Final depth", "surface_elevation_m": "Ground level", "length_m": "Length along the hole"}
+LABELS = {"primary": "lithology", "secondary": "secondary components", "description_original": "description",
+          "description_en": "translation", "coords_raw": "coordinates as printed", "crs_raw": "coordinate system as printed",
+          "crs_epsg": "coordinate system (EPSG)", "method": "position source", "confidence": "position confidence",
+          "n_value": "N"}
+UNITS = {"_m": " m", "_pct": " %", "_deg": "°"}
+
+
+def _key(*values) -> tuple:
+    return tuple(round(v, 2) if isinstance(v, float) else v for v in values)
+
+
+def _range(d: dict) -> str:
+    return f"{_num(d['top_m'])}–{_num(d['bottom_m'])} m"
+
+
+# Lists of entries: label, the key that matches an entry before and after, a summary of an added or removed one.
+# Layers match by lithology: a moved boundary changes the depths of two layers, an inserted layer shifts none.
+ITEMS = {
+    "layers": ("Layer", lambda d: d["primary"], lambda d: f"{_range(d)}, {d['primary']}"),
+    "core_runs": ("Core run", lambda d: _key(d["top_m"], d["bottom_m"]), _range),
+    "samples": ("Sample", lambda d: _key(d["name"], d["top_m"]),
+                lambda d: f"{d['name'] or 'unnamed'} at {_num(d['top_m'])} m"),
+    "spt": ("SPT", lambda d: _key(d["depth_m"]), lambda d: f"{d['raw'] or d['n_value']} at {_num(d['depth_m'])} m"),
+    "groundwater": ("Groundwater", lambda d: _key(d["depth_m"], d["kind"]),
+                    lambda d: "dry" if d["dry"] else f"{_num(d['depth_m'])} m, {d['kind']}"),
+    "lab_results": ("Lab value", lambda d: _key(d["parameter"], d["top_m"], d["sample_name"]),
+                    lambda d: f"{d['parameter']} {_num(d['value'])}"
+                    + (f" at {_num(d['top_m'])} m" if d["top_m"] is not None else "")),
+}
+# Where on the page a value was read: a re-extraction moves these boxes without changing what was read.
+SOURCE_FIELDS = {"source", "sources"}
+
+
+def _changes(old: dict, new: dict) -> list[str]:
+    lines = []
+    for field, after in new.items():
+        before = old.get(field)
+        if before == after or field in SOURCE_FIELDS:
+            continue
+        if field == "location":
+            lines += _location_changes(before or {}, after)
+        elif field in ITEMS:
+            lines += _item_changes(field, before or [], after)
+        else:
+            lines.append(_line(_heading(field), field, before, after))
+    return lines or (["Only the references to the source pages changed"] if old != new else [])
+
+
+def _location_changes(old: dict, new: dict) -> list[str]:
+    lines = []
+    if (old.get("lat"), old.get("lon")) != (new["lat"], new["lon"]):
+        before, after = _position(old), _position(new)
+        moved = ""
+        if before and after:
+            metres = haversine_km(old["lat"], old["lon"], new["lat"], new["lon"]) * 1000
+            moved = f" (moved {metres / 1000:.1f} km)" if metres >= 1000 else f" (moved {metres:.0f} m)"
+        lines.append(f"Position: {before or 'none'} → {after or 'none'}{moved}")
+    return lines + [_line(_heading(field), field, old.get(field), after)
+                    for field, after in new.items()
+                    if field not in ("lat", "lon", *SOURCE_FIELDS) and old.get(field) != after]
+
+
+def _position(location: dict) -> str | None:
+    if location.get("lat") is None or location.get("lon") is None:
+        return None
+    return f"{location['lat']:.5f}, {location['lon']:.5f}"
+
+
+def _item_changes(field: str, old: list[dict], new: list[dict]) -> list[str]:
+    label, match, summary = ITEMS[field]
+    lines = []
+    matcher = difflib.SequenceMatcher(None, [match(d) for d in old], [match(d) for d in new], autojunk=False)
+    for _, i1, i2, j1, j2 in matcher.get_opcodes():
+        pairs = list(zip(range(i1, i2), range(j1, j2)))  # a replaced block is paired in order
+        for i, j in pairs:
+            lines += [_line(f"{label} {j + 1}: {_label(f)}", f, old[i].get(f), after)
+                      for f, after in new[j].items() if f not in SOURCE_FIELDS and old[i].get(f) != after]
+        lines += [f"{label} {j + 1} added: {summary(new[j])}" for j in range(j1 + len(pairs), j2)]
+        lines += [f"{label} removed: {summary(old[i])}" for i in range(i1 + len(pairs), i2)]
+    return lines
+
+
+def _label(field: str) -> str:
+    if field in LABELS:
+        return LABELS[field]
+    for suffix in UNITS:
+        field = field.removesuffix(suffix)
+    return field.replace("_", " ")
+
+
+def _heading(field: str) -> str:
+    label = HEADINGS.get(field) or _label(field)
+    return label[:1].upper() + label[1:] + ":"
+
+
+def _line(label: str, field: str, before, after) -> str:
+    old, new = _text(before), _text(after)
+    if old == new:  # differs beyond what the shortened text shows
+        return f"{label.rstrip(':')} changed"
+    unit = next((u for suffix, u in UNITS.items() if field.endswith(suffix)), "")
+    return f"{label} {old} → {new}{unit}"
+
+
+def _num(value: float | None) -> str:
+    return "—" if value is None else format(value, ".10g")
+
+
+def _text(value) -> str:
+    if value is None or value == [] or value == {}:
+        return "—"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (int, float)):
+        return _num(value)
+    if isinstance(value, dict) and "file" in value:  # a source reference
+        text = f"{value['file']} p. {value['page']}" if value.get("page") else value["file"]
+    elif isinstance(value, dict):
+        text = " ".join(_text(v) for v in value.values() if v is not None)
+    elif isinstance(value, list):
+        text = ", ".join(_text(v) for v in value)
+    else:
+        text = str(value)
+    text = text if len(text) <= 40 else text[:39] + "…"
+    return f"“{text}”" if " " in text and not isinstance(value, (dict, list)) else text
 
 
 def load_borehole(con: sqlite3.Connection, borehole_id: str) -> Borehole | None:
