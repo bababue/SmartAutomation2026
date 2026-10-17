@@ -6,6 +6,9 @@ the main database or the reviewers' work.
     python -m pipeline experiment run NAME --yes    # extract the reference documents with NAME's prompt
     python -m pipeline experiment compare           # every arm against the reference, per document
 
+Without a reference, arms run with `--doc` and are compared on signals that need none (text-layer
+confirmation, blocking findings, releases); see `proxy`.
+
 Each arm has its own extraction cache and a fresh database without corrections or knowledge, so the scores
 are the model's alone. Classifications and lab sheets come from the main cache: a prompt experiment changes
 extraction only. Model and effort come from the usual settings (EXTRACT_MODEL, EXTRACT_EFFORT) and are part
@@ -16,12 +19,15 @@ the baseline may be slightly favoured on documents that have knowledge entries.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sqlite3
 import statistics
 from pathlib import Path
 
-from . import config, evaluate, llm, store
+from schema.borehole import Borehole
+
+from . import config, evaluate, llm, scoring, store
 
 EXPERIMENTS_DIR = config.DATA_DIR / "eval" / "experiments"
 BASELINE = "baseline"
@@ -65,6 +71,47 @@ def fresh_db(name: str) -> sqlite3.Connection:
     return store.connect(path)
 
 
+def proxy(con: sqlite3.Connection, docs, rendered) -> dict:
+    """Signals that need no reference, for comparing arms on documents nobody has checked yet: how many
+    layer boundaries the PDF text layer confirms (digital PDFs only), blocking findings and releases.
+    Hints only: a text layer can be incomplete, and fewer findings can also mean fewer layers."""
+    texts = {(d.path, p.page): p.text for d in docs for p in rendered[d.doc_id]}
+    found = checked = released = 0
+    blocking: dict[str, int] = {}
+    records = [Borehole.model_validate_json(r["data"]) for r in con.execute("SELECT data FROM boreholes")]
+    for bh in records:
+        f, t, _, _ = scoring.text_check(bh, texts)
+        found, checked = found + f, checked + t
+        released += bh.review_status.value == "auto_approved"
+        for issue in bh.issues:
+            if scoring.finding_severity(issue) == "blocking":
+                code = scoring.finding_code(issue)
+                blocking[code] = blocking.get(code, 0) + 1
+    return {"documents": sorted(d.doc_id for d in docs), "records": len(records),
+            "layers": sum(len(bh.layers) for bh in records), "released": released,
+            "text_found": found, "text_checked": checked, "blocking": blocking}
+
+
+def save_proxy(name: str, data: dict) -> None:
+    (arm_dir(name) / "proxy.json").write_text(json.dumps(data, indent=1))
+
+
+def proxy_report(names: list[str]) -> list[str]:
+    data = {n: json.loads(p.read_text()) for n in names if (p := arm_dir(n) / "proxy.json").exists()}
+    if not data:
+        return []
+    codes = sorted({c for d in data.values() for c in d["blocking"]})
+    lines = ["without reference (hints only):", "",
+             f"{'arm':<24} {'docs':>4} {'records':>7} {'layers':>6} {'released':>8} {'text ok':>8} {'blocking':>8}  by code"]
+    for name, d in data.items():
+        by_code = ", ".join(f"{c} {d['blocking'][c]}" for c in codes if d["blocking"].get(c))
+        lines.append(f"{name[:24]:<24} {len(d['documents']):>4} {d['records']:>7} {d['layers']:>6} {d['released']:>8} "
+                     f"{evaluate.pct(d['text_found'], d['text_checked']):>8} {sum(d['blocking'].values()):>8}  {by_code}")
+    if len({tuple(d["documents"]) for d in data.values()}) > 1:
+        lines.append("! the arms ran on different documents: run each with the same --doc options")
+    return lines + ["text ok: layer boundaries found literally in the PDF text layer (digital PDFs only).", ""]
+
+
 def arms() -> list[str]:
     found = sorted(p.parent.name for p in EXPERIMENTS_DIR.glob("*/boreholes.sqlite"))
     return sorted(found, key=lambda n: n != BASELINE)
@@ -80,16 +127,18 @@ def arm_scores(name: str, reference: dict[str, dict]) -> dict[str, evaluate.Scor
 
 
 def compare_arms(reference_path: Path = evaluate.REFERENCE_PATH) -> str:
-    reference = evaluate.load_reference(reference_path)
-    if not reference:
-        return "no reference yet: approve records in the review UI, then run `python -m pipeline eval snapshot`"
     names = arms()
     if not names:
         return "no experiment results yet: run `python -m pipeline experiment baseline` first"
+    head = proxy_report(names)
+    reference = evaluate.load_reference(reference_path)
+    if not reference:
+        return "\n".join(head + ["no reference yet: approve records in the review UI, then run "
+                                 "`python -m pipeline eval snapshot`"])
     holdout = evaluate.load_holdout(reference_path)
     scores = {name: arm_scores(name, reference) for name in names}
     rule = "-" * len(evaluate.HEADER)
-    lines = [evaluate.HEADER.replace(" " * 24, f"{'arm':<24}", 1), rule]
+    lines = head + ["against the reference:", "", evaluate.HEADER.replace(" " * 24, f"{'arm':<24}", 1), rule]
     for name in names:
         lines.append(evaluate.line(name, evaluate.total(scores[name])))
         if holdout:

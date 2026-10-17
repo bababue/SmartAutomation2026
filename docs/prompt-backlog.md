@@ -4,6 +4,10 @@ Changes to the extraction prompt invalidate the whole extraction cache, so they 
 shipped together after the spot checks. Each item: what we saw (generic, no project data), what to change,
 and what code currently does as a stopgap.
 
+Each change is measured with `python -m pipeline experiment` (see README → Prompt experiments) before it
+ships. Items 1, 2, 3, 6 and 7 are prompt-only; items 4 and 5 also need code (depths in printed units with
+conversion in assembly, a run-offset field) and are tested once that exists.
+
 | # | Observed | Prompt change | Stopgap in code |
 |---|---|---|---|
 | 1 | On sheet 1 of a multi-sheet log the model reports the sheet's bottom as `final_depth_m` | `final_depth_m` only from an explicit end-of-hole statement or header field; null otherwise | final depth = deepest value stated on any sheet |

@@ -348,6 +348,7 @@ def cmd_experiment(args) -> None:
         con = experiment.fresh_db(name)
         extractions = _extract(todo, classes, con)  # empty DB: no reviewer knowledge in the prompt
     _store(con, docs, rendered, classes, extractions, labs)
+    experiment.save_proxy(name, experiment.proxy(con, docs, rendered))
     con.close()
     print()
     print(experiment.compare_arms())

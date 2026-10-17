@@ -41,7 +41,7 @@ def _variants(v: float) -> set[str]:
 RELATIVE_PIECE = re.compile(r"^\s*\d+(?:[.,]\d+)?\s*[-–]\s*\d+(?:[.,]\d+)?\s*cm\b", re.I)
 
 
-def _text_check(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> tuple[int, int, int, int]:
+def text_check(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> tuple[int, int, int, int]:
     """(boundaries found, boundaries checked, layers checked, layers checkable) against the text layer."""
     found = total = checked = checkable = 0
     for layer in bh.layers:
@@ -65,7 +65,7 @@ def _text_check(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> 
 def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> float | None:
     """Share of extracted layer boundaries that occur literally in the source page's text layer.
     None when the source has no usable text layer (scans, images, outlined vector PDFs)."""
-    found, total, _, _ = _text_check(bh, page_texts)
+    found, total, _, _ = text_check(bh, page_texts)
     return found / total if total >= 3 else None
 
 
@@ -121,7 +121,7 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
     if unreadable:
         extraction -= min(0.2, 0.05 * unreadable)
         reasons.append(f"{unreadable} item(s) reported as unreadable")
-    found, total, checked, checkable = _text_check(bh, page_texts)
+    found, total, checked, checkable = text_check(bh, page_texts)
     agreement = found / total if total >= 3 else None
     has_text = checked > 0
     if agreement is not None and agreement < NOT_PRINTED and not prints_depths(bh, page_texts):
