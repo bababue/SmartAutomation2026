@@ -11,9 +11,8 @@ logs from PDFs, scans and images, standardise them and georeference them. The re
 into a searchable database with a world map. The UI takes the LGRB portal
 (bohrungen.lgrb-bw.de) as its model, made more modern.
 
-What the challenge owner weighs most is in
-[docs/challenge-owner-feedback.md](docs/challenge-owner-feedback.md). Coordinates come
-first, and quality beats quantity. Uncertain records go to a person.
+What the challenge owner weighs most: coordinates come first, and quality beats quantity.
+Uncertain records go to a person.
 
 - `schema/`: the canonical Pydantic model (`borehole.py`) and the generated JSON schema.
 - `pipeline/`: ingest, then classify, extract, assemble, georeference, score and store.

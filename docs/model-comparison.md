@@ -37,9 +37,9 @@ re-extraction, not that earlier output.
 ## What the numbers do not show
 
 - Haiku copies the printed field label into raw values ("Location: …", "Ground level: …"), also into the
-  place name; Opus rarely does (prompt backlog item 12).
+  place name; Opus rarely does. The v4 prompt asks for the value without its label.
 - On a log without coordinates Haiku took a same-named town in another country as the site, which put the
-  position thousands of kilometres off; Opus kept the right country (backlog item 13). The scoring caught it:
+  position thousands of kilometres off; Opus kept the right country. The v4 prompt takes the country only from evidence on the sheet. The scoring caught it:
   a position from a place name alone has confidence 0.3 and always goes to review.
 - Asking Haiku to leave out empty fields shortens its output by 3 % only, so it does not get faster or cheaper
   that way (backlog item 11).

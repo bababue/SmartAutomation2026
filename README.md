@@ -33,8 +33,8 @@ with synthetic boreholes (see [What the build checks](#what-the-build-checks)).
 | **World map** | React + MapLibre: clusters, filters, 3D columns, profile next to the source page, tunnel route section, similar ground. | Modelled on the LGRB borehole portal (bohrungen.lgrb-bw.de). |
 | **Data security** | Pages are processed one by one, locally rendered; the model provider is a setting (Claude, zero-data-retention OpenRouter, or a local model); offline gazetteer. | [Data security](#data-security). |
 
-The challenge owner's priorities from the event (coordinates first, quality over quantity) are in
-[docs/challenge-owner-feedback.md](docs/challenge-owner-feedback.md). [FEATURES.md](FEATURES.md) lists every
+The challenge owner's priorities from the event: coordinates first, quality over quantity, uncertain records to
+a person. [FEATURES.md](FEATURES.md) lists every
 feature and ideas for next steps; [docs/pipeline.md](docs/pipeline.md) shows the pipeline with diagrams.
 
 ## How it works
@@ -72,12 +72,15 @@ Only the two LLM steps call a model; everything after the cache is code, so a ru
 - Score ≥ `AUTO_APPROVE_THRESHOLD` (0.9) and no blocking finding → released automatically; otherwise the
   record waits in the review queue, weakest first.
 - Blocking: layer gaps or overlaps, depth contradictions, an ambiguous coordinate system, a second coordinate
-  reading that disagrees, an empty or lost log page, depths in feet.
+  reading that disagrees, a position far from the document's other holes (checked again after reviewer
+  corrections), copies of a hole that disagree on depths or on the lithology at the same boundaries, an empty or
+  lost log page, depths in feet.
 - An inferred coordinate system, or a notation whose readings lie a few hundred metres apart, stays below the
   threshold until a person confirms it, once per document.
 - Reviewers approve, reject or correct a value; every decision is logged with name and time. A decision holds
   while the record's content hash is unchanged. If a re-run changes the content, the record returns to the
-  queue with a note.
+  queue with a note and stays there on every later run until a person decides again or the content is back to
+  what was approved.
 - Corrections are stored apart from the extraction and applied again on every run, so they survive
   re-extraction. Reviewer knowledge generalises: a confirmed CRS counts for the country, hand-placed holes
   become control points for a fitted local grid, local terms map to DIN 4023 classes.
@@ -93,7 +96,7 @@ exactly what runs without them:
 | Stage | Checks |
 |---|---|
 | Web | `npm ci`, `oxlint`, unit tests, TypeScript check and production build |
-| Python | `pip install`, the full test suite (330+ tests: coordinate parsing in every notation that broke, CRS resolution, sheet assembly, scoring and blocking rules, review persistence, corrections, API, upload queue, export) |
+| Python | `pip install`, the full test suite (390+ tests: coordinate parsing in every notation that broke, CRS resolution, sheet assembly, scoring and blocking rules, review persistence, corrections, API, upload queue, export) |
 | App | creates a database of synthetic boreholes at public places (`fixtures/demo_data.py`) and serves API and UI on port 8000 |
 
 Not part of the build: extraction itself, which needs an LLM key and the confidential documents. Tests never
@@ -106,7 +109,7 @@ call an LLM; they use cached or hand-written page results. The same checks run l
 | Python | 3.12 or newer | pipeline and API |
 | Node.js | 22 or newer | web UI |
 | OpenRouter key | `sk-or-…` from openrouter.ai | processing documents and web uploads only |
-| LibreOffice | any recent | optional: renders DOCX files (`brew install --cask libreoffice`, `apt install libreoffice-writer-nogui`); without it only their embedded images are read |
+| LibreOffice | any recent | optional: renders DOCX files (`brew install --cask libreoffice`, `apt install libreoffice-writer-nogui`; the Docker image installs it); without it only their embedded images are read |
 
 No database server or GIS stack: storage is one SQLite file and coordinate transformations use pyproj.
 
@@ -169,8 +172,8 @@ version or the model changes. Runs above about $5 ask for `--yes`.
 Web uploads take several files or a ZIP as one batch (up to `MAX_UPLOAD_PAGES` pages): one document group,
 processed in one run, so a hole spread over several files is combined. A file sent before (same SHA-256) is left
 out and reported. A queued or running batch, or single documents of it, can be cancelled: no new model calls
-start for them and nothing is stored for them. The queue lives in SQLite and survives a restart; run one API
-process per database.
+start for them and nothing is stored for them. When a batch is done, its first hole opens. The queue lives in
+SQLite and survives a restart; run one API process per database.
 
 `pipeline share --out <dir>` packs a consistent copy of the database and page images for a teammate. The
 package is confidential: pass it on locally (AirDrop, USB, `scp`), never through a cloud service.
@@ -180,26 +183,39 @@ package is confidential: pass it on locally (AirDrop, USB, `scp`), never through
 - **Map:** clusters by location, colour by release state, a ring for a position estimated from a place name.
   From zoom 15, holes become 3D columns with lithology bands at a 1:1 metre scale; "3D view" in the menu switches
   to a flat, north-up 2D map with points.
+- **Header:** released and total records, and the number of holes without a position, which opens them in the
+  review list.
 - **Search and filters:** full text over names, projects, places and layer descriptions; release state and
-  score range, lithology, depth to rock, groundwater.
-- **Detail:** two-column profile (stratigraphy, DIN 4023 lithology), layers, tests and lab values next to the
-  original page; hovering a value outlines where it was read. Similar holes by ground profile.
+  score range, lithology, depth to rock, groundwater. The list groups holes by project; "Show on map" narrows the
+  map to one. A **Group results** switch, remembered in the browser, turns grouping on or off in the result,
+  review and tunnel lists.
+- **Detail:** two-column profile (stratigraphy, DIN 4023 lithology), layers, tests and lab values; the
+  **Source** tab opens the original page beside them, and hovering a value outlines where it was read. Findings
+  are split into what needs a person, other findings and what the model could not read. Each card is edited in
+  place. "Similar ground elsewhere" lists holes of other documents with comparable ground; "Find more like this"
+  sets the ground filters from the open hole, and a hole opened from the list leads back with one button.
 - **Review:** choose **Review** beside the borehole filters. The left sidebar shows waiting records,
-  lowest score first, also those without a position; use the active **Review ×** card to return to boreholes.
-  Filter them by where the position comes from (printed coordinates, estimated from the place name, inferred
-  coordinate system, none) and by finding. Approve with `A`, reject with `R`, `Esc` to close; the next record
-  opens automatically. A document whose waiting holes share an inferred coordinate system shows "Confirm for all
-  n" in the detail of each of them. The statistics open the release audit sample in the same list.
+  lowest score first, also those without a position, grouped by project with count and release share; use the
+  active **Review ×** button to return to boreholes. Filter them by release state and score, by where the
+  position comes from (printed coordinates, estimated from the place name, inferred coordinate system, none) and
+  by finding. Approve with `A`, reject with `R`, `Esc` to close; the next record opens automatically. A
+  document whose waiting holes share an inferred coordinate system shows "Confirm for all n" in the detail of
+  each of them. The statistics open the release audit sample in the same list.
 - **Tunnel routes:** choose **Tunnels** beside the borehole filters. The sidebar groups saved tunnels by the
   project shared by the most selected boreholes; tunnels without a project appear first. Use **+ New tunnel**
-  beside **Tunnels ×** to create one. Its settings open on the right. Draw an alignment or import a WGS84 GeoJSON
+  at the top of the tunnel list to create one. Its settings open on the right. Draw an alignment or import a WGS84 GeoJSON
   LineString, select boreholes in the corridor, and view the longitudinal section below the map. Spans over
-  150 m are drawn lighter as less certain. Tunnels and selected boreholes are saved in this browser, and the
-  selected tunnel reopens from its URL after a reload.
-- **Statistics:** two tabs. **Data**: lithology, depth and release distributions and recurring findings for the
-  current filter. **Quality & models**: extraction quality against the reviewed reference, the release audit,
-  Opus against Haiku with cost per page, the wider benchmark, the prompt experiments side by side and the
-  recorded model calls.
+  150 m are drawn lighter as less certain. The other saved tunnels stay visible on the map. Tunnels and selected
+  boreholes are saved in this browser, and the selected tunnel reopens from its URL after a reload.
+- **Statistics:** a headline strip over the whole database, one figure per challenge claim, each leading to its
+  evidence: share of holes positioned from printed coordinates, layer boundaries found, automatic releases found
+  wrong in the release audit, records waiting for review. Two tabs. **Data**, for the current filter: a
+  coordinates card (how each position was obtained, how the coordinate system was settled, EPSG codes, position
+  error against the reference over the whole database, positions deliberately left for a reviewer), key figures,
+  release funnel, final depths, lithology, findings and documents with their most frequent finding.
+  **Quality & models**: extraction quality against the reviewed reference, the release audit, Opus against
+  Haiku with cost per page, the wider benchmark, the prompt experiments side by side and the recorded model
+  calls.
 - **Export:** released records as BoreholeDataFormat workbook or CSV, one row per layer.
 
 ## Evaluation
@@ -231,10 +247,10 @@ once at start (`store.migrate`); files older than version 3 are refused.
 
 | Table | Content |
 |---|---|
-| `boreholes` | one row per hole: the canonical record as JSON plus summary columns; a durable `uid` survives renames (aliases in `borehole_aliases`) |
-| `layers`, `lab_values`, `findings` | queryable projections, rebuilt with every record |
+| `boreholes` | one row per hole: the canonical record as JSON plus summary columns and its document group (`grp`); a durable `uid` survives renames (aliases in `borehole_aliases`) |
+| `layers`, `lab_values`, `findings`, `record_sources` | queryable projections and source pages, rebuilt with every record |
 | `boreholes_rtree`, `boreholes_fts` | map box and full-text search |
-| `review_events`, `record_versions` | every decision, and the exact content it was about |
+| `review_events`, `record_versions` | every decision, and the exact content it was about; versions that neither a decision nor a current record points to are dropped |
 | `corrections`, `knowledge` | human input, applied again on every run |
 | `documents`, `pages`, `upload_jobs` | inputs and the web upload queue |
 | `llm_calls` | every model call a run made: what went where, as sizes |
@@ -251,8 +267,8 @@ Measured with 50,000 synthetic holes (1 GB): map points 0.8 s / 1.5 MB gzipped, 
 | `api/` | FastAPI: search, map data, detail, source pages, review, corrections, upload, statistics, export |
 | `web/` | React 19, Vite, TypeScript, MapLibre |
 | `tests/` | pytest suite; public landmarks and invented values only |
-| `fixtures/` | synthetic demo boreholes |
-| `docs/` | pipeline diagrams, challenge-owner feedback, model comparison, prompt backlog |
+| `fixtures/` | synthetic demo boreholes, evaluation snapshot for the statistics page (aggregates only) |
+| `docs/` | pipeline diagrams, model comparison, prompt backlog |
 | `temp/`, `data/` | dataset, pages, cache and database: confidential and git-ignored |
 
 ## Configuration
@@ -268,9 +284,10 @@ Environment variables, from the shell or `.env`:
 | `CLAUDE_CLI`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CLI_TOKEN_FILE` | `claude`, CLI default, – | CLI backend and its account |
 | `CLASSIFY_MODEL` / `CLASSIFY_EFFORT` | `claude-opus-5-5` / `low` | page classification (`anthropic/claude-haiku-5.5` in `.env.example`) |
 | `EXTRACT_MODEL` / `EXTRACT_EFFORT` | `claude-opus-5-5` / `medium` | log extraction (`anthropic/claude-haiku-5.5` in `.env.example`) |
+| `COORDS_EFFORT` | `low` | second reading of printed coordinates, with `EXTRACT_MODEL` |
 | `MAX_WORKERS` | `6` (API), `3` (CLI) | parallel model calls |
 | `AUTO_APPROVE_THRESHOLD` | `0.9` | release score for automatic release |
-| `MAX_UPLOAD_PAGES` | `100` | pages per upload batch |
+| `MAX_UPLOAD_PAGES` / `MAX_UPLOAD_BYTES` | `100` / 25 MB | pages and bytes per upload batch |
 | `MAX_UPLOAD_JOBS` / `MAX_UPLOAD_WORKERS` | `8` / `1` | web upload queue |
 | `MAX_UPLOAD_CALLS` / `MAX_DAILY_CALLS` | `400` / `2000` | model calls per upload batch / per UTC day (command-line runs count towards the day, but are not stopped) |
 | `DATASET_DIR` | `temp/HKBoreholeChallenge_Data_BFH2026/BoreholeData` | input documents |
