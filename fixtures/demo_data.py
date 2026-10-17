@@ -125,7 +125,7 @@ def build(seed: int = 7) -> list[Borehole]:
                 sources=[SourceRef(file="demo", page=1)],
             )
             if j == 2 and i % 3 == 0 and len(bh.layers) > 2:
-                bh.layers[1].bottom_m -= 0.4  # a gap, as a misread boundary would produce
+                bh.layers[1].bottom_m = round(bh.layers[1].bottom_m - 0.4, 2)  # a gap, as a misread boundary would produce
             bh.issues = bh.validate_log() + (["position from place name only"] if not j else [])
             score(bh, {}, unreadable=rnd.choice([0, 0, 0, 0, 1, 3]))
             out.append(bh)
