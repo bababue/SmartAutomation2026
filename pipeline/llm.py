@@ -25,10 +25,11 @@ from pathlib import Path
 from typing import TypeVar
 
 import anthropic
+import pymupdf
 from pydantic import BaseModel, ValidationError
 
 from . import config
-from .extraction_models import PageClassification, PageExtraction, PageLabResults
+from .extraction_models import CoordinateReading, PageClassification, PageExtraction, PageLabResults
 from .ingest import PageImage
 
 T = TypeVar("T", bound=BaseModel)
@@ -65,50 +66,67 @@ core recovery). Report prose that merely mentions boreholes is "text". Summary t
 coordinates of several holes are "coordinate_table". If the page states the coordinate system, grid, datum \
 or zone anywhere (title block, notes, legend, report text), copy that statement into `crs_text`."""
 
-EXTRACT_SYSTEM = """You transcribe geotechnical borehole and test pit logs into structured data for a \
-global subsurface database used to design tunnel boring machines. Accuracy matters more than \
-completeness: never invent values. If something is not printed or not readable, use null and list it \
-in `unreadable`.
+EXTRACT_SYSTEM = """You transcribe geotechnical borehole and test pit logs into structured data for a global subsurface \
+database used to design tunnel boring machines. Accuracy matters more than completeness: never invent \
+values. If something is printed but cannot be read reliably (faint, cut off, overwritten, handwriting in \
+doubt), use null and list it in `unreadable`. A field that is blank or not printed on this page is null \
+and not listed. Depths that a log only draws against its depth scale, and the top of a unit continued from \
+the previous sheet, are normal readings and are not listed either. Start each `unreadable` entry with the \
+field it concerns: `depth:` (layer boundaries, final depth), `lithology:` (layer description or soil/rock \
+class), `name:` (hole name), `coordinates:` (coordinates, grid, datum, zone), `header:` (other header and \
+title block fields: dates, method, contractor, elevation, diameter), `tests:` (samples, SPT, core runs, \
+groundwater, lab values).
 
 Rules:
 - Report every log visible on the page (a page can contain several). Use the hole name exactly as printed.
 - Depths are metres below ground surface along the hole. Convert feet to metres and say so in `notes`.
   If the log only shows elevations (levels), convert to depth using the ground level and say so in `notes`.
 - Layers: one entry per described stratum with its top and bottom depth. On continuation sheets only \
-include what is visible on this page. If the last layer continues onto the next sheet, set its bottom_m to the \
-deepest depth shown on this sheet's depth scale and write "continues on next sheet" into `notes`.
-- Check every layer boundary against the depth scale and the drawn boundary line, not only the printed digits. \
-Small or faint digits are easily misread (1.60 vs 1.80, 3.5 vs 8.5). If the printed value and the scale position \
-disagree, use the value that matches the scale and list the boundary in `unreadable`. Keep `description_original` verbatim in the original language and \
-add `description_en`.
+include what is visible on this page. If the last layer continues onto the next sheet, set its bottom_m to \
+the deepest depth shown on this sheet's depth scale and write "continues on next sheet" into `notes`.
+- Check every layer boundary against the depth scale and the drawn boundary line, not only the printed \
+digits. Small or faint digits are easily misread (1.60 vs 1.80, 3.5 vs 8.5). If the printed value and the \
+scale position disagree, use the value that matches the scale and list the boundary in `unreadable`. Keep \
+`description_original` verbatim in the original language and add `description_en`.
 - Lithology: map the main constituent to the closest DIN 4023 class (`primary`), e.g. made ground, \
 asphalt, concrete, rubble → fill; caliche, calcarenite → limestone; granite → plutonic_rock; basalt → \
-volcanic_rock; core loss / no recovery → no_recovery. Secondary components with qualifiers: \
-'trace of' → trace, 'slightly'/'some' → slightly, '-y' (sandy, silty) → moderately, 'very' → very.
+volcanic_rock; core loss / no recovery → no_recovery. Secondary components with qualifiers: 'trace of' → \
+trace, 'slightly'/'some' → slightly, '-y' (sandy, silty) → moderately, 'very' → very.
 - Stratigraphy: fill `stratigraphic_name`/`stratigraphic_code` only if printed. `geologic_age` may be \
 filled when printed or unambiguous (e.g. 'Quaternary' alluvium). `stratigraphic_color` only if the log \
 shows a coloured stratigraphy column.
-- Coordinates: copy the coordinate text exactly as printed into `coords_raw`, including labels (X/Y, \
-N/E, Easting/Northing) and separators. Copy any datum / grid / zone text into `crs_raw`. Do not convert.
+- Coordinates: copy the coordinate text exactly as printed into `coords_raw`, including labels (X/Y, N/E, \
+Easting/Northing) and separators. Copy any datum / grid / zone text into `crs_raw`. Do not convert.
 - Place: from the project and location text, give your best estimate of the latitude/longitude of the \
 named site or town in `place_lat`/`place_lon` with a realistic `place_precision_km`. This is used to \
 sanity-check the printed coordinates, so base it on the place names, not on the coordinates.
 - SPT: keep the printed notation in `raw`; blow counts per increment in `blows`.
-- Elevation: copy the printed ground level text into `elevation_raw`; `elevation_m` positive up as printed.
-- Header, title block, footnotes and legend: read them completely for the coordinate system / grid / datum / \
-zone (→ `crs_raw`, also when it is printed away from the coordinates, e.g. 'All coordinates MGA94 Zone 55'), the \
-elevation datum (→ `elevation_datum`, e.g. 'AHD', 'mOD', 'NN', 'MSL') and the groundwater reference point \
-(→ `reference` of each groundwater entry: below ground, below top of casing, other).
-- Evidence: for every layer and for the coordinates give `bbox`/`coords_bbox`, the region of the page image \
-where the value is printed (layer: its depth labels and description row), as [x0, y0, x1, y1] fractions of the \
-image width and height with the origin top left. Approximate is fine; null if you cannot locate it.
+- Elevation: copy the printed ground level text into `elevation_raw`; `elevation_m` positive up as \
+printed.
+- Hole name, place and date fields carry the value as printed without the field label in front of it \
+('Borehole: BH 4' → 'BH 4', 'Date: 03.05.2019' → '03.05.2019'). Copy `coords_raw`, `crs_raw` and \
+`elevation_raw` exactly as printed, including any datum, grid or system text, even when it reads like a \
+label.
+- Country: `country` from evidence on the sheet (language, coordinate grid or datum, postcode or phone \
+number format, standards cited, place names); these usually decide. Only when a place name exists in \
+several countries and nothing on the sheet decides, set `country` null and give the place estimate a \
+coarse `place_precision_km`.
+- Header, title block, footnotes and legend: read them completely for the coordinate system / grid / datum \
+/ zone (→ `crs_raw`, also when it is printed away from the coordinates, e.g. 'All coordinates MGA94 Zone \
+55'), the elevation datum (→ `elevation_datum`, e.g. 'AHD', 'mOD', 'NN', 'MSL') and the groundwater \
+reference point (→ `reference` of each groundwater entry: below ground, below top of casing, other).
+- Evidence: for every layer and for the coordinates give `bbox`/`coords_bbox`, the region of the page \
+image where the value is printed (layer: its depth labels and description row), as [x0, y0, x1, y1] \
+fractions of the image width and height with the origin top left. Approximate is fine; null if you cannot \
+locate it.
 - Previous sheet: a short summary of the previous sheet of the same document may be given. Use it only to \
 continue a log across a sheet break: a unit that started on the previous sheet gets this sheet's top depth \
-(the top of its depth scale), not the original top; if the soil or rock name of such a unit is printed only on \
-the previous sheet, use it for `primary` and say so in `notes`; if the hole name on this sheet is illegible \
-or overwritten and the sheet clearly continues the previous one, use the previous name and list it in \
-`unreadable`. Everything else comes from this page only.
-- A text layer extracted from the PDF may be provided. It can be scrambled or wrong; the image is authoritative."""
+(the top of its depth scale), not the original top; if the soil or rock name of such a unit is printed \
+only on the previous sheet, use it for `primary` and say so in `notes`; if the hole name on this sheet is \
+illegible or overwritten and the sheet clearly continues the previous one, use the previous name and list \
+it in `unreadable`. Everything else comes from this page only.
+- A text layer extracted from the PDF may be provided. It can be scrambled or wrong; the image is \
+authoritative."""
 
 
 LAB_SYSTEM = """You transcribe laboratory test result sheets from geotechnical site investigations (any \
@@ -136,8 +154,9 @@ def _image_block(path: Path) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
 
 
-def cache_path(stage: str, page: PageImage) -> Path:
-    return config.CACHE_DIR / stage / page.doc_id / f"{page.page:04d}.json"
+def cache_path(stage: str, page: PageImage, part: str = "") -> Path:
+    """part: one of several entries of a page in the stage (e.g. one per hole)."""
+    return config.CACHE_DIR / stage / page.doc_id / f"{page.page:04d}{'-' + part if part else ''}.json"
 
 
 def _cache_key(*parts: str | bytes) -> str:
@@ -155,6 +174,10 @@ def _classify_key(page: PageImage, model: str, effort: str) -> str:
 def _extract_key(page: PageImage, kind: str, context: str, model: str, effort: str) -> str:
     image = config.PAGES_DIR / page.image
     return _cache_key(config.PROMPT_VERSION, model, effort, image.read_bytes(), page.text[:8000], kind, context)
+
+
+def _retry_key(page: PageImage, kind: str, context: str, model: str, effort: str) -> str:
+    return _cache_key("retry", _extract_key(page, kind, context, model, effort))
 
 
 def sheet_context(prev: PageExtraction | None) -> str:
@@ -388,6 +411,9 @@ def _call_claude_code(model: str, system: str, image: Path, text: str, out: type
             raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {(proc.stderr or proc.stdout)[:500]}")
         if result.get("is_error"):
             raise RuntimeError(f"claude CLI error: {str(result.get('result'))[:500]}")
+        tokens = {f: result.get("usage", {}).get(f) or 0 for f in USAGE_FIELDS}
+        if any(tokens.values()):  # the subscription is not billed per token: tokens only, priced from PRICES
+            _record_usage(model, tokens)
         data = result.get("structured_output")
         try:
             if data is not None:
@@ -417,9 +443,10 @@ def _strip_fences(text: str) -> str:
     return text
 
 
-def _cached(stage: str, page: PageImage, key_for, model: str, effort: str, out: type[T], produce) -> T:
+def _cached(stage: str, page: PageImage, key_for, model: str, effort: str, out: type[T], produce,
+            part: str = "") -> T:
     """The cached answer of the configured model, else a new call. key_for(model, effort) is the cache key."""
-    path = cache_path(stage, page)
+    path = cache_path(stage, page, part)
     key = key_for(model, effort)
     if path.exists():
         cached = json.loads(path.read_text(encoding="utf-8"))
@@ -434,18 +461,19 @@ def _cached(stage: str, page: PageImage, key_for, model: str, effort: str, out: 
         _usage.acc = None
     entry = {"key": key, "model": model, "effort": effort, "result": result.model_dump(mode="json"),
              "seconds": round(time.monotonic() - start, 1)}
-    if usage:  # the CLI backend reports no token counts
+    if usage:
         entry["usage"] = usage
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
     return result
 
 
-def _from_cache(stage: str, page: PageImage, key_for, model: str, effort: str, out: type[T]) -> T | None:
+def _from_cache(stage: str, page: PageImage, key_for, model: str, effort: str, out: type[T],
+                part: str = "") -> T | None:
     """Cached result if it was produced from the same input and prompt, checked with the model and effort recorded
     in the entry: a rebuild keeps the pages extracted before the configured model changed (a run re-extracts
     them, see _cached). Entries without a record count as made with the configured settings."""
-    path = cache_path(stage, page)
+    path = cache_path(stage, page, part)
     if not path.exists():
         return None
     cached = json.loads(path.read_text(encoding="utf-8"))
@@ -488,9 +516,15 @@ def cached_classification(page: PageImage) -> PageClassification | None:
                        PageClassification)
 
 
-def cached_extraction(page: PageImage, kind: str, context: str = "") -> PageExtraction | None:
-    return _from_cache("extract", page, partial(_extract_key, page, kind, context), config.EXTRACT_MODEL,
-                       config.EXTRACT_EFFORT, PageExtraction)
+def cached_extraction(page: PageImage, kind: str, context: str = "", expected: int = 0) -> PageExtraction | None:
+    """expected: logs the classification counted; a cached retry with more logs wins (see extract_page)."""
+    x = _from_cache("extract", page, partial(_extract_key, page, kind, context), config.EXTRACT_MODEL,
+                    config.EXTRACT_EFFORT, PageExtraction)
+    if x is None or len(x.logs) >= expected:
+        return x
+    retry = _from_cache("extract-retry", page, partial(_retry_key, page, kind, context), config.EXTRACT_MODEL,
+                        config.EXTRACT_EFFORT, PageExtraction)
+    return retry if retry is not None and len(retry.logs) > len(x.logs) else x
 
 
 def classify_page(page: PageImage) -> PageClassification:
@@ -502,10 +536,14 @@ def classify_page(page: PageImage) -> PageClassification:
                    PageClassification, produce)
 
 
-def extract_page(page: PageImage, kind: str, context: str = "", knowledge: str = "") -> PageExtraction:
+def extract_page(page: PageImage, kind: str, context: str = "", knowledge: str = "",
+                 expected: int = 0, retry: bool = True) -> PageExtraction:
     """knowledge: what reviewers taught about this document or region. Deliberately not part of the cache
     key: it helps the first extraction of a page, and new knowledge must not trigger re-extracting
-    everything (it is also applied in code on every run, see pipeline/knowledge.py)."""
+    everything (it is also applied in code on every run, see pipeline/knowledge.py).
+    expected: logs the classification counted. A page that comes back with fewer is read once more: the same
+    request sometimes returns no log at all. The retry has its own cache stage, so the first answer stays.
+    retry=False uses a cached retry only (no call)."""
     image = config.PAGES_DIR / page.image
     hint = f"Page type (from a quick pre-check): {kind}\n\nText layer (may be empty or scrambled):\n{page.text[:8000]}"
     if context:
@@ -513,5 +551,71 @@ def extract_page(page: PageImage, kind: str, context: str = "", knowledge: str =
     if knowledge:
         hint += f"\n\n{knowledge}"
     produce = _produce(config.EXTRACT_MODEL, config.EXTRACT_EFFORT, EXTRACT_SYSTEM, image, hint, PageExtraction, 32000)
-    return _cached("extract", page, partial(_extract_key, page, kind, context), config.EXTRACT_MODEL,
-                   config.EXTRACT_EFFORT, PageExtraction, produce)
+    x = _cached("extract", page, partial(_extract_key, page, kind, context), config.EXTRACT_MODEL,
+                config.EXTRACT_EFFORT, PageExtraction, produce)
+    if len(x.logs) >= expected:
+        return x
+    if not retry:
+        return cached_extraction(page, kind, context, expected) or x
+    again = _cached("extract-retry", page, partial(_retry_key, page, kind, context), config.EXTRACT_MODEL,
+                    config.EXTRACT_EFFORT, PageExtraction, produce)
+    return again if len(again.logs) > len(x.logs) else x
+
+
+COORDS_SYSTEM = """You check the printed coordinates of one borehole on a geotechnical log or coordinate table: \
+the image is a cut-out around them (or the whole page). Copy them verbatim. `coords_raw`: the coordinate \
+text exactly as printed, including axis labels (X/Y, N/E, Easting/Northing, R/H), separators, units and \
+hemisphere letters. `crs_raw`: any coordinate system, grid, datum or zone text printed with them or on the \
+page. Do not convert, round or correct anything. If a hole name is given, read that hole's coordinates only. \
+If no coordinates are legible, both fields are null."""
+
+# Margin around the model's coordinate box, as a share of the page: the box is approximate.
+COORDS_MARGIN = 0.04
+COORDS_LONG_EDGE = 1600
+
+
+def coordinate_image(page: PageImage, bbox: tuple[float, float, float, float] | None) -> Path:
+    """The region of the page image around `bbox` (fractions of the page), enlarged; the whole page without one."""
+    image = config.PAGES_DIR / page.image
+    if bbox is None:
+        return image
+    x0, y0, x1, y1 = bbox
+    m = COORDS_MARGIN
+    box = (max(0.0, x0 - m), max(0.0, y0 - m), min(1.0, x1 + m), min(1.0, y1 + m))
+    name = _cache_key(image.read_bytes(), repr(box))[:16]
+    out = config.PAGES_DIR / "crops" / page.doc_id / f"{page.page:04d}-{name}.jpg"
+    if not out.exists():
+        with pymupdf.open(image) as doc:
+            rect = doc[0].rect
+            clip = pymupdf.Rect(box[0] * rect.width, box[1] * rect.height, box[2] * rect.width, box[3] * rect.height)
+            zoom = min(4.0, COORDS_LONG_EDGE / max(clip.width, clip.height, 1))
+            pix = doc[0].get_pixmap(clip=clip, matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        part = out.with_name(f"{out.stem}.{threading.get_ident()}.part.jpg")  # parallel readings of one box
+        pix.save(part, jpg_quality=90)
+        os.replace(part, out)
+    return out
+
+
+def _coords_key(page: PageImage, bbox, hole: str, model: str, effort: str) -> str:
+    image = config.PAGES_DIR / page.image
+    return _cache_key(config.COORDS_PROMPT_VERSION, model, effort, image.read_bytes(), repr(bbox), hole)
+
+
+def _coords_part(hole: str, bbox) -> str:
+    return _cache_key(hole, repr(bbox))[:12]
+
+
+def cached_coordinates(page: PageImage, bbox, hole: str) -> CoordinateReading | None:
+    return _from_cache("coords", page, partial(_coords_key, page, bbox, hole), config.EXTRACT_MODEL,
+                       config.COORDS_EFFORT, CoordinateReading, _coords_part(hole, bbox))
+
+
+def read_coordinates(page: PageImage, bbox, hole: str) -> CoordinateReading:
+    """A second, independent reading of one hole's coordinates (its own prompt and cache key, so no
+    PROMPT_VERSION change re-reads them)."""
+    hint = f"Hole: {hole}" if hole else "Read the coordinates printed on this page."
+    produce = _produce(config.EXTRACT_MODEL, config.COORDS_EFFORT, COORDS_SYSTEM, coordinate_image(page, bbox),
+                       hint, CoordinateReading, 2000, strict=True)
+    return _cached("coords", page, partial(_coords_key, page, bbox, hole), config.EXTRACT_MODEL,
+                   config.COORDS_EFFORT, CoordinateReading, produce, _coords_part(hole, bbox))

@@ -22,7 +22,7 @@ import urllib.parse
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import config, corrections, evaluate, experiment, ingest, knowledge, llm, store
+from . import config, coordcheck, corrections, evaluate, experiment, ingest, knowledge, llm, store
 from .assemble import LOG_KINDS, PageResult, assemble, dedupe, norm_name, placeholder, unstack_place_positions
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
@@ -119,13 +119,20 @@ def _chains(pages: list[ingest.PageImage], classes) -> list[list[ingest.PageImag
     return chains
 
 
+def expected_logs(c) -> int:
+    """Logs a page must return, as the classification counted them. Probe records (dynamic probe, CPT) are left
+    out: they often carry blow counts only."""
+    return max(len(c.logs), 1) if c.kind.value in LOG_KINDS - {"probe_log"} else 0
+
+
 def _walk(chain, classes, extract):
     """Extract one chain in page order; each page gets the summary of the previous one."""
     results, failed, prev = {}, [], None
     for p in chain:
-        kind = classes[(p.doc_id, p.page)].kind.value
+        c = classes[(p.doc_id, p.page)]
+        kind = c.kind.value
         try:
-            x = extract(p, kind, llm.sheet_context(prev))
+            x = extract(p, kind, llm.sheet_context(prev), expected_logs(c))
         except Exception as exc:  # keep going; report at the end
             failed.append((p, exc))
             x = None
@@ -135,10 +142,12 @@ def _walk(chain, classes, extract):
     return results, failed
 
 
-def _extract(todo, classes, con=None, progress: Progress | None = None):
+def _extract(todo, classes, con=None, retry: bool = True, progress: Progress | None = None):
+    """retry: read a page that came back with fewer logs than classified once more (a model call)."""
     chains = _chains(todo, classes)
     hints = {doc_id: knowledge.prompt_context(con, doc_id) for doc_id in {p.doc_id for p in todo}} if con else {}
-    extract = lambda p, kind, context: llm.extract_page(p, kind, context, hints.get(p.doc_id, ""))
+    extract = lambda p, kind, context, expected: llm.extract_page(p, kind, context, hints.get(p.doc_id, ""),
+                                                                  expected, retry)
     results, failed, done = {}, [], 0
     with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as pool:
         for fut in as_completed([pool.submit(_walk, ch, classes, extract) for ch in chains]):
@@ -207,14 +216,19 @@ def run(docs: list[ingest.SourceDoc], max_pages: int | None = None, yes: bool = 
         print(f"Extract {len(todo)} log/coordinate pages")
         if progress:
             progress("extract", 0, len(todo))
-        extractions, _ = _extract(todo, classes, con, progress)
+        extractions, _ = _extract(todo, classes, con, progress=progress)
         lab_pages = [p for p in pages if (c := classes.get((p.doc_id, p.page))) and c.kind.value == "lab_results"]
         if lab_pages:
             print(f"Extract {len(lab_pages)} lab result pages")
         labs = _parallel(llm.extract_lab_results, lab_pages, "lab results", progress)
+        targets = list(coordcheck.targets(todo, extractions))
+        print(f"Read the printed coordinates of {len(targets)} holes a second time")
+        if progress:
+            progress("coordinates", 0, 0)
+        coords = coordcheck.readings(targets, llm.read_coordinates)
         if progress:
             progress("store", 0, 0)
-        published = _store(con, docs, rendered, classes, extractions, labs, incomplete_docs=truncated)
+        published = _store(con, docs, rendered, classes, extractions, labs, incomplete_docs=truncated, coords=coords)
         if set(rendered) != published:
             raise RuntimeError("Some documents were incomplete; their previous records were preserved")
     finally:
@@ -246,9 +260,9 @@ def _missing_credentials() -> str | None:
 
 
 def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool = False,
-           incomplete_docs: set[str] | None = None) -> set[str]:
+           incomplete_docs: set[str] | None = None, coords=None) -> set[str]:
     """Lab sheets are optional: a failed lab page does not hold back the document's logs.
-    dry_run: assemble and report, but write nothing."""
+    dry_run: assemble and report, but write nothing. coords: second readings of printed coordinates."""
     labs = labs or {}
     source_file = {d.doc_id: d.path for d in docs}
 
@@ -259,12 +273,9 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
         probe, CPT) are left out, they often carry blow counts only."""
         lost = []
         for p in rendered[doc_id]:
-            c = classes[(doc_id, p.page)]
-            if c.kind.value in LOG_KINDS - {"probe_log"}:
-                found = len(extractions[(doc_id, p.page)].logs)
-                if found < max(len(c.logs), 1):
-                    lost.append((p.page, f"log not extracted: page {p.page} shows {max(len(c.logs), 1)} logs, "
-                                         f"{found} came back"))
+            expected = expected_logs(classes[(doc_id, p.page)])
+            if expected and (found := len(extractions[(doc_id, p.page)].logs)) < expected:
+                lost.append((p.page, f"log not extracted: page {p.page} shows {expected} logs, {found} came back"))
         return lost
 
     def has_previous(doc_ids) -> bool:
@@ -323,6 +334,10 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
                         corrections.rescore(bh)
                 boreholes.append(placeholder(doc_id, source_file[doc_id], page, issue))
                 print(f"  ! {doc_id}: {issue}", file=sys.stderr)
+    for bh in boreholes:
+        if coords and (note := coordcheck.check(bh, coords)):
+            bh.issues.append(note)
+            corrections.rescore(bh)
     # Per document group: read knowledge and corrections and replace the group's records in one short write
     # transaction. A correction saved meanwhile cannot be lost, and reviewers wait for one group at most.
     groups: dict[str, list] = {}
@@ -423,7 +438,10 @@ def rebuild(docs, max_pages: int | None = None, dry_run: bool = False) -> None:
         for chain in _chains(extract_todo(rendered, classes), classes):  # same chains and context as the run
             extractions.update(_walk(chain, classes, llm.cached_extraction)[0])
         print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")
-        _store(con, docs, rendered, classes, extractions, labs, dry_run=dry_run, incomplete_docs=truncated)
+        coords = coordcheck.readings(coordcheck.targets([p for ps in rendered.values() for p in ps], extractions),
+                                     llm.cached_coordinates)
+        _store(con, docs, rendered, classes, extractions, labs, dry_run=dry_run, incomplete_docs=truncated,
+               coords=coords)
     finally:
         con.close()
 
@@ -468,9 +486,10 @@ def cmd_experiment(args) -> None:
         name, extractions = experiment.BASELINE, {}
         for chain in _chains(todo, classes):
             extractions.update(_walk(chain, classes, llm.cached_extraction)[0])
+        coords = coordcheck.readings(coordcheck.targets(todo, extractions), llm.cached_coordinates)
         con = experiment.fresh_db(name)
     else:
-        name, kept = args.name, {}
+        name, kept, kept_coords = args.name, {}, {}
         if args.reference_pages:
             # Re-extract whole chains so continuation context stays within one prompt; the rest keeps the
             # main cache's pages, which the reference records do not come from.
@@ -484,6 +503,9 @@ def cmd_experiment(args) -> None:
             for ch, r in zip(chains, rerun):
                 if not r:
                     kept.update(_walk(ch, classes, llm.cached_extraction)[0])
+            # The kept pages' second readings come from the main cache too, as for the baseline.
+            kept_coords = coordcheck.readings(coordcheck.targets([p for ch in chains for p in ch], kept),
+                                              llm.cached_coordinates)
         fingerprint = experiment.use_prompt(name)
         new = [p for p in todo if not llm.cache_path("extract", p).exists()]
         if new and not args.yes:
@@ -491,13 +513,16 @@ def cmd_experiment(args) -> None:
                      f"≈ ${len(new) * _page_cost(COST_EXTRACT, config.EXTRACT_MODEL):.2f} on the API or subscription quota. Re-run with --yes.")
         if new:
             _require_credentials()
-        extracted, failed = _extract(todo, classes)  # no DB: no reviewer knowledge in the prompt
+        # No DB: no reviewer knowledge in the prompt. Without --yes nothing is called that is not cached yet.
+        extracted, failed = _extract(todo, classes, retry=args.yes)
         # A partial arm would score its failed pages as missing records; its successful pages stay cached.
         if failed:
             sys.exit(f"{failed} of {len(todo)} pages failed: arm {name} left unchanged, re-run to retry them")
+        coords = kept_coords | coordcheck.readings(coordcheck.targets(todo, extracted),
+                                                   llm.read_coordinates if args.yes else llm.cached_coordinates)
         con = experiment.fresh_db(name)
         extractions = kept | extracted
-    _store(con, docs, rendered, classes, extractions, labs)
+    _store(con, docs, rendered, classes, extractions, labs, coords=coords)
     experiment.save_proxy(name, experiment.proxy(con, docs, rendered))
     con.close()
     print()
@@ -582,10 +607,13 @@ def main() -> None:
     p.add_argument("--with-cache", action="store_true", help="include the model cache, for rebuilds")
     p.set_defaults(fn=cmd_share)
     p = sub.add_parser("eval", help="extraction quality against human-checked records")
-    p.add_argument("action", nargs="?", choices=["compare", "snapshot", "holdout"], default="compare")
+    p.add_argument("action", nargs="?", choices=["compare", "snapshot", "holdout", "audit"], default="compare")
     p.add_argument("--corrected", action="store_true", help="compare final values instead of the model output")
     p.set_defaults(fn=evaluate.cmd_eval)
     p.add_argument("--doc", action="append", help="holdout: document group (repeatable; none clears it)")
+    p.add_argument("--size", type=int, default=15, help="audit: records to draw")
+    p.add_argument("--seed", type=int, default=2026, help="audit: random seed, so the sample can be redrawn")
+    p.add_argument("--redraw", action="store_true", help="audit: replace the current sample")
     p = sub.add_parser("experiment", help="try an extraction prompt on the reference documents, isolated")
     p.add_argument("action", choices=["baseline", "init", "run", "compare"])
     p.add_argument("name", nargs="?")

@@ -72,6 +72,16 @@ def test_ambiguous_natural_key_is_not_matched():
     assert evaluate.compare(reference, twins)["DOC1"].missing == ["DOC1:BH1"]
 
 
+def test_page_named_reference_is_matched_by_its_full_printed_name_on_that_page_only_if_unique():
+    reference = {"DOC1__A:TP4-p12": {**ref(), "key": "nk:DOC1|test_pit|TP4P12"}}
+    full = {**ref(), "key": "nk:DOC1|test_pit|TP4NORTH", "pages": [12]}
+    assert evaluate.compare(reference, {"DOC1__A:TP4NORTH": full})["DOC1"].missing == []
+    assert evaluate.compare(reference, {"DOC1__A:TP4NORTH": {**full, "pages": [13]}})["DOC1"].missing == ["DOC1__A:TP4-p12"]
+    two = {"DOC1__A:TP4NORTH": full, "DOC1__A:TP4-SOUTH": {**full, "key": "nk:DOC1|test_pit|TP4SOUTH"}}
+    assert evaluate.compare(reference, two)["DOC1"].missing == ["DOC1__A:TP4-p12"]  # two candidates: no match
+    assert evaluate.same_name("DOC1:BH-1", "DOC1:bh 1 (north)") and not evaluate.same_name("DOC1:BH1", "DOC1:BH10")
+
+
 def test_final_depth_groundwater_and_lab_values():
     reference = {"DOC1:BH1": {**ref(), "depth_m": 9.0, "groundwater": [2.4], "lab": [["ucs", 42.0, 6.0], ["water_content", 18.0, None]]}}
     current = {"DOC1:BH1": {**ref(), "depth_m": 9.05, "groundwater": [2.4, 3.1], "lab": [["ucs", 42.0, 6.0], ["water_content", 18.0, 2.0]]}}
@@ -201,3 +211,27 @@ def test_lab_evaluation_distinguishes_range_upper_bounds():
     assert evaluate.match_lab(reference, reference) == 1
     bh.lab_results[0].value_upper = 20
     assert evaluate.match_lab(reference, store.extracted_summary(bh)["lab"]) == 0
+
+
+def test_release_audit_counts_corrected_and_rejected_releases_as_wrong(tmp_path):
+    from tests.test_store import record
+    con = store.connect(tmp_path / "a.sqlite")
+    for i in range(6):
+        bh = record(bid=f"rep:BH{i}", name=f"BH {i}")
+        bh.review_status = ReviewStatus.auto_approved
+        store.save_borehole(con, bh)
+    con.commit()
+    path = tmp_path / "audit.json"
+    drawn = evaluate.draw_audit(con, 4, seed=7, path=path)
+    assert drawn == evaluate.draw_audit(con, 4, seed=7, path=path) and len(drawn) == 4  # reproducible
+    confirmed, corrected, rejected, untouched = drawn
+    store.record_review(con, confirmed, ReviewStatus.approved, "Ana", None)
+    store.add_correction(con, "borehole", corrected, "layer", {"orig_top": 0, "orig_bottom": 4.5, "primary": "silt"},
+                         "Ana", None)
+    con.commit()
+    store.record_review(con, corrected, ReviewStatus.approved, "Ana", None)
+    store.record_review(con, rejected, ReviewStatus.rejected, "Ana", None)
+    s = evaluate.audit_summary(con, path)
+    assert (s["sample"], s["reviewed"], s["wrong"]) == (4, 3, 2)
+    assert s["low"] < 2 / 3 < s["high"] and 0 <= s["low"] and s["high"] <= 1
+    assert evaluate.wilson(0, 15)[0] == 0 and 0.15 < evaluate.wilson(0, 15)[1] < 0.25  # no error seen is no proof of none

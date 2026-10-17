@@ -1,6 +1,7 @@
 # Features
 
 What Borehole Atlas does, and ideas for what it could do next. How to run it is in [README.md](README.md);
+how a document flows through the pipeline, with diagrams, is in [docs/pipeline.md](docs/pipeline.md);
 the challenge owner's priorities are in [docs/challenge-owner-feedback.md](docs/challenge-owner-feedback.md)
 (referenced below as *feedback #n*).
 
@@ -39,8 +40,10 @@ the challenge owner's priorities are in [docs/challenge-owner-feedback.md](docs/
 - Release score = the weaker of extraction and position confidence, computed from evidence rather than the
   model's own estimate.
 - Auto-release only at a score of 90 or more and without blocking findings.
-- Blocking findings: layer gaps or overlaps, depth contradictions, ambiguous CRS, empty or lost logs, depths
-  printed in feet.
+- Blocking findings: layer gaps or overlaps, depth contradictions, ambiguous CRS, empty logs, depths printed in
+  feet. A lost log page or a hole that could not be assembled becomes its own blocking placeholder record.
+- Copies of one hole from several documents are combined; the copy that is best after corrections leads.
+  Differing properties across a sheet break are flagged for a look.
 - Review queue, weakest first, with keyboard shortcuts and a filter for blocking findings.
 - Inline corrections; a decision holds only while the record's content is unchanged.
 - Hovering a value outlines where it was read on the source page.
@@ -52,7 +55,8 @@ the challenge owner's priorities are in [docs/challenge-owner-feedback.md](docs/
 - `pipeline eval` compares extraction against human-checked records: layer boundaries, precision, lithology,
   position error in metres, CRS, final depth, groundwater and lab values.
 - Isolated prompt experiments with their own cache and database, and holdout document groups.
-- Measured model comparison (Opus and Haiku) on quality, cost per page and time.
+- Measured model comparison (Opus and Haiku) on quality, cost per page and time, in
+  [docs/model-comparison.md](docs/model-comparison.md).
 
 ### Database, API and export
 
@@ -71,21 +75,24 @@ the challenge owner's priorities are in [docs/challenge-owner-feedback.md](docs/
 - Detail view: two-column profile (stratigraphy in ICS colours, DIN 4023 lithology), layers, tests and the
   source page side by side.
 - Section view (feedback #5): holes side by side along a line at ground level; rock head and groundwater are
-  joined between neighbours up to 150 m apart, with a band that widens with distance.
+  joined between neighbours up to 150 m apart, with a band that widens with distance. Layer boundaries are
+  joined where the material sequence of both holes matches unambiguously, drawn dotted as an estimate.
 - Similar boreholes (feedback #6): holes in other projects with comparable ground, with a one-line reason.
+- Result list grouped by project (document group) with count and release share; "Show on map" filters and
+  zooms to the group.
 - Drag-and-drop upload, menu with review queue and export, dark mode, shareable URLs for view and selection.
 
 ## Feature ideas
 
 | Idea | Why | Effort |
 |---|---|---|
-| Interpolated layer boundaries in the section view, only for matching primary lithology, drawn as uncertain | Feedback #5: estimate the ground between holes along a tunnel route | M |
 | Statistics view: lithology distribution, depths, release rate, most frequent findings per document | Feedback #9 | M |
 | Anomalies across the collection: depth, elevation or lithology outliers against neighbouring holes | Feedback #9 | M |
 | Draw a tunnel route and pick the holes in a corridor along it for the section | Feedback #5 | M |
 | Search by ground profile ("rock above 10 m, clay on top") instead of by a single hole | Feedback #6 | M |
 | Model comparison page in the app (quality against cost per page) | Feedback #8 | S |
+| Interface in English and German | Users at the challenge owner | M |
 | Measure Mistral or Azure OpenAI through the OpenAI-compatible backend | Feedback #7, #8 | S–M |
-| Projects and sites as entities, grouping documents by folder | Data model review | M |
+| Projects and sites as entities with one canonical project name across sheets | Data model review | M |
 | Authentication and per-project permissions | Required before shared use | M–L |
 | Server-side map tiles for more than ~100,000 points | Data model review | L |

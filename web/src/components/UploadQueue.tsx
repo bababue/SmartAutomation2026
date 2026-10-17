@@ -24,7 +24,7 @@ const STATUS_TEXT: Record<Status, string> = {
   uploading: 'Uploading…', queued: 'Queued', processing: 'Processing…', done: 'Done', error: 'Failed',
 }
 const STAGE_TEXT: Record<NonNullable<UploadStatus['progress']>['stage'], string> = {
-  classify: 'Reading pages', extract: 'Extracting logs', 'lab results': 'Reading lab sheets', store: 'Combining records…',
+  classify: 'Reading pages', extract: 'Extracting logs', 'lab results': 'Reading lab sheets', coordinates: 'Checking coordinates…', store: 'Combining records…',
 }
 const pending = (s: Status) => s === 'uploading' || s === 'queued' || s === 'processing'
 

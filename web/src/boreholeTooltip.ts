@@ -17,10 +17,10 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
 export function tooltipContent(p: TooltipBorehole) {
   const root = el('div', 'tip')
   root.append(el('strong', 'tip-name', p.name))
-  if (p.depth != null) root.append(el('span', 'tip-line', `Depth ${p.depth.toLocaleString('en', { maximumFractionDigits: 1 })} m`))
+  if (p.depth != null) root.append(el('span', 'tip-line', `Borehole depth ${p.depth.toLocaleString('en', { maximumFractionDigits: 1 })} m`))
   if (p.loc_method === 'geocoded_place') root.append(el('span', 'tip-line', 'Approximate position'))
   if (p.layer_lithology) root.append(el('span', 'tip-line',
-    `${p.layer_top}–${p.layer_bottom} m: ${lithStyle(p.layer_lithology).label}`))
+    `${p.layer_top}–${p.layer_bottom} m below ground: ${lithStyle(p.layer_lithology).label}`))
   return root
 }
 

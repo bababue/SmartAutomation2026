@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Detail, DetailUpdate, Layer, SourceRef } from '../types'
+import type { Detail, DetailUpdate, Layer, SimilarGround, SourceRef } from '../types'
 import { lithStyle, patternId } from '../lithology'
 import { CardHead, CorrectionList, LayersEditor, NotesEditor, RecordEditor, TestsEditor, type TestRow } from './Corrections'
 import { Profile } from './Profile'
@@ -12,10 +12,9 @@ interface Props {
   onClose: () => void
   onReviewChange: (update: DetailUpdate) => void
   nav?: QueueNav | null
-  inSection?: boolean
-  onToggleSection?: () => void
   onSourceToggle?: (open: boolean) => void
   onSelect?: (id: string) => void
+  onFindLike?: (like: NonNullable<SimilarGround['like']>) => void
 }
 
 const fmt = (v: number | null | undefined, digits = 2) =>
@@ -38,7 +37,7 @@ function Level({ value, label }: { value: number | null; label: string }) {
   )
 }
 
-export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, onToggleSection, onSourceToggle, onSelect }: Props) {
+export function DetailPanel({ detail, onClose, onReviewChange, nav, onSourceToggle, onSelect, onFindLike }: Props) {
   const bh = detail.borehole
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
@@ -92,11 +91,6 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
               <span className="muted" title={`${nav.position} of ${nav.total} waiting`}>{nav.position} / {nav.total}</span>
               <button className="btn btn-icon" onClick={nav.next ?? undefined} disabled={!nav.next} aria-label="Next in queue" title="Next (→)">›</button>
             </div>
-          )}
-          {onToggleSection && (
-            <button className={`btn${inSection ? ' btn-on' : ''}`} onClick={onToggleSection} aria-pressed={inSection}>
-              {inSection ? 'In section' : 'Add to section'}
-            </button>
           )}
           <button className="btn btn-icon" onClick={onClose} aria-label="Close details" title="Close (Esc)">✕</button>
         </div>
@@ -191,7 +185,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, nav, inSection, o
               <p className="notes">{bh.notes ?? <span className="muted">No notes.</span>}</p>
             </div>
           )}
-          {onSelect && <SimilarHoles boreholeId={bh.borehole_id} onSelect={onSelect} />}
+          {onSelect && <SimilarHoles boreholeId={bh.borehole_id} onSelect={onSelect} onFindLike={onFindLike} />}
         </section>
 
         {sourceOpen && (

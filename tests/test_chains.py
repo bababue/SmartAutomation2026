@@ -45,7 +45,7 @@ def test_walk_passes_previous_sheet_and_survives_failures():
     classes = {k: cls("borehole_log", "BH-1") for k in [("d", 1), ("d", 2), ("d", 3)]}
     seen = []
 
-    def extract(p, kind, context):
+    def extract(p, kind, context, expected):
         seen.append(context)
         if p.page == 2:
             raise RuntimeError("boom")

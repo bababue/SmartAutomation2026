@@ -4,7 +4,9 @@ import { STATUS_LABEL, scoreText } from '../review'
 import type { SimilarGround } from '../types'
 
 /** Holes of other projects with comparable ground: lithology per depth band and water level, from the stored layers. */
-export function SimilarHoles({ boreholeId, onSelect }: { boreholeId: string; onSelect: (id: string) => void }) {
+export function SimilarHoles({ boreholeId, onSelect, onFindLike }: {
+  boreholeId: string; onSelect: (id: string) => void; onFindLike?: (like: NonNullable<SimilarGround['like']>) => void
+}) {
   const [result, setResult] = useState<SimilarGround | 'error' | null>(null)
   useEffect(() => {
     const ctrl = new AbortController()
@@ -20,7 +22,13 @@ export function SimilarHoles({ boreholeId, onSelect }: { boreholeId: string; onS
         : !result.ground ? <p className="muted card-empty">Too few layers to compare.</p>
         : (
           <>
-            <p className="similar-here">This hole: {result.ground}</p>
+            <p className="similar-here">
+              This hole: {result.ground}
+              {onFindLike && result.like && (
+                <button className="btn btn-small btn-ghost similar-find" onClick={() => onFindLike(result.like!)}
+                  title="Set the ground filters from this hole and show every match">Find more like this</button>
+              )}
+            </p>
             {result.similar.length === 0 ? <p className="muted card-empty">No comparable hole in other documents.</p> : (
               <ul className="similar">
                 {result.similar.map((s) => (

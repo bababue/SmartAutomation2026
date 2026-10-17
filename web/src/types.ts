@@ -158,6 +158,8 @@ export interface BoreholeSummary {
   id: string
   name: string
   project: string | null
+  /** The hole's group in the list: its document group (the document, or a folder of single images). */
+  grp: string
   location_name: string | null
   country: string | null
   depth: number | null
@@ -187,7 +189,19 @@ export interface FeatureCollection {
   features: Feature[]
   /** All matches (the features may be one page of them). */
   total?: number
-  facets?: { lithologies: [string, number][] }
+  facets?: { lithologies: [string, number][]; groups: GroupFacet[] }
+}
+
+/** A document group among all matches: its project, how many holes, how many released, where. */
+export interface GroupFacet {
+  group: string
+  /** The project name its holes give most often; null: none gives one. */
+  project: string | null
+  /** How many different project names its holes give (sheets spell them differently). */
+  project_names: number
+  count: number
+  released: number
+  bbox: [number, number, number, number]
 }
 
 export type CorrectionKind = 'crs' | 'position' | 'layer' | 'layer_add' | 'field' | 'groundwater' | 'test'
@@ -234,6 +248,30 @@ export interface Stats {
   demo: boolean
 }
 
+/** Aggregates over the records the list filters select (holes without a position included). */
+export interface StatsDetail {
+  documents: number
+  pages: number
+  boreholes: number
+  layers: number
+  countries: number
+  status: Record<ReviewStatus, number>
+  position: { exact: number; approximate: number; none: number }
+  funnel: { records: number; without_blocking: number; released_automatically: number; released: number }
+  threshold: number
+  /** Blocking first, then needs a look, warnings and notes; most records first within each. */
+  findings: { code: string; severity: 'blocking' | 'needs_look' | 'warning' | 'info'; records: number; count: number }[]
+  /** Logged metres per lithology, most first. */
+  lithology_m: [string, number][]
+  depth_bin_m: number
+  /** Holes per final-depth bin of depth_bin_m metres; the last bin holds everything deeper. */
+  depths: number[]
+  groups: { group: string; count: number; released: number; top_finding: { code: string; records: number } | null }[]
+  crs: [number, number][]
+  /** Release audit over the whole database; null: no sample drawn yet (`pipeline eval audit`). */
+  audit: { sample: number; reviewed: number; wrong: number; rate: number | null; low: number; high: number } | null
+}
+
 export interface UploadStatus {
   status: 'queued' | 'processing' | 'done' | 'error'
   boreholes: { id: string; name: string; review_status: ReviewStatus }[]
@@ -241,7 +279,7 @@ export interface UploadStatus {
   /** Uploads to finish before this one starts; set only while queued. */
   ahead: number | null
   /** The running stage; set only while processing. */
-  progress: { stage: 'classify' | 'extract' | 'lab results' | 'store'; done: number; total: number } | null
+  progress: { stage: 'classify' | 'extract' | 'lab results' | 'coordinates' | 'store'; done: number; total: number } | null
 }
 
 export type StatusFilter = 'all' | 'released' | 'pending' | 'rejected'
@@ -261,6 +299,13 @@ export interface Filters {
   lab: RangeFilter[]
   minPosition: number | null
   status: StatusFilter
+  /** Only the holes of this document group. */
+  group: string | null
+  /** Ground search: rock head and groundwater at most this deep (m). */
+  rockMax: number | null
+  waterMax: number | null
+  /** At least so many metres of a material group in a depth range, as 'group:from:to:metres'. */
+  material: string[]
 }
 
 export interface SimilarHole {
@@ -276,5 +321,7 @@ export interface SimilarHole {
 
 export interface SimilarGround {
   ground: string | null // this hole's ground in a few words; null: too few layers to compare
+  /** Ground filters that find holes like this one. */
+  like: { rock_head_max: number | null; groundwater_max: number | null; material: string[] } | null
   similar: SimilarHole[]
 }

@@ -1,5 +1,5 @@
 import { encodeRange } from './url'
-import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, SimilarGround, Stats, UploadStatus } from './types'
+import type { BoreholeSummary, CorrectionKind, CrsGroup, Detail, DetailUpdate, FeatureCollection, Filters, QueueItem, ReviewStatus, SimilarGround, Stats, StatsDetail, UploadStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
@@ -22,6 +22,10 @@ function filterParams(f: Filters): URLSearchParams {
   f.lab.forEach((l) => params.append('lab', encodeRange(l)))
   if (f.minPosition != null) params.set('min_position', String(f.minPosition))
   if (f.status !== 'all') params.set('status', f.status)
+  if (f.group) params.set('group', f.group)
+  if (f.rockMax != null) params.set('rock_head_max', String(f.rockMax))
+  if (f.waterMax != null) params.set('groundwater_max', String(f.waterMax))
+  f.material.forEach((m) => params.append('material', m))
   return params
 }
 
@@ -40,7 +44,7 @@ export function fetchMapPoints(f: Filters, signal?: AbortSignal): Promise<Featur
   return request(`/api/boreholes?${params}`, { signal })
 }
 
-/** Summaries of the given boreholes regardless of the filters, e.g. a section restored from the URL. */
+/** Summaries of the given boreholes regardless of the filters, e.g. a route profile restored from the URL. */
 export function fetchBoreholesById(ids: string[], signal?: AbortSignal): Promise<FeatureCollection> {
   const params = new URLSearchParams()
   ids.forEach((id) => params.append('id', id))
@@ -59,8 +63,10 @@ export const fetchDetail = (id: string, signal?: AbortSignal) => request<Detail>
 export const fetchSimilar = (id: string, signal?: AbortSignal) =>
   request<SimilarGround>(`/api/boreholes/${enc(id)}/similar`, { signal })
 export const fetchStats = () => request<Stats>('/api/stats')
-export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200): Promise<{ items: QueueItem[]; total: number }> {
-  const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}`, { signal })
+export const fetchStatsDetail = (f: Filters, signal?: AbortSignal) =>
+  request<StatsDetail>(`/api/stats/detail?${filterParams(f)}`, { signal })
+export async function fetchQueue(blocking: boolean, signal?: AbortSignal, limit = 200, audit = false): Promise<{ items: QueueItem[]; total: number }> {
+  const res = await fetch(`/api/review-queue?limit=${limit}${blocking ? '&blocking=true' : ''}${audit ? '&audit=true' : ''}`, { signal })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   const items = (await res.json()) as QueueItem[]
   return { items, total: Number(res.headers.get('X-Total-Count') ?? items.length) }

@@ -5,8 +5,10 @@ import { BrandLogo } from './components/BrandLogo'
 import { DetailPanel } from './components/DetailPanel'
 import { MapView } from './components/MapView'
 import { ResultList } from './components/ResultList'
+import { RoutePanel } from './components/RoutePanel'
 import { ReviewQueue } from './components/ReviewQueue'
-import { SectionView, orderAlongLine } from './components/SectionView'
+import { StatsView } from './components/StatsView'
+import { SectionView } from './components/SectionView'
 import type { QueueNav } from './components/ReviewBox'
 import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats } from './types'
 import { readUrl, writeUrl, type View } from './url'
@@ -14,9 +16,12 @@ import { SheetResizer } from './components/SheetResizer'
 import { FilterBar } from './components/FilterBar'
 import { AppMenu } from './components/AppMenu'
 import { UploadQueue, useUploadQueue } from './components/UploadQueue'
+import { loadTunnelRoute, nearbyBoreholes, projectToRoute, saveTunnelRoute, validateRouteCoordinates,
+  type RoutePoint, type TunnelRoute } from './tunnelRoute'
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
 const THEME_KEY = 'borehole-atlas.theme'
+const COLUMNS_KEY = 'borehole-atlas.columns3d'
 
 function loadDark(): boolean {
   try {
@@ -26,15 +31,28 @@ function loadDark(): boolean {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
 }
 
+function loadColumns3d(): boolean {
+  try {
+    return localStorage.getItem(COLUMNS_KEY) !== 'off'
+  } catch { /* storage blocked */ }
+  return true
+}
+
 export default function App() {
   const [initial] = useState(() => readUrl(window.location.search))
   const [view, setView] = useState<View>(initial.view)
+  const [routeActive, setRouteActive] = useState(initial.routeActive)
+  const [route, setRoute] = useState<TunnelRoute | null>(loadTunnelRoute)
+  const [routeDraft, setRouteDraft] = useState<RoutePoint[] | null>(null)
+  const [routePoints, setRoutePoints] = useState<FeatureCollection>(EMPTY)
+  const [routeLoading, setRouteLoading] = useState(false)
+  const [routeError, setRouteError] = useState<string | null>(null)
   const [filters, setFilters] = useState<Filters>(initial.filters)
   const [query, setQuery] = useState(initial.filters.q)
   const [data, setData] = useState<FeatureCollection>(EMPTY)  // list: loaded pages of summaries
   const [points, setPoints] = useState<FeatureCollection>(EMPTY)  // map: every match, slim
   const [loadingMore, setLoadingMore] = useState(false)
-  const [known, setKnown] = useState<Map<string, Feature>>(new Map())  // full features seen, for the section
+  const [known, setKnown] = useState<Map<string, Feature>>(new Map())  // full features seen, for the route profile
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [queueTotal, setQueueTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -43,8 +61,10 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId)
   const [detail, setDetail] = useState<Detail | null>(null)
   const [refresh, setRefresh] = useState(0) // bump after a review decision
-  const [sectionIds, setSectionIds] = useState<string[]>(initial.sectionIds)
+  const [routeHoleIds, setRouteHoleIds] = useState<string[]>(initial.routeHoleIds)
+  const closedRouteHoleIds = useRef<string[]>([])
   const [blockingOnly, setBlockingOnly] = useState(initial.blockingOnly)
+  const [auditOnly, setAuditOnly] = useState(initial.auditOnly)
   const [listOpen, setListOpen] = useState(initial.listOpen)
   const [sheetWidth, setSheetWidth] = useState<number | null>(null)  // null: default split; a reload resets it
   const beforeSource = useRef<{ listOpen: boolean; sheetWidth: number | null }>({ listOpen: true, sheetWidth: null })
@@ -64,55 +84,77 @@ export default function App() {
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const [dark, setDark] = useState(loadDark)
+  const [columns3d, setColumns3d] = useState(loadColumns3d)
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     try { localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light') } catch { /* private mode: the choice lasts this visit */ }
   }, [dark])
 
+  useEffect(() => { saveTunnelRoute(route) }, [route])
+
+  useEffect(() => {
+    if (!routeActive) return
+    const controller = new AbortController()
+    setRouteLoading(true)
+    fetchMapPoints(readUrl('').filters, controller.signal)
+      .then((collection) => { setRoutePoints(collection); setRouteError(null) })
+      .catch((cause) => { if (cause.name !== 'AbortError') setRouteError(`Could not load nearby boreholes (${cause.message}).`) })
+      .finally(() => { if (!controller.signal.aborted) setRouteLoading(false) })
+    return () => controller.abort()
+  }, [routeActive, refresh])
+
+  useEffect(() => {
+    try { localStorage.setItem(COLUMNS_KEY, columns3d ? 'on' : 'off') } catch { /* private mode: the choice lasts this visit */ }
+  }, [columns3d])
+
   useEffect(() => {
     const t = setTimeout(() => setFilters((f) => ({ ...f, q: query })), 250)
     return () => clearTimeout(t)
   }, [query])
 
-  // Full features of every loaded page, so the section view keeps holes from earlier pages.
+  // Keep previously loaded boreholes available for the route profile.
   const remember = useCallback((features: Feature[]) => setKnown((k) => {
     const next = new Map(k)
     features.forEach((f) => next.set(f.properties.id, f))
     return next
   }), [])
 
-  // Section holes from a URL need not be in the loaded list pages.
-  const restoreSection = useCallback((ids: string[]) => {
-    if (ids.length) fetchBoreholesById(ids).then((page) => remember(page.features)).catch(() => undefined)
-  }, [remember])
-
-  useEffect(() => { restoreSection(initial.sectionIds) }, [initial, restoreSection])
+  // Map selections and routes can refer to holes outside the currently loaded list page.
+  useEffect(() => {
+    const missing = [...new Set([...routeHoleIds, ...(selectedId ? [selectedId] : [])])].filter((id) => !known.has(id))
+    if (!missing.length) return
+    const controller = new AbortController()
+    fetchBoreholesById(missing, controller.signal).then((page) => remember(page.features))
+      .catch((cause) => { if (cause.name !== 'AbortError') setError(`Could not load route boreholes (${cause.message}).`) })
+    return () => controller.abort()
+  }, [routeHoleIds, selectedId, known, remember])
 
   // Page and selection changes get a history entry, so Back closes a borehole or leaves the queue.
   useEffect(() => {
-    const url = writeUrl({ view, selectedId, sectionIds, listOpen, filters, blockingOnly })
+    const url = writeUrl({ view, routeActive, selectedId, routeHoleIds, listOpen, filters, blockingOnly, auditOnly })
     const shown = readUrl(window.location.search)
     if (url === (window.location.search || window.location.pathname)) return
-    if (shown.view !== view || shown.selectedId !== selectedId) window.history.pushState(null, '', url)
+    if (shown.view !== view || shown.routeActive !== routeActive || shown.selectedId !== selectedId) window.history.pushState(null, '', url)
     else window.history.replaceState(null, '', url)
-  }, [view, selectedId, sectionIds, listOpen, filters, blockingOnly])
+  }, [view, routeActive, selectedId, routeHoleIds, listOpen, filters, blockingOnly, auditOnly])
 
   useEffect(() => {
     const onPop = () => {
       const s = readUrl(window.location.search)
       setView(s.view)
+      setRouteActive(s.routeActive)
       setSelectedId(s.selectedId)
-      setSectionIds(s.sectionIds)
+      setRouteHoleIds(s.routeHoleIds)
       setBlockingOnly(s.blockingOnly)
+      setAuditOnly(s.auditOnly)
       setListOpen(s.listOpen)
       setFilters(s.filters)
       setQuery(s.filters.q)
-      restoreSection(s.sectionIds)
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [restoreSection])
+  }, [])
 
   useEffect(() => {
     const ctrl = new AbortController()
@@ -134,10 +176,10 @@ export default function App() {
 
   useEffect(() => {
     const ctrl = new AbortController()
-    fetchQueue(blockingOnly, ctrl.signal).then(({ items, total }) => { setQueue(items); setQueueTotal(total) }).catch(() => undefined)
+    fetchQueue(blockingOnly, ctrl.signal, 200, auditOnly).then(({ items, total }) => { setQueue(items); setQueueTotal(total) }).catch(() => undefined)
     fetchStats().then(setStats).catch(() => undefined)
     return () => ctrl.abort()
-  }, [refresh, blockingOnly])
+  }, [refresh, blockingOnly, auditOnly])
 
   // Only the response for the currently selected borehole may land in state.
   useEffect(() => {
@@ -201,8 +243,10 @@ export default function App() {
   const goHome = useCallback(() => {
     const start = readUrl('')
     setView(start.view)
+    setRouteActive(false)
+    setRouteDraft(null)
     setSelectedId(null)
-    setSectionIds([])
+    setRouteHoleIds([])
     setBlockingOnly(false)
     setListOpen(true)
     setFilters(start.filters)
@@ -210,18 +254,44 @@ export default function App() {
     setRefresh((n) => n + 1)
   }, [])
 
-  const toggleSection = useCallback(
-    (id: string) => setSectionIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])),
+  const toggleRouteHole = useCallback(
+    (id: string) => setRouteHoleIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id])),
     [],
   )
-  const sectionFeatures = useMemo(
-    () => sectionIds.map((id) => known.get(id)).filter((f): f is NonNullable<typeof f> => !!f),
-    [sectionIds, known],
+  const routeFeatures = useMemo(
+    () => routeHoleIds.map((id) => known.get(id)).filter((f): f is NonNullable<typeof f> => !!f),
+    [routeHoleIds, known],
   )
-  const sectionLine = useMemo(
-    () => orderAlongLine(sectionFeatures).map((f) => f.geometry.coordinates),
-    [sectionFeatures],
-  )
+  const listFeatures = useMemo(() => {
+    const selected = selectedId ? known.get(selectedId) : null
+    return selected && !data.features.some((feature) => feature.properties.id === selectedId)
+      ? [selected, ...data.features] : data.features
+  }, [data.features, known, selectedId])
+  const activeRoute = routeActive ? route : null
+  const nearby = useMemo(() => activeRoute ? nearbyBoreholes(routePoints.features, activeRoute) : [], [routePoints, activeRoute])
+  const routeCandidates = useMemo(() => {
+    if (!activeRoute) return nearby
+    const ids = new Set(nearby.map((candidate) => candidate.id))
+    const otherSelected = routePoints.features.flatMap((feature) => {
+      if (!routeHoleIds.includes(feature.properties.id) || ids.has(feature.properties.id)) return []
+      return [{ id: feature.properties.id, name: feature.properties.name,
+        ...projectToRoute(feature.geometry.coordinates, activeRoute.coordinates) }]
+    })
+    return [...nearby, ...otherSelected].sort((a, b) => a.chainageM - b.chainageM)
+  }, [activeRoute, nearby, routePoints, routeHoleIds])
+
+  const finishRoute = useCallback(() => {
+    try {
+      const coordinates = validateRouteCoordinates(routeDraft)
+      setRoute({ name: route?.name || 'Tunnel route', coordinates, corridorM: route?.corridorM ?? 50,
+        tunnelMode: route?.tunnelMode ?? 'depth', depthM: route?.depthM ?? null,
+        startElevationM: route?.startElevationM ?? null, endElevationM: route?.endElevationM ?? null,
+        diameterM: route?.diameterM ?? null })
+      setRouteDraft(null)
+      setRouteHoleIds([])
+      setRouteError(null)
+    } catch (cause) { setRouteError(cause instanceof Error ? cause.message : 'Could not save the route.') }
+  }, [routeDraft, route])
 
   const onUploaded = useCallback(() => setRefresh((n) => n + 1), []) // reload the map, list and queue
   const uploads = useUploadQueue(onUploaded, setSelectedId)
@@ -262,7 +332,7 @@ export default function App() {
           <span className="visually-hidden">Search boreholes</span>
           <input
             type="search"
-            placeholder="Search names, projects, places or layer descriptions, e.g. granite"
+            placeholder="Search names, projects, places or layer descriptions"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -273,18 +343,19 @@ export default function App() {
           <UploadQueue batches={uploads.batches} onDismiss={uploads.dismiss} />
           {stats && (
             <p className="stats">
-              <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes
+              <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> of{' '}
+              <strong>{stats.boreholes.toLocaleString('en')}</strong> boreholes released
               {stats.boreholes > stats.located && (
                 <span className="muted" title="Not on the map or in the list until a reviewer sets the position">
                   {' '}({(stats.boreholes - stats.located).toLocaleString('en')} without position)
                 </span>
-              )},{' '}
-              <strong>{(stats.status.auto_approved + stats.status.approved).toLocaleString('en')}</strong> released
+              )}
             </p>
           )}
-          <AppMenu inReview={view === 'review'} uploading={uploads.active} dark={dark}
-            onToggleReview={() => setView(view === 'review' ? 'map' : 'review')}
-            onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} />
+          <AppMenu inReview={view === 'review'} inStats={view === 'stats'} uploading={uploads.active} dark={dark} columns3d={columns3d}
+            onToggleReview={() => { setAuditOnly(false); setView(view === 'review' ? 'map' : 'review') }}
+            onToggleStats={() => setView(view === 'stats' ? 'map' : 'stats')}
+            onUpload={() => fileInput.current?.click()} onToggleDark={() => setDark(!dark)} onToggleColumns={() => setColumns3d(!columns3d)} />
         </div>
       </header>
 
@@ -293,41 +364,72 @@ export default function App() {
         {listOpen ? '‹' : '›'}
       </button>
       <aside className="sidebar" id="sidebar" inert={!listOpen}>
-        <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies} />
+        <FilterBar filters={filters} setFilters={setFilters} lithologies={lithologies}
+          groupLabel={filters.group && (data.facets?.groups.find((g) => g.group === filters.group)?.project ?? filters.group)} />
         <div className="result-head">
           <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
         </div>
         {error && <p className="error" role="alert">{error}</p>}
-        <ResultList features={data.features} selectedId={selectedId} onSelect={setSelectedId} loading={loading} sectionIds={sectionIds} onToggleSection={toggleSection} />
+        <ResultList features={listFeatures} groups={data.facets?.groups ?? []} activeGroup={filters.group}
+          onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })) }}
+          selectedId={selectedId} onSelect={setSelectedId} loading={loading} />
         {!loading && data.total != null && data.features.length < data.total && (
           <button className="btn load-more" onClick={loadMore} disabled={loadingMore}>
-            {loadingMore ? 'Loading…' : `Show ${Math.min(200, data.total - data.features.length)} more of ${(data.total - data.features.length).toLocaleString('en')}`}
+            {loadingMore ? 'Loading…' : 'Show more'}
           </button>
         )}
       </aside>
 
-      <main className={`map-wrap${sectionFeatures.length ? ' map-wrap-section' : ''}`}>
-        <MapView data={points} section={sectionLine} selectedId={selectedId} focus={focus} onSelect={setSelectedId} sheetWidth={detail ? sheetWidth : null} dark={dark} />
-        <div className="legend" aria-label="Map legend">
+      <main className={`map-wrap${activeRoute && routeFeatures.length ? ' map-wrap-section' : ''}`}>
+        <MapView data={points} route={activeRoute} routeDraft={routeDraft}
+          onRoutePoint={(point) => setRouteDraft((draft) => draft ? [...draft, point] : draft)}
+          selectedId={selectedId} focus={focus} onSelect={(id) => { setSelectedId(id); setListOpen(true) }}
+          sheetWidth={detail ? sheetWidth : null} dark={dark} columns3d={columns3d} />
+        {!routeActive && view === 'map' && <button className="btn route-open" onClick={() => {
+          if (closedRouteHoleIds.current.length) setRouteHoleIds(closedRouteHoleIds.current)
+          setRouteActive(true)
+          setView('map')
+        }}>
+          Tunnel route
+        </button>}
+        {routeActive && view === 'map' && <RoutePanel route={route} draft={routeDraft} candidates={routeCandidates}
+          selectedIds={routeHoleIds} loading={routeLoading} error={routeError}
+          onChange={setRoute} onImport={(imported) => { setRoute(imported); setRouteDraft(null); setRouteHoleIds([]); setRouteError(null) }}
+          onStartDrawing={() => { setRouteDraft([]); setRouteError(null) }}
+          onUndo={() => setRouteDraft((draft) => draft ? draft.slice(0, -1) : null)} onFinishDrawing={finishRoute}
+          onCancelDrawing={() => setRouteDraft(null)} onSelectNearby={() => setRouteHoleIds(nearby.map((candidate) => candidate.id))}
+          onToggleHole={toggleRouteHole} onDelete={() => { setRoute(null); setRouteDraft(null); setRouteHoleIds([]) }}
+          onClose={() => {
+            closedRouteHoleIds.current = routeHoleIds
+            setRouteActive(false)
+            setRouteDraft(null)
+            setRouteHoleIds([])
+          }} />}
+        <div className={`legend${detail ? ' legend-beside-sheet' : ''}`} aria-label="Map legend">
           <span><i className="dot dot-high" /> released</span>
           <span><i className="dot dot-medium" /> waiting for review</span>
           <span><i className="dot dot-low" /> rejected</span>
           <span><i className="dot dot-ring" /> approximate position</span>
-          <span>3D columns: layer heights at 1:1 scale; patterns show lithology, top cap shows release state</span>
         </div>
-        {sectionFeatures.length > 0 && (
+        {activeRoute && routeFeatures.length > 0 && (
           <SectionView
-            features={sectionFeatures}
+            features={routeFeatures}
+            route={activeRoute}
             selectedId={selectedId}
             onSelect={setSelectedId}
-            onRemove={toggleSection}
-            onClear={() => setSectionIds([])}
+            onRemove={toggleRouteHole}
+            onClear={() => setRouteHoleIds([])}
           />
         )}
         {view === 'review' && (
           <ReviewQueue items={queue} total={queueTotal} loading={loading} selectedId={selectedId} threshold={stats?.threshold ?? 0.9}
             blockingOnly={blockingOnly} onBlockingOnly={setBlockingOnly} onSelect={setSelectedId}
             onChanged={() => setRefresh((n) => n + 1)} onClose={() => setView('map')} />
+        )}
+        {view === 'stats' && (
+          <StatsView filters={filters} onClose={() => setView('map')}
+            onReviewAudit={() => { setAuditOnly(true); setView('review') }}
+            onShowGroup={(group) => { setSelectedId(null); setFilters((f) => ({ ...f, group })); setView('map') }} />
         )}
       </main>
 
@@ -339,10 +441,12 @@ export default function App() {
           onClose={() => setSelectedId(null)}
           onReviewChange={onReviewChange}
           nav={nav}
-          inSection={sectionIds.includes(detail.borehole.borehole_id)}
-          onToggleSection={() => toggleSection(detail.borehole.borehole_id)}
           onSourceToggle={onSourceToggle}
           onSelect={setSelectedId}
+          onFindLike={(like) => {
+            setFilters((f) => ({ ...f, group: null, rockMax: like.rock_head_max, waterMax: like.groundwater_max, material: like.material }))
+            setSelectedId(null)
+          }}
         />
       )}
     </div>

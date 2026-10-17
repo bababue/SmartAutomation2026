@@ -33,7 +33,7 @@ class UploadedBorehole(BaseModel):
 
 
 class UploadProgress(BaseModel):
-    stage: Literal["classify", "extract", "lab results", "store"]
+    stage: Literal["classify", "extract", "lab results", "coordinates", "store"]
     done: int
     total: int
 

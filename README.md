@@ -56,6 +56,14 @@ depths that literally appear in that text.
   depth mismatch, ambiguous coordinate system, empty log.
 - Positions whose coordinate system is only inferred (not printed), or whose notation allows readings a
   few hundred metres apart (decimal minutes vs. seconds), stay below the threshold until a person confirms them.
+- Printed coordinates are read a second time (`pipeline/coordcheck.py`): the region around them, enlarged,
+  with a prompt that only copies coordinates and CRS (the whole page for coordinate-table rows). The same
+  point within 5 m is noted as confirmed; a different point or coordinate system is blocking, nothing legible
+  needs a look. It has its own cache stage and key (`COORDS_PROMPT_VERSION`), and runs with `pipeline run`
+  only; `rebuild` uses what is cached.
+- A log page that comes back with fewer logs than the classification counted is extracted once more; the
+  retry is cached separately (`extract-retry`), so the first answer stays traceable. Only if the retry is no
+  better does the page become a blocking placeholder.
 - Reviewers approve, reject or reopen with name and optional comment; every decision is logged.
 - Re-runs keep human decisions as long as the reviewed content is unchanged; if the data changes, the
   record returns to the queue with a note.
@@ -174,6 +182,19 @@ temp/HKBoreholeChallenge_Data_BFH2026/
 
 A different location works too: set `DATASET_DIR` (see Configuration).
 
+Optional, for the place check: an offline gazetteer (about 11 MB download, 30 MB index in `data/`):
+
+```bash
+.venv/bin/python -m pipeline.gazetteer download
+```
+
+It holds the GeoNames places with 1,000+ inhabitants and the state and province names (geonames.org,
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): credit GeoNames when you show results). The place a
+log names is looked up there and checks the printed coordinates. The extraction model's own place estimate is
+the fallback. A name that fits several places, or a gazetteer place far from the estimate, becomes a finding.
+A position from the place name alone is not moved, so earlier review decisions stay valid. Without the index,
+runs print a note and use the estimate as before.
+
 ### 5. Choose how the pipeline talks to Claude
 
 **Team setup.** The team runs Claude Haiku 5.5 via OpenRouter (Option C below): in a comparison on the
@@ -284,12 +305,16 @@ Restart the API after pipeline code changes; the UI picks up new data on reload.
 - **Review queue**: everything below the threshold or with blocking findings, weakest first. Enter your name
   once, then approve or reject; from the queue the next waiting record opens automatically. Keys: `A` approve,
   `R` reject, `←`/`→` previous/next in the queue, `Esc` close.
-- **Section**: "+ Section" on boreholes shows them side by side along a line, at ground level where known.
-  Each hole marks its rock head (top of the rock that continues to the bottom of the hole; decomposed rock of
-  grades IV–VI above it is dashed) and its groundwater level, both derived from the layers in code
-  (`pipeline/ground.py`). Between neighbours up to 150 m apart they are joined as a linear estimate; the band
-  around the rock head widens with the distance to the nearest hole (±10 %). Layers themselves are not
-  correlated. The synthetic demo data contains a tunnel route ("Demo tunnel route") to try it.
+- **Tunnel route**: open **Tunnel route**, draw an alignment by clicking points on the map and finish it,
+  or import a WGS84 GeoJSON LineString. Set the corridor distance, then select nearby boreholes individually
+  or use all nearby ones. The longitudinal section orders holes by their position along the route and scales
+  horizontal distances by chainage; each hole's distance from the route appears on hover. Optionally enter
+  a tunnel axis depth below ground or start/end elevations and a diameter. The route is saved in this browser;
+  `route=1` in the URL reopens it on reload. Estimated lithology spans adjacent boreholes along the route;
+  spans over 150 m are drawn lighter and identified as lower confidence on hover. Rock head and groundwater
+  joins stop at gaps over 150 m or where a borehole lies outside the corridor. The route profile shows
+  boreholes at their stations along the tunnel, with rock head and groundwater derived from the layers in
+  `pipeline/ground.py`. The synthetic demo data contains a tunnel route to try it.
 - **Export**: "Export released (CSV)" – one row per layer, released records only.
 
 ### 9. Tests
@@ -372,6 +397,7 @@ Environment variables, read from the shell or from `.env`:
 | `LLM_BACKEND` | `api` | `api` (Anthropic API), `claude-code` (local `claude -p`) or `openai` (OpenAI-compatible API) |
 | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | `http://localhost:11434/v1` / – | server and key for `LLM_BACKEND=openai` (e.g. OpenRouter) |
 | `OPENROUTER_ZDR` | `1` | OpenRouter only: route to providers with zero data retention; `0` for a model without one |
+| `GAZETTEER_PATH` | `data/gazetteer.sqlite` | offline GeoNames index for the place check (`python -m pipeline.gazetteer download`) |
 | `CLAUDE_CLI` | `claude` | path to the Claude Code CLI |
 | `CLAUDE_CONFIG_DIR` | CLI default | profile directory for another subscription (CLI backend) |
 | `CLAUDE_CLI_TOKEN_FILE` | – | token file for another subscription (CLI backend) |

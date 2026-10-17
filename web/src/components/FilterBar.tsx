@@ -13,7 +13,25 @@ const LAB: [string, string, string][] = [
 const labName = (key: string) => LAB.find(([k]) => k === key)?.[1] ?? key.replaceAll('_', ' ')
 const labUnit = (key: string) => LAB.find(([k]) => k === key)?.[2] ?? ''
 
-type Menu = 'status' | 'position' | 'lithology' | 'lab'
+type Menu = 'status' | 'position' | 'lithology' | 'lab' | 'ground'
+
+/** Material groups of the ground search (api/similar.py). */
+const MATERIALS = ['made ground', 'gravel', 'sand', 'silt', 'clay', 'organic', 'rock']
+const GROUND_PRESETS: [string, Partial<Filters>][] = [
+  ['Shallow rock (rock head ≤ 10 m)', { rockMax: 10, waterMax: null, material: [] }],
+  ['Clay over rock', { rockMax: 30, waterMax: null, material: ['clay:0:10:3'] }],
+  ['Sand in the top 20 m (≥ 5 m)', { rockMax: null, waterMax: null, material: ['sand:0:20:5'] }],
+  ['High groundwater (≤ 3 m)', { rockMax: null, waterMax: 3, material: [] }],
+]
+
+function parseMaterial(m: string) {
+  const [group, from, to, metres] = m.split(':')
+  return { group, from: Number(from), to: Number(to), metres: Number(metres) }
+}
+const materialText = (m: string) => {
+  const { group, from, to, metres } = parseMaterial(m)
+  return `${group[0].toUpperCase()}${group.slice(1)} ≥ ${metres} m in ${from}–${to} m`
+}
 
 const toNumber = (v: string) => {
   const n = Number(v.replace(',', '.'))
@@ -77,10 +95,12 @@ interface Props {
   setFilters: Dispatch<SetStateAction<Filters>>
   /** Lithology keys with match counts, most frequent first. */
   lithologies: [string, number][]
+  /** Name of the document group the filter narrows to: its project, else the group itself. */
+  groupLabel: string | null
 }
 
 /** Filter pills; each opens a dropdown below the row. */
-export function FilterBar({ filters, setFilters, lithologies }: Props) {
+export function FilterBar({ filters, setFilters, lithologies, groupLabel }: Props) {
   const [open, setOpen] = useState<Menu | null>(null)
   const [top, setTop] = useState(0)
   const root = useRef<HTMLDivElement>(null)
@@ -97,7 +117,10 @@ export function FilterBar({ filters, setFilters, lithologies }: Props) {
 
   const { lithology: liths, lab } = filters
   const lithName = (key: string) => lithStyle(key).label
-  const active = filters.status !== 'all' || filters.minPosition != null || liths.length > 0 || lab.length > 0
+  const ground = filters.rockMax != null || filters.waterMax != null || filters.material.length > 0
+  const active = filters.status !== 'all' || filters.minPosition != null || liths.length > 0 || lab.length > 0 ||
+    filters.group != null || ground
+  const [draft, setDraft] = useState({ group: 'sand', from: 0, to: 20, metres: 5 })
 
   function pill(menu: Menu, label: string, on: boolean) {
     return (
@@ -139,9 +162,32 @@ export function FilterBar({ filters, setFilters, lithologies }: Props) {
         {pill('position', filters.minPosition == null ? 'Position' : `Position: ${POSITION.find(([p]) => p === filters.minPosition)?.[1] ?? filters.minPosition}`, filters.minPosition != null)}
         {lithologies.length > 0 && pill('lithology', liths.length ? summary(liths, lithName, false) : 'Lithology', liths.length > 0)}
         {pill('lab', lab.length ? summary(lab, labName, true) : 'Lab value', lab.length > 0)}
+        {pill('ground', 'Ground', ground)}
+        {filters.rockMax != null && (
+          <button className="pill pill-on" onClick={() => set({ rockMax: null })} aria-label={`Remove rock head at most ${filters.rockMax} m`}>
+            Rock head ≤ {filters.rockMax} m <span aria-hidden="true">×</span>
+          </button>
+        )}
+        {filters.waterMax != null && (
+          <button className="pill pill-on" onClick={() => set({ waterMax: null })} aria-label={`Remove groundwater at most ${filters.waterMax} m`}>
+            Groundwater ≤ {filters.waterMax} m <span aria-hidden="true">×</span>
+          </button>
+        )}
+        {filters.material.map((m) => (
+          <button key={m} className="pill pill-on" onClick={() => set({ material: filters.material.filter((x) => x !== m) })}
+            aria-label={`Remove ${materialText(m)}`}>
+            {materialText(m)} <span aria-hidden="true">×</span>
+          </button>
+        ))}
+        {filters.group != null && (
+          <button className="pill pill-on" onClick={() => set({ group: null })} aria-label={`Show all projects, not only ${groupLabel}`}
+            title="Show all projects">
+            Project: {groupLabel} <span aria-hidden="true">×</span>
+          </button>
+        )}
         {active && (
           <button className="pill-reset" onClick={() => {
-            set({ status: 'all', minPosition: null, lithology: [], lab: [] })
+            set({ status: 'all', minPosition: null, lithology: [], lab: [], group: null, rockMax: null, waterMax: null, material: [] })
             setOpen(null)
           }}>Reset</button>
         )}
@@ -184,6 +230,37 @@ export function FilterBar({ filters, setFilters, lithologies }: Props) {
               {lab.length > 0 && <p className="menu-note">All chosen values must be measured within their range.</p>}
               <RangeRows items={lab} label={labName} unit={labUnit} onChange={(next) => set({ lab: next })} />
             </>
+          )}
+          {open === 'ground' && (
+            <div className="ground-menu">
+              <ul className="menu-options" aria-label="Ground presets">
+                {GROUND_PRESETS.map(([label, patch]) => (
+                  <li key={label}><button className="menu-option" onClick={() => { set(patch); setOpen(null) }}>{label}</button></li>
+                ))}
+              </ul>
+              <label className="ground-field">Rock head at most
+                <NumberField placeholder="any" value={filters.rockMax} label="Rock head at most (m)" onChange={(rockMax) => set({ rockMax })} /> m
+              </label>
+              <label className="ground-field">Groundwater at most
+                <NumberField placeholder="any" value={filters.waterMax} label="Groundwater at most (m)" onChange={(waterMax) => set({ waterMax })} /> m
+              </label>
+              <div className="ground-field" role="group" aria-label="Material condition">
+                At least
+                <NumberField placeholder="m" value={draft.metres} label="Metres at least" onChange={(v) => setDraft({ ...draft, metres: v ?? 0 })} /> m
+                <select value={draft.group} aria-label="Material" onChange={(e) => setDraft({ ...draft, group: e.target.value })}>
+                  {MATERIALS.map((g) => <option key={g} value={g}>{g}</option>)}
+                </select>
+                in
+                <NumberField placeholder="from" value={draft.from} label="From depth (m)" onChange={(v) => setDraft({ ...draft, from: v ?? 0 })} />–
+                <NumberField placeholder="to" value={draft.to} label="To depth (m)" onChange={(v) => setDraft({ ...draft, to: v ?? 0 })} /> m
+                <button className="btn btn-small" disabled={!(draft.metres > 0 && draft.to > draft.from && draft.from >= 0)}
+                  onClick={() => {
+                    const m = `${draft.group}:${draft.from}:${draft.to}:${draft.metres}`
+                    if (!filters.material.includes(m)) set({ material: [...filters.material, m] })
+                  }}>Add</button>
+              </div>
+              <p className="menu-note">Holes without a rock head or water level do not match a bound on it; materials count only where the log describes them.</p>
+            </div>
           )}
         </div>
       )}

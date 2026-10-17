@@ -21,11 +21,12 @@ from . import config
 BLOCKING = ("no layers extracted", "log not extracted", "log not assembled", "CRS ambiguous", "invalid interval",
             "non-finite depth", "invalid WGS84", "gap", "overlap", "layers end at", "stale correction", "log starts at",
             "depths printed in feet", "missing sheets", "sheet header differs", "same printed coordinates as",
-            "same hole assumed", "sources disagree on")
+            "same hole assumed", "sources disagree on", "read differently on a second look")
 
-# Findings that name files, holes and header texts of other documents: their own severity holds, whatever
-# those names contain ('Singapore' contains 'gap').
-QUOTING = ("combined with the record from", "possibly the same hole as", "sources differ on")
+# Findings that name files, holes, header texts of other documents or gazetteer places: their own severity
+# holds, whatever those names contain ('Singapore' contains 'gap').
+QUOTING = ("combined with the record from", "possibly the same hole as", "sources differ on", "place estimate ",
+           "place name ")
 
 
 def is_blocking(issue: str) -> bool:
@@ -100,7 +101,7 @@ def counts_against(unreadable: str) -> bool:
 
 
 # Findings that need a look before release, without blocking: they cap the extraction confidence.
-NEEDS_LOOK = ("boundary inferred", "core loss inferred", "lithology of layer", "properties differ",
+NEEDS_LOOK = ("coordinates not found on a second look", "boundary inferred", "core loss inferred", "lithology of layer", "properties differ",
               "sources differ on", "possibly the same hole as")
 NEEDS_LOOK_RE = re.compile(r"^core run .*: (?:(?:SCR|RQD) [\d.]+% above TCR|\w+ [\d.]+% outside)")
 
@@ -211,12 +212,17 @@ FINDING_CODES: list[tuple[str, str]] = [
     ("minor discontinuity", "minor_discontinuity"), ("layers end at", "depth_mismatch"),
     ("log starts at", "log_starts_below_surface"), ("missing sheets", "missing_sheets"),
     ("sheet header differs", "sheet_header_differs"), ("same printed coordinates as", "coords_shared"),
+    ("coordinates confirmed by a second reading", "coords_confirmed"),
+    ("coordinates not found on a second look", "coords_second_missing"),
+    ("coordinates read differently on a second look", "coords_second_differs"),
+    ("coordinate system read differently on a second look", "crs_second_differs"),
     ("CRS ambiguous", "crs_ambiguous"), ("coordinate system inferred", "crs_inferred"),
     ("coordinate axes inferred", "axes_inferred"), ("coordinate notation or datum ambiguous", "notation_ambiguous"),
     ("coordinate system taken from", "crs_from_document"), ("coordinate system from reviewer knowledge", "crs_from_knowledge"),
     ("position from a local grid", "position_from_grid"), ("position from place name only", "position_from_place"),
     ("printed coordinates could not be matched", "coords_unmatched"), ("coordinates ", "coords_far_from_place"),
     ("position ", "position_outlier"), ("no place to cross-check", "no_place_check"),
+    ("place estimate ", "place_disagrees"), ("place name ", "place_ambiguous"),
     ("not georeferenced", "not_georeferenced"), ("invalid WGS84", "invalid_position"), ("unreadable:", "unreadable"),
     ("boundary inferred", "boundary_inferred"), ("properties differ", "sheet_conflict"),
     ("core loss inferred", "core_loss_inferred"),
@@ -242,6 +248,7 @@ def finding_severity(issue: str) -> str:
         return "blocking"
     if issue.startswith(NEEDS_LOOK) or NEEDS_LOOK_RE.match(issue):
         return "needs_look"
-    if issue.startswith(("unreadable:", "corrected by", "combined with the record from")):
+    if issue.startswith(("unreadable:", "corrected by", "combined with the record from",
+                         "coordinates confirmed by a second reading")):
         return "info"
     return "warning"
