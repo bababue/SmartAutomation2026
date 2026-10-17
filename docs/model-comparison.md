@@ -9,6 +9,10 @@ Reference: 36 records approved by reviewers (`data/eval/reference.json`, local o
 re-extracts the pages these records come from with the v3 prompt; classification and lab sheets come from the
 same cache for all arms, so only log extraction differs.
 
+The statistics page (Quality & models) recomputes this comparison from the current reference, which has grown
+since: it scores both models on the reference records both extracted themselves, so its figures differ from
+the table below.
+
 | | Opus 5.5 (Claude subscription) | Haiku 5.5 (OpenRouter) |
 |---|---|---|
 | Records missing | 0 | 2 |
