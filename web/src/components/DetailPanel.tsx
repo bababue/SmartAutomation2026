@@ -39,6 +39,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
   const [pageIndex, setPageIndex] = useState(0)
   const pages = detail.source_pages
   const page = pages[Math.min(pageIndex, pages.length - 1)]  // the panel is keyed by id; clamp anyway
+  const documentTitle = page?.file.split(/[\\/]/).pop() || 'Document'
 
   // What is hovered, and where it was read: follow it to its page and outline it there.
   const focus: SourceRef | null = coordsHovered ? loc.source : hovered != null ? bh.layers[hovered]?.source ?? null : null
@@ -176,7 +177,7 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
         {sourceOpen && (
         <section className="card detail-source" id="detail-source">
           <div className="card-head">
-            <h3 className="source-title">Source</h3>
+            <h3 className="source-title" title={documentTitle}>{documentTitle}</h3>
             {pages.length > 0 && (
               <div className="page-tabs" role="tablist">
                 {pages.map((p, i) => (
@@ -216,8 +217,8 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
       </div>
       </div>
       <button className="edge-tab source-toggle" onClick={() => { setSourceOpen(!sourceOpen); onSourceToggle(!sourceOpen) }} aria-expanded={sourceOpen} aria-controls="detail-source"
-        title={sourceOpen ? 'Hide the source page' : 'Show the source page'}>
-        {sourceOpen ? '›' : '‹'} <span>Source</span>
+        title={`${sourceOpen ? 'Hide' : 'Show'} ${documentTitle}`}>
+        {sourceOpen ? '›' : '‹'} <span>{documentTitle}</span>
       </button>
     </aside>
   )
