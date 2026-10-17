@@ -3,7 +3,8 @@
 import pytest
 
 from pipeline import evaluate, store
-from schema.borehole import Borehole, GeorefMethod, Layer, Location, ReviewStatus, SourceRef
+from schema.borehole import (Borehole, GeorefMethod, LabParameter, LabResult, Layer, Location, ReviewStatus,
+                             SourceRef)
 
 # Brandenburg Gate; 0.001° latitude is about 111 m
 LAT, LON = 52.5163, 13.3777
@@ -79,6 +80,20 @@ def test_final_depth_groundwater_and_lab_values():
     assert (s.lab_matched, s.lab) == (1, 2)  # a value at another sample depth is not the same value
     old = evaluate.compare({"DOC1:BH1": ref()}, current)["DOC1"]  # reference without these fields: not counted
     assert (old.depths, old.groundwater, old.lab) == (0, 0, 0)
+
+
+def test_swapped_analytes_with_equal_values_do_not_match():
+    def lab(*results: tuple[str, str, str | None]) -> list[list]:
+        bh = Borehole(borehole_id="DOC1:BH1", borehole_name="BH1", lab_results=[
+            LabResult(parameter=LabParameter.other, parameter_raw=name, value=1.0, value_raw=raw, qualifier=q, top_m=2.0)
+            for name, raw, q in results])
+        return store.extracted_summary(bh)["lab"]
+
+    reference = lab(("Analyte A", "<1 mg/kg", "<"), ("Analyte B", "<1 mg/kg", "<"))
+    assert evaluate.match_lab(reference, lab(("Analyte A", "<1 mg/kg", "<"), ("Analyte B", "<1 mg/kg", "<"))) == 2
+    assert evaluate.match_lab(reference, lab(("Analyte A", "<1 mg/kg", "<"), ("Analyte C", "<1 mg/kg", "<"))) == 1
+    assert evaluate.match_lab(reference, lab(("Analyte A", "<1 µg/kg", "<"), ("Analyte B", "1 mg/kg", None))) == 0
+    assert evaluate.match_lab([r[:3] for r in reference], lab(("Analyte C", "<1 µg/kg", "<"))) == 1  # old snapshot
 
 
 def test_holdout_survives_snapshots(tmp_path):
