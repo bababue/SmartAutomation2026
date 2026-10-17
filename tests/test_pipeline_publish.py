@@ -39,10 +39,10 @@ def test_incomplete_inventory_preserves_records_and_decisions(con, monkeypatch, 
         import pipeline.assemble as assembly
         build = assembly.build_borehole
 
-        def fail_second(doc_id, source, logs, *args):
+        def fail_second(doc_id, logs, *args):
             if logs[0][0].name == "BH2":
                 raise ValueError("unreadable synthetic result")
-            return build(doc_id, source, logs, *args)
+            return build(doc_id, logs, *args)
 
         monkeypatch.setattr(assembly, "build_borehole", fail_second)
     else:
@@ -239,10 +239,10 @@ def test_fresh_database_stores_a_hole_that_failed_to_assemble_as_a_blocking_plac
     import pipeline.assemble as assembly
     build = assembly.build_borehole
 
-    def fail_second(doc_id, source, logs, *args):
+    def fail_second(doc_id, logs, *args):
         if logs[0][0].name == "BH2":
             raise ValueError("unreadable synthetic result")
-        return build(doc_id, source, logs, *args)
+        return build(doc_id, logs, *args)
 
     monkeypatch.setattr(assembly, "build_borehole", fail_second)
     assert runner._store(con, *inputs(names=("BH1", "BH2"))) == {"report"}

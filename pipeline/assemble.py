@@ -793,7 +793,7 @@ def split_holes(logs: list[tuple[XLog, SourceRef]], doc_crs: tuple[str, int] | N
     return runs
 
 
-def build_borehole(doc_id: str, source_file: str, logs: list[tuple[XLog, SourceRef]],
+def build_borehole(doc_id: str, logs: list[tuple[XLog, SourceRef]],
                    coord_rows: dict[str, XCoordinateRow], doc_place: tuple[float, float, float] | None,
                    doc_crs: tuple[str, int] | None = None, kind: str | None = None) -> tuple[Borehole, int]:
     """The record (not yet scored) and the number of unreadable items that count against its release.
@@ -1050,7 +1050,7 @@ def assemble(results: list[PageResult], *, deduplicate: bool = True,
                 try:
                     # A split-off hole's name may be the previous hole's or one several holes share: no table
                     # row by name.
-                    bh, unreadable = build_borehole(doc_id, pages[0].source_file, logs,
+                    bh, unreadable = build_borehole(doc_id, logs,
                                                     coord_rows if naming == "named" else {},
                                                     doc_place, group_crs[group], kind)
                     if naming != "named":

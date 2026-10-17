@@ -271,8 +271,9 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
 
 
 def _logged_decision(con: sqlite3.Connection, uid: str) -> tuple[Borehole, str] | None:
-    """The latest review of this hole as (record as reviewed, its content hash). Without a stored version
-    the reviewer counts as having seen no findings."""
+    """The latest review of this hole as (record as reviewed, its content hash). The hash is recomputed from the
+    stored version, so a field dropped from the model is not a data change. Without a stored version the
+    reviewer counts as having seen no findings."""
     event = con.execute("SELECT decision, reviewer, comment, at, content_hash, version_id FROM review_events "
                         "WHERE uid = ? ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
     if not event:
@@ -282,7 +283,7 @@ def _logged_decision(con: sqlite3.Connection, uid: str) -> tuple[Borehole, str] 
     old.review_status, old.reviewed_by = ReviewStatus(event["decision"]), event["reviewer"]
     old.reviewed_at = datetime.fromisoformat(event["at"]) if event["at"] else None
     old.review_comment = event["comment"]
-    return old, event["content_hash"]
+    return old, content_hash(old) if version else event["content_hash"]
 
 
 def _carry_decision(bh: Borehole, old: Borehole, old_digest: str, digest: str, revision: int) -> int:

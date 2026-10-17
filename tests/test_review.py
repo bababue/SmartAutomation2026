@@ -355,7 +355,7 @@ def test_final_depth_is_the_deepest_stated_over_all_sheets():
                                     "lab_results": [], "unreadable": []})
     logs = [(sheet("1 of 2", 8.0, [(0, 8)]), SourceRef(file="f", page=1)),
             (sheet("2 of 2", 10.5, [(8, 10.5)]), SourceRef(file="f", page=2))]
-    bh, _ = build_borehole("d", "f", logs, {}, None)
+    bh, _ = build_borehole("d", logs, {}, None)
     assert bh.depth_m == 10.5 and not any(i.startswith("layers end at") for i in bh.issues)
 
 
