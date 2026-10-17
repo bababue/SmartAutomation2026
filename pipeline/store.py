@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from schema.borehole import Borehole, ReviewStatus
 
-from . import config, ground
+from . import config, ground, scoring
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -246,13 +246,20 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
     digest = content_hash(bh)
     previous = _delete(con, bh.borehole_id) or previous
     extracted_json = as_json(extracted) if extracted is not None else (previous or {}).get("extracted")
+    revision = (previous or {}).get("review_revision") or 0
     if previous and previous.get("data"):
         old = Borehole.model_validate_json(previous["data"])
         if old.review_status in HUMAN:
-            if previous.get("content_hash") == digest:
+            new_blocking = _new_blocking(old, bh) if old.review_status == ReviewStatus.approved else []
+            if previous.get("content_hash") == digest and not new_blocking:
                 # Same content: the human decision stands.
                 bh.review_status, bh.reviewed_by = old.review_status, old.reviewed_by
                 bh.reviewed_at, bh.review_comment = old.reviewed_at, old.review_comment
+            elif previous.get("content_hash") == digest:
+                revision += 1  # same hash: only the revision stops a review screen opened before from approving
+                bh.review_status = ReviewStatus.pending_review
+                bh.score_reasons = [f"New blocking finding since the approval by {old.reviewed_by or 'a reviewer'}: "
+                                    + "; ".join(new_blocking)] + bh.score_reasons
             else:
                 bh.review_status = ReviewStatus.pending_review
                 bh.score_reasons = [f"Data changed since the {old.review_status.value} decision by "
@@ -261,10 +268,20 @@ def save_borehole(con: sqlite3.Connection, bh: Borehole, commit: bool = True, pr
     if con.execute("SELECT 1 FROM boreholes WHERE uid = ? AND id != ?", (uid, bh.borehole_id)).fetchone():
         uid = uuid.uuid4().hex  # another current record is that hole: never share an identity
     version_id = _version(con, uid, digest, bh.model_dump_json())
-    _insert(con, bh, digest, extracted_json, uid, version_id, (previous or {}).get("review_revision") or 0)
+    _insert(con, bh, digest, extracted_json, uid, version_id, revision)
     _remember_aliases(con, bh, uid)
     if commit:
         con.commit()
+
+
+def _new_blocking(old: Borehole, bh: Borehole) -> list[str]:
+    """Blocking findings of `bh` whose rule the reviewer did not see on `old`. Keyed by code and the blocking
+    rule rather than the text, which carries depths and partner names that vary between runs; the code alone
+    would lump distinct rules together under 'other'."""
+    def rules(issue: str) -> set[tuple[str, str]]:
+        return {(scoring.finding_code(issue), rule) for rule in scoring.BLOCKING if rule in issue}
+    seen = set().union(*(rules(i) for i in old.issues))
+    return [i for i in bh.issues if rules(i) - seen]
 
 
 def natural_key(bh: Borehole) -> str:

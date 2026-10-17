@@ -80,6 +80,27 @@ def test_versions_only_for_changed_content_and_review_revision(con):
         store.record_review(con, "rep:BH01", ReviewStatus.rejected, "Ben", None, expected_revision=0)
 
 
+def test_new_blocking_finding_reopens_an_approval(con):
+    def rebuilt(*extra):
+        bh = record()
+        bh.issues += list(extra)
+        return bh
+
+    store.save_borehole(con, rebuilt("same printed coordinates as BH-02"))
+    store.record_review(con, "rep:BH01", ReviewStatus.approved, "Ana", None)
+    # Same rule, other wording (a new partner hole): the reviewer already saw this conflict.
+    store.save_borehole(con, rebuilt("same printed coordinates as BH-02, BH-03"))
+    assert store.load_borehole(con, "rep:BH01").review_status == ReviewStatus.approved
+
+    store.save_borehole(con, rebuilt("same printed coordinates as BH-02", "sheet header differs from sheet 1"))
+    bh = store.load_borehole(con, "rep:BH01")
+    assert bh.review_status == ReviewStatus.pending_review
+    assert "sheet header differs" in bh.score_reasons[0]
+    with pytest.raises(store.StaleReview):  # approving from a screen opened before the new finding
+        store.record_review(con, "rep:BH01", ReviewStatus.approved, "Ben", None,
+                            expected_hash=store.content_hash(bh), expected_revision=1)
+
+
 def test_old_database_is_migrated(tmp_path):
     path = tmp_path / "old.sqlite"
     con = store.connect(path)

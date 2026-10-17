@@ -30,6 +30,7 @@ from schema.borehole import (
     LabParameter,
     LabResult,
     Layer,
+    ReviewStatus,
     Sample,
     SecondaryComponent,
     Lithology,
@@ -778,7 +779,7 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
             kept[(bh.borehole_id,)] = bh  # never merge on approximate positions or disputed headers
             continue
         project = re.sub(r"\W+", "", (bh.project_name or "").lower())
-        key = (norm_name(bh.borehole_name), project, round(loc.lat, 4), round(loc.lon, 4))
+        key = (norm_name(bh.borehole_name), bh.investigation_type, project, round(loc.lat, 4), round(loc.lon, 4))
         other = kept.get(key)
         if other is None:
             kept[key] = bh
@@ -787,6 +788,14 @@ def dedupe(boreholes: list[Borehole]) -> list[Borehole]:
         better = lambda b: (b.confidence or 0.0, len(b.layers))
         richer, poorer = (bh, other) if better(bh) > better(other) else (other, bh)
         richer.sources = list({(s.file, s.page): s for s in richer.sources + poorer.sources}.values())
+        # Lab sheets are often in one of the documents only.
+        moved = [lab for lab in poorer.lab_results if add_lab_result(richer, lab)]
+        feet = [i for i in poorer.issues if i.startswith("depths printed in feet") and i not in richer.issues]
+        if moved and feet:  # their sample depths share the unchecked conversion
+            richer.issues += feet
+            if richer.review_status == ReviewStatus.auto_approved:
+                richer.review_status = ReviewStatus.pending_review
+                richer.score_reasons.append("Lab sample depths from a log printed in feet")
         kept[key] = richer
     return list(kept.values())
 
@@ -849,8 +858,16 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
         if r.labs is None:
             continue
         # A sheet that names the type for some rows ('T.P. 3') uses it for the rows that only give the number.
-        kinds = {hole_key(row.hole_name, None)[0] for row in r.labs.rows if row.hole_name} - {None}
-        page_kind = kinds.pop() if len(kinds) == 1 else None
+        named = [row for row in r.labs.rows if row.hole_name]
+        kinds = {hole_key(row.hole_name, None)[0] for row in named} - {None}
+        page_kind = next(iter(kinds)) if len(kinds) == 1 else None
+        if named and not kinds:
+            # Only numbers, and borehole '1' and test pit '1' both exist: the type whose holes are there and
+            # deep enough for every row of the sheet, so that the shallow samples don't get ambiguous.
+            fitting = [k for k in {k for k, _ in by_name} - {None}
+                       if all((hole := by_name.get(hole_key(row.hole_name, k))) and deep_enough(hole, row.top_m)
+                              for row in named)]
+            page_kind = fitting[0] if len(fitting) == 1 else None
         for row in r.labs.rows:
             value = _lab_value(row.parameter, row.value_raw, row.unit_raw)
             if value is None:
@@ -883,12 +900,33 @@ def link_lab_results(records: list[Borehole], pages: list[PageResult]) -> tuple[
                                value_raw=f"{row.value_raw} {row.unit_raw or ''}".strip(), top_m=top, bottom_m=bottom,
                                sample_name=row.sample_name, source=SourceRef(file=r.source_file, page=r.page),
                                qualifier=lab_qualifier(row.value_raw))
-            # The same test is often on the log and on the lab sheet (only the sheet has the sample id).
-            same = next((x for x in bh.lab_results if x.parameter == result.parameter
-                         and _same_value(x.value, result.value) and x.top_m == result.top_m), None)
-            if same is None:
-                bh.lab_results.append(result)
-            elif same.sample_name is None:
-                same.sample_name = result.sample_name
+            add_lab_result(bh, result)
             linked += 1
     return linked, unmatched, implausible
+
+
+_NUMBER = r"[-+]?\d+(?:[.,]\d+)?(?:\s*(?:[eE]|[x×*]\s*10\^?)\s*[-+−]?\d+)?"
+_LEADING_VALUE = re.compile(rf"^\s*[<>≤≥~]?\s*{_NUMBER}(?:\s*[-–~]\s*{_NUMBER})?\s*")
+
+
+def _lab_name(result: LabResult) -> tuple[str, str]:
+    """(name, unit) without separators. The unit is what follows the number in value_raw ('< 1e-3 g/m3');
+    some sheets repeat it in the row name ('Benzene g/m3'), so it is cut off the name."""
+    key = lambda s: re.sub(r"\W+", "", s.lower().replace("³", "3").replace("²", "2"))
+    unit = key(_LEADING_VALUE.sub("", result.value_raw or "", count=1))
+    name = key(result.parameter_raw or "")
+    return (name.removesuffix(unit) if unit else name), unit
+
+
+def add_lab_result(bh: Borehole, result: LabResult) -> bool:
+    """The same test is often on the log and on the lab sheet (only the sheet has the sample id): it is kept
+    once. Catch-all parameters (chemistry) are not converted and are told apart by printed name and unit,
+    since detection limits such as '<1' repeat down a column. Returns whether the result was added."""
+    same = next((x for x in bh.lab_results if x.parameter == result.parameter and _same_value(x.value, result.value)
+                 and x.top_m == result.top_m and x.qualifier == result.qualifier
+                 and (x.parameter != LabParameter.other or _lab_name(x) == _lab_name(result))), None)
+    if same is None:
+        bh.lab_results.append(result)
+    elif same.sample_name is None:
+        same.sample_name = result.sample_name
+    return same is None

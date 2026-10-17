@@ -298,9 +298,10 @@ def _call_json(model: str, effort: str, system: str, content: list[dict], out: t
     raise AssertionError("unreachable")
 
 
-def _call_openai(model: str, system: str, image: Path, text: str, out: type[T], max_tokens: int) -> T:
-    """OpenAI-compatible chat completions. The schema is in the prompt for its field descriptions and in
-    `response_format`, which local servers enforce while decoding. One repair round, as in _call_json."""
+def _call_openai(model: str, system: str, image: Path, text: str, out: type[T], max_tokens: int, strict: bool) -> T:
+    """OpenAI-compatible chat completions. The schema is in the prompt for its field descriptions. strict: also
+    in `response_format`, enforced while decoding; providers reject the large extraction schema there (as
+    Anthropic's structured outputs do), so it gets JSON mode and local validation. One repair round."""
     data = base64.standard_b64encode(image.read_bytes()).decode()
     messages: list[dict] = [
         {"role": "system", "content": f"{system}\n\n{_json_instruction(out)}"},
@@ -309,7 +310,8 @@ def _call_openai(model: str, system: str, image: Path, text: str, out: type[T], 
             {"type": "text", "text": text},
         ]},
     ]
-    response_format = {"type": "json_schema", "json_schema": {"name": out.__name__, "schema": out.model_json_schema()}}
+    response_format = ({"type": "json_schema", "json_schema": {"name": out.__name__, "schema": out.model_json_schema()}}
+                       if strict else {"type": "json_object"})
     for attempt in range(2):
         response = _post_chat({"model": model, "messages": messages, "max_tokens": max_tokens,
                                "response_format": response_format})
@@ -452,12 +454,11 @@ def _lab_key(page: PageImage) -> str:
 
 def _produce(model: str, effort: str, system: str, image: Path, hint: str, out: type[T], max_tokens: int,
              strict: bool = False):
-    """The call for the configured backend. strict: a small schema, strict structured output on the
-    Anthropic API."""
+    """The call for the configured backend. strict: a small schema, for strict structured output."""
     if config.LLM_BACKEND == "claude-code":
         return lambda: _call_claude_code(model, system, image, hint, out)
     if config.LLM_BACKEND == "openai":
-        return lambda: _call_openai(model, system, image, hint, out, max_tokens)
+        return lambda: _call_openai(model, system, image, hint, out, max_tokens, strict)
     content = [_image_block(image), {"type": "text", "text": hint}]
     call = _call_structured if strict else _call_json
     return lambda: call(model, effort, system, content, out, max_tokens)

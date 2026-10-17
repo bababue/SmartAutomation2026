@@ -52,7 +52,7 @@ def test_openai_compatible_call_repairs_once_and_keeps_billed_cost(tmp_path, mon
                 "choices": [{"finish_reason": "stop", "message": {"content": next(answers)}}]}
 
     monkeypatch.setattr(llm, "_post_chat", post_chat)
-    produce = lambda: llm._call_openai("vendor/model", "system", image, "hint", PageClassification, 2000)
+    produce = lambda: llm._call_openai("vendor/model", "system", image, "hint", PageClassification, 2000, True)
     result = llm._cached("classify", page, "k", PageClassification, produce)
     assert result.kind.value == "other"
     assert len(sent[1]["messages"]) == 4  # the invalid answer and the validation error went back once
