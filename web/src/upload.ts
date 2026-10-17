@@ -62,8 +62,7 @@ export function useUpload(onUploaded: () => void, onSelect: (id: string) => void
             apply(b.key, s)
             if (s.status === 'done') {
               onUploaded()
-              // Jump to the new record only when it is the sole result on the list: a batch should not steal focus.
-              if (s.boreholes.length === 1 && batchesRef.current.length === 1) onSelect(s.boreholes[0].id)
+              if (s.boreholes.length) onSelect(s.boreholes[0].id)  // open the new hole; the list names the others
             }
           })
           .catch(() => update(b.key, { status: 'error', error: 'Lost track of the upload' }))

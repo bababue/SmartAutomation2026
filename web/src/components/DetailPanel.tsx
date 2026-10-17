@@ -19,6 +19,9 @@ interface Props {
   onCrsConfirmed?: () => void
   onSourceToggle: (open: boolean) => void
   onSelect: (id: string) => void
+  /** Name of the hole this one was opened from (similar ground), with the way back to it. */
+  backTo?: string
+  onBack?: () => void
   onFindLike: (like: NonNullable<SimilarGround['like']>) => void
 }
 
@@ -39,7 +42,8 @@ function Level({ value, label }: { value: number | null; label: string }) {
   )
 }
 
-export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsConfirmed, onSourceToggle, onSelect, onFindLike }: Props) {
+export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsConfirmed, onSourceToggle, onSelect, backTo, onBack,
+  onFindLike }: Props) {
   const bh = detail.borehole
   const loc = bh.location
   const [hovered, setHovered] = useState<number | null>(null)
@@ -84,6 +88,9 @@ export function DetailPanel({ detail, onClose, onReviewChange, onDecided, onCrsC
 
   return (
     <aside className="detail" aria-label={`Borehole ${bh.borehole_name}`}>
+      {backTo && onBack && (
+        <button className="detail-back" onClick={onBack}><span aria-hidden="true">←</span> Back to {backTo}</button>
+      )}
       <header className="detail-head">
         {editing === 'head' ? <HeaderEditor borehole={bh} onChange={onReviewChange} onDone={done} /> : (
         <div>

@@ -54,6 +54,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId)
+  // Holes opened from "Similar ground elsewhere", one step per jump; the button shows only on the hole jumped to.
+  const [trail, setTrail] = useState<{ from: { id: string; name: string }; to: string }[]>([])
+  const back = trail.at(-1)?.to === selectedId ? trail.at(-1) : undefined
   const [detail, setDetail] = useState<Detail | null>(null)
   // Closing drops the record, so a later selection never shows it while its own loads; switching keeps it until then.
   if (!selectedId && detail) setDetail(null)
@@ -495,7 +498,13 @@ export default function App() {
           onDecided={view === 'review' ? openNext : undefined}
           onCrsConfirmed={view === 'review' ? () => setRefresh((n) => n + 1) : undefined}
           onSourceToggle={onSourceToggle}
-          onSelect={setSelectedId}
+          onSelect={(id) => {
+            const here = detail.borehole
+            setTrail((t) => [...(t.at(-1)?.to === here.borehole_id ? t : []), { from: { id: here.borehole_id, name: here.borehole_name }, to: id }])
+            setSelectedId(id)
+          }}
+          backTo={back?.from.name}
+          onBack={() => { setTrail((t) => t.slice(0, -1)); setSelectedId(back!.from.id) }}
           onFindLike={(like) => {
             setFilters((f) => ({ ...f, group: null, rockMax: like.rock_head_max, waterMax: like.groundwater_max, material: like.material }))
             setSelectedId(null)
