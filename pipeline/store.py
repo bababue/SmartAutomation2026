@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS boreholes (
     extracted TEXT,  -- model output before reviewer corrections (layers, position), for evaluation
     ground TEXT  -- derived ground model values (pipeline/ground.py)
 );
-CREATE INDEX IF NOT EXISTS boreholes_status ON boreholes (review_status, score);
 CREATE VIRTUAL TABLE IF NOT EXISTS boreholes_rtree USING rtree(rid, min_lat, max_lat, min_lon, max_lon);
 CREATE INDEX IF NOT EXISTS boreholes_doc ON boreholes (doc_id);
 -- Full-text rows share the borehole's rid as rowid, so updates and deletes are point operations.
@@ -202,7 +201,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
         _migrate_v3(con)
     if con.execute("PRAGMA user_version").fetchone()[0] < 4:
         _migrate_v4(con)
-    con.execute("CREATE INDEX IF NOT EXISTS boreholes_queue ON boreholes (review_status, score, name, id)")
+    con.execute("DROP INDEX IF EXISTS boreholes_status")  # a prefix of boreholes_queue
     return con
 
 
