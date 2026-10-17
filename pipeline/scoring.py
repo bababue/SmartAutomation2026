@@ -20,7 +20,26 @@ from . import config
 # Findings that always need a human, whatever the score: anything that suggests a misread.
 BLOCKING = ("no layers extracted", "CRS ambiguous", "invalid interval", "non-finite depth", "invalid WGS84",
             "gap", "overlap", "layers end at", "stale correction", "log starts at", "depths printed in feet",
-            "missing sheets", "sheet header differs", "same printed coordinates as")
+            "missing sheets", "sheet header differs", "same printed coordinates as", "same hole assumed",
+            "sources disagree on")
+
+# Findings that name files, holes and header texts of other documents: their own severity holds, whatever
+# those names contain ('Singapore' contains 'gap').
+QUOTING = ("combined with the record from", "possibly the same hole as", "sources differ on")
+
+
+def is_blocking(issue: str) -> bool:
+    return not issue.startswith(QUOTING) and any(b in issue for b in BLOCKING)
+
+
+# Header values compared between the documents of one hole: (finding, name, unit). A disagreement on the depths
+# or the ground level blocks the release; one on the dates or the inclination needs a look.
+SOURCE_CONFLICTS = {"depth_m": ("sources disagree on", "final depth", " m"),
+                    "length_m": ("sources disagree on", "hole length", " m"),
+                    "surface_elevation_m": ("sources disagree on", "ground level", " m"),
+                    "start_date": ("sources differ on", "drilling start date", ""),
+                    "end_date": ("sources differ on", "drilling end date", ""),
+                    "inclination_deg": ("sources differ on", "inclination", "°")}
 
 # Georeferencing doubts that explain a position confidence below the release threshold.
 GEOREF_DOUBTS = ("coordinate system inferred", "coordinate axes inferred", "coordinate notation or datum ambiguous",
@@ -70,7 +89,8 @@ def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) 
 
 
 # Findings that need a look before release, without blocking: they cap the extraction confidence.
-NEEDS_LOOK = ("boundary inferred", "core loss inferred", "lithology of layer")
+NEEDS_LOOK = ("boundary inferred", "core loss inferred", "lithology of layer", "sources differ on",
+              "possibly the same hole as")
 NEEDS_LOOK_RE = re.compile(r"^core run .*: (?:(?:SCR|RQD) [\d.]+% above TCR|\w+ [\d.]+% outside)")
 
 
@@ -165,7 +185,7 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
         reasons.append("Coordinate system ambiguous: " + ", ".join(loc.crs_candidates[:3]))
 
     bh.score = round(min(bh.confidence, position), 2)
-    blocking = [i for i in bh.issues if any(b in i for b in BLOCKING)]
+    blocking = [i for i in bh.issues if is_blocking(i)]
     released = bh.score >= config.AUTO_APPROVE_THRESHOLD and not blocking
     bh.review_status = ReviewStatus.auto_approved if released else ReviewStatus.pending_review
     if not released and not reasons:
@@ -190,7 +210,9 @@ FINDING_CODES: list[tuple[str, str]] = [
     ("lithology of layer", "lithology_inferred"), ("reached at the final depth", "end_of_hole_material"),
     ("corrected by", "correction"), ("stale correction", "stale_correction"), ("depths printed in feet", "feet"),
     ("core run", "core_run_inconsistent"), ("sample", "test_below_final_depth"), ("SPT at", "test_below_final_depth"),
-    ("groundwater marked dry", "groundwater_inconsistent"),
+    ("groundwater marked dry", "groundwater_inconsistent"), ("combined with the record from", "combined_records"),
+    ("same hole assumed", "same_hole_assumed"), ("sources disagree on", "sources_disagree"),
+    ("sources differ on", "sources_differ"), ("possibly the same hole as", "possibly_same_hole"),
 ]
 EPSG_IN_FINDING = re.compile(r"EPSG:(\d{4,6})")
 
@@ -203,10 +225,10 @@ def finding_code(issue: str) -> str:
 
 
 def finding_severity(issue: str) -> str:
-    if any(b in issue for b in BLOCKING):
+    if is_blocking(issue):
         return "blocking"
     if issue.startswith(NEEDS_LOOK) or NEEDS_LOOK_RE.match(issue):
         return "needs_look"
-    if issue.startswith(("unreadable:", "corrected by")):
+    if issue.startswith(("unreadable:", "corrected by", "combined with the record from")):
         return "info"
     return "warning"

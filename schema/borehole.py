@@ -405,6 +405,10 @@ class Borehole(BaseModel):
 
     # --- Provenance & quality ---
     sources: list[SourceRef] = Field([], description="All pages this borehole was assembled from")
+    field_sources: dict[str, SourceRef] = Field(
+        {}, description="Header fields filled from another document of the same hole than the layer log, with "
+        "the first page of that document's record"
+    )
     confidence: Confidence | None = Field(None, description="Extraction confidence (layers, values)")
     issues: list[str] = Field([], description="Validation findings, filled by validate_log()")
     score: Confidence | None = Field(None, description="Release score: the weaker of extraction and position")
