@@ -63,6 +63,25 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // Closed: beside the score, to decide at a glance; open: below the summary, after reading it.
+  const decisions = (<>
+    {decided && (
+      <button className="btn" disabled={busy} onClick={() => decide('pending_review')}>Reopen</button>
+    )}
+    {status !== 'rejected' && (
+      <button className="btn btn-decide btn-reject" disabled={busy} onClick={() => decide('rejected')}
+        aria-label={onDecided ? 'Reject and next' : 'Reject'} title={`${onDecided ? 'Reject and next' : 'Reject'} (R)`}>
+        <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+      </button>
+    )}
+    {status !== 'approved' && (
+      <button className="btn btn-decide btn-approve" disabled={busy} onClick={() => decide('approved')}
+        aria-label={onDecided ? 'Approve and next' : 'Approve'} title={`${onDecided ? 'Approve and next' : 'Approve'} (A)`}>
+        <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.8" /></svg>
+      </button>
+    )}
+  </>)
+
   return (
     <section className={`review review-${status}`} aria-label="Release status">
       <div className="review-head">
@@ -78,27 +97,15 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
           {STATUS_LABEL[status]}
         </span>
         <div className="review-buttons">
-          <button className="btn review-toggle" aria-expanded={open} aria-controls="review-summary" onClick={() => setOpen(!open)}>
-            Review summary <span aria-hidden="true">{open ? '▴' : '▾'}</span>
+          {!open && decisions}
+          <button className={`btn btn-decide review-toggle${open ? ' review-toggle-open' : ''}`} aria-expanded={open}
+            aria-controls="review-summary" aria-label={open ? 'Hide the review summary' : 'Show the review summary'}
+            title={open ? 'Hide the review summary' : 'Show the review summary'} onClick={() => setOpen(!open)}>
+            <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
           </button>
-          {decided && (
-            <button className="btn" disabled={busy} onClick={() => decide('pending_review')}>Reopen</button>
-          )}
-          {status !== 'rejected' && (
-            <button className="btn btn-decide btn-reject" disabled={busy} onClick={() => decide('rejected')}
-              aria-label={onDecided ? 'Reject and next' : 'Reject'} title={`${onDecided ? 'Reject and next' : 'Reject'} (R)`}>
-              <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
-            </button>
-          )}
-          {status !== 'approved' && (
-            <button className="btn btn-decide btn-approve" disabled={busy} onClick={() => decide('approved')}
-              aria-label={onDecided ? 'Approve and next' : 'Approve'} title={`${onDecided ? 'Approve and next' : 'Approve'} (A)`}>
-              <svg width={16} height={16} viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.8" /></svg>
-            </button>
-          )}
         </div>
       </div>
-      {error && <p className="error" role="alert">{error}</p>}
+      {!open && error && <p className="error" role="alert">{error}</p>}
 
       {open && <div id="review-summary" className="review-summary">
       <div className="checks checks-score">
@@ -119,7 +126,9 @@ export function ReviewBox({ detail, onChange, onDecided, children, findings }: P
         </label>
         {decided && <span className="muted review-meta">by {bh.reviewed_by ?? 'unknown'}, {fmtDateTime(bh.reviewed_at)}</span>}
         {bh.review_comment && <span className="review-comment">“{bh.review_comment}”</span>}
+        <div className="review-buttons">{decisions}</div>
       </div>
+      {error && <p className="error" role="alert">{error}</p>}
 
       {detail.review_log.length > 0 && (
         <details className="review-log">

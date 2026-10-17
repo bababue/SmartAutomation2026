@@ -35,8 +35,7 @@ const METHOD_TEXT: Record<string, string> = {
 function Level({ value, label }: { value: number | null; label: string }) {
   const level = value == null ? 'none' : value >= 0.7 ? 'high' : value >= 0.4 ? 'medium' : 'low'
   return (
-    <span className={`level level-${level}`} title={value == null ? undefined : `${Math.round(value * 100)} %`}>
-      <span className="level-dot" />
+    <span className="level" title={value == null ? undefined : `${Math.round(value * 100)} %`}>
       {label}: {level === 'none' ? 'unknown' : level}
     </span>
   )
