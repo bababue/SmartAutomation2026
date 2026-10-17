@@ -281,14 +281,22 @@ def _carry_properties(prev: Layer, nxt: Layer) -> list[str]:
         a, b = getattr(prev, field), getattr(nxt, field)
         if field == "primary" or b is None or a == b:
             continue
+        where = lambda x, y: (f"'{x}' on page {prev.source.page if prev.source else '?'}, "
+                              f"'{y}' on page {nxt.source.page if nxt.source else '?'}")
         if field == "secondary":
-            known = {s.lithology for s in a}
+            known = {s.lithology: s for s in a}
+            for s in b:
+                if (mine := known.get(s.lithology)) is None or s.qualifier is None:
+                    continue
+                if mine.qualifier is None:
+                    mine.qualifier = s.qualifier
+                elif mine.qualifier != s.qualifier:
+                    conflicts.append(f"{s.lithology.value} qualifier {where(mine.qualifier.value, s.qualifier.value)}")
             prev.secondary = a + [s for s in b if s.lithology not in known]
         elif a is None:
             setattr(prev, field, b)
         else:
-            conflicts.append(f"{field} '{a}' on page {prev.source.page if prev.source else '?'}, "
-                             f"'{b}' on page {nxt.source.page if nxt.source else '?'}")
+            conflicts.append(f"{field} {where(a, b)}")
     return conflicts
 
 

@@ -172,6 +172,26 @@ def test_continued_layers_keep_distinct_properties(field, first, second):
     assert [(l.top_m, l.bottom_m, getattr(l, field)) for l in layers] == [(0, 10, first), (10, 20, second)]
 
 
+def test_a_continued_unit_takes_the_qualifier_of_a_secondary_component():
+    from pipeline.assemble import _layers
+    from pipeline.extraction_models import XSecondary
+    from schema.borehole import SourceRef
+    a, b = _log("BH1", None, None, [(0, 8)]), _log("BH1", None, None, [(8, 12)])
+    sheets = lambda: [(a, SourceRef(file="r.pdf", page=1)), (b, SourceRef(file="r.pdf", page=2))]
+    clay = lambda qualifier: [XSecondary(lithology="clay", qualifier=qualifier)]
+    a.layers[0] = a.layers[0].model_copy(update={"description_original": "SAND, clayey", "secondary": clay(None)})
+    b.layers[0] = b.layers[0].model_copy(update={"description_original": "As above", "secondary": clay("very")})
+    notes: list[str] = []
+    [layer] = _layers(sheets(), 12, notes)
+    assert [(s.lithology.value, s.qualifier.value) for s in layer.secondary] == [("clay", "very")] and not notes
+
+    a.layers[0] = a.layers[0].model_copy(update={"secondary": clay("slightly")})
+    notes = []
+    [layer] = _layers(sheets(), 12, notes)
+    [conflict] = notes
+    assert "slightly" in conflict and "very" in conflict and finding_severity(conflict) == "needs_look"
+
+
 def test_a_continued_unit_keeps_what_the_next_sheet_says_and_flags_conflicts():
     from pipeline.assemble import _layers
     from schema.borehole import SourceRef
