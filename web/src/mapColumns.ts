@@ -40,7 +40,7 @@ export interface ColumnSpread {
   drawn: Map<string, Offset>  // offset each visible column was last drawn at
   start: number
   frame: number
-  show: boolean  // the 3D columns are switched on
+  show: boolean  // the 3D view is switched on
 }
 
 const SPREAD_GAP_M = 3

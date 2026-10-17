@@ -30,13 +30,14 @@ interface Props {
   /** Width of the detail sheet over the map; the selected hole stays centred beside it. */
   sheetWidth: number | null
   dark: boolean
-  /** Off: flat points at every zoom instead of the depth columns. */
-  columns3d: boolean
+  /** Off: a flat, north-up map with points at every zoom instead of the tilted map with depth columns. */
+  view3d: boolean
 }
 
 const CLUSTER_MAX_ZOOM = 14
 const LAYER_PREFETCH_ZOOM = 14
 const PITCH = 45
+const MAX_PITCH = 60  // MapLibre's default
 
 function sectionLine(coords: [number, number][]) {
   return {
@@ -116,19 +117,19 @@ function wrapLongitude(lon: number) {
   return ((lon + 180) % 360 + 360) % 360 - 180
 }
 
-export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, focus, onSelect, sheetWidth, dark, columns3d }: Props) {
+export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, focus, onSelect, sheetWidth, dark, view3d }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibre | null>(null)
   const ready = useRef(false)
-  const latest = useRef({ data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, columns3d })
+  const latest = useRef({ data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, view3d })
   const layerStrips = useRef(new Map<string, BoreholeSummary['strip']>())
   const [loaded, setLoaded] = useState(false)
   const routeCoordinates = route?.coordinates
   const shownDark = useRef(dark)  // the basemap currently on the map
-  const spread = useRef<ColumnSpread>({ columns: [], drawn: new Map(), start: 0, frame: 0, show: columns3d })
+  const spread = useRef<ColumnSpread>({ columns: [], drawn: new Map(), start: 0, frame: 0, show: view3d })
   // Map event handlers read the newest props; layout effects run before the effects below that use them too.
   useLayoutEffect(() => {
-    latest.current = { data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, columns3d }
+    latest.current = { data, onSelect, selectedId, focus, route, routeDraft, onRoutePoint, dark, view3d }
   })
 
   useEffect(() => {
@@ -139,7 +140,8 @@ export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, foc
       style: STYLE[latest.current.dark ? 'dark' : 'light'],
       center: [10, 25],
       zoom: 1.4,
-      pitch: PITCH,
+      pitch: latest.current.view3d ? PITCH : 0,
+      maxPitch: latest.current.view3d ? MAX_PITCH : 0,
       transformConstrain: keepWorldInView(container.current!, () => created),
       canvasContextAttributes: { antialias: true },
       attributionControl: { compact: true },
@@ -338,12 +340,13 @@ export function MapView({ data, route, routeDraft, onRoutePoint, selectedId, foc
   }, [dark, loaded])
 
   useEffect(() => {
-    spread.current.show = columns3d
+    spread.current.show = view3d
     const m = map.current
     if (!m || !ready.current) return
-    showColumns(m, columns3d)
+    applyView3d(m, view3d)
+    if (view3d) m.easeTo({ pitch: PITCH, duration: 400 })
     updateColumns(m, latest.current.data, layerStrips.current, spread.current)
-  }, [columns3d])
+  }, [view3d])
 
   return <div ref={container} className="map" />
 }
@@ -356,7 +359,7 @@ function loadPatterns() {
 
 /** The borehole sources and layers on top of the basemap; a style switch drops them, so they are added again. */
 function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>>,
-  state: { data: FeatureCollection<MapPoint>; route: TunnelRoute | null; routeDraft: RoutePoint[] | null; columns3d: boolean }) {
+  state: { data: FeatureCollection<MapPoint>; route: TunnelRoute | null; routeDraft: RoutePoint[] | null; view3d: boolean }) {
   if (m.getSource('boreholes')) return
   const accent = cssColor('--water'), ink = cssColor('--ink'), panel = cssColor('--panel')
   const status = statusColors()
@@ -442,10 +445,26 @@ function addOverlay(m: MapLibre, images: Awaited<ReturnType<typeof loadPatterns>
     id: 'selected', type: 'circle', source: 'boreholes', maxzoom: COLUMN_MIN_ZOOM, filter: ['==', ['get', 'id'], ''],
     paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 11, 'circle-stroke-color': accent, 'circle-stroke-width': 3 },
   })
-  showColumns(m, state.columns3d)
+  applyView3d(m, state.view3d)
 }
 
-/** With the 3D columns off, the flat points stay at column zoom too and stand in for the columns. */
+/** 3D: a tilted, rotatable map with depth columns and the basemap's buildings; 2D: flat, north up, points only. */
+function applyView3d(m: MapLibre, on: boolean) {
+  showColumns(m, on)
+  for (const layer of m.getStyle().layers) {
+    if (layer.type === 'fill-extrusion' && !layer.id.startsWith('depth-')) m.setLayoutProperty(layer.id, 'visibility', on ? 'visible' : 'none')
+  }
+  if (!on) m.setBearing(0)
+  m.setMaxPitch(on ? MAX_PITCH : 0)
+  for (const handler of [m.dragRotate, m.touchPitch]) {
+    if (on) handler.enable()
+    else handler.disable()
+  }
+  if (on) { m.touchZoomRotate.enableRotation(); m.keyboard.enableRotation() }
+  else { m.touchZoomRotate.disableRotation(); m.keyboard.disableRotation() }
+}
+
+/** With the 3D view off, the flat points stay at column zoom too and stand in for the columns. */
 function showColumns(m: MapLibre, on: boolean) {
   const top = on ? COLUMN_MIN_ZOOM : 24
   m.setLayerZoomRange('points', 0, top)
