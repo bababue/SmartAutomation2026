@@ -164,6 +164,7 @@ export function MapView({ data, route, inactiveRoutes, routeDraft, hoveredHole, 
     })
     created = m
     map.current = m
+    ;(window as unknown as { __map: MapLibre }).__map = m  // DEBUG-REMOVE
     const tooltip = new Popup({ closeButton: false, closeOnClick: false, offset: 10, className: 'map-tooltip' })
     const picker = new Popup({ closeButton: true, offset: 14, className: 'map-picker', maxWidth: '280px' })
     let stripRequest: AbortController | null = null
@@ -566,8 +567,10 @@ function keepWorldInView(el: HTMLElement, getMap: () => MapLibre | undefined): T
   }
 }
 
+// A running flight to the hole already aims beside the sheet; a jump here would cut it short at its start zoom
+// (the sheet's width changes in the same render that opens it).
 function recenter(m: MapLibre, focus: Props['focus']) {
-  if (focus) m.easeTo({ center: [focus.lon, focus.lat], padding: uncovered(m), duration: 0 })
+  if (focus && !m.isMoving()) m.easeTo({ center: [focus.lon, focus.lat], padding: uncovered(m), duration: 0 })
 }
 
 /** Padding that keeps the centre in the part of the map the detail sheet leaves visible. */
