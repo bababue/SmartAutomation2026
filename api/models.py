@@ -48,7 +48,6 @@ class GroupFacet(BaseModel):
     project: str | None  # the project name its holes give most often
     count: int
     released: int
-    bbox: tuple[float, float, float, float]  # west, south, east, north
 
 
 class Facets(BaseModel):

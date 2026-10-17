@@ -93,8 +93,7 @@ def _like_escape(value: str) -> str:
 def _group_facet(r: sqlite3.Row, projects: Counter) -> dict:
     """A document group among the matches, labelled with the project name its holes give most often."""
     return {"group": r["grp"], "project": projects.most_common(1)[0][0] if projects else None,
-            "count": r["total"], "released": r["released"],
-            "bbox": [r["west"], r["south"], r["east"], r["north"]]}
+            "count": r["total"], "released": r["released"]}
 
 
 def _feature(r: sqlite3.Row) -> dict:
@@ -159,7 +158,6 @@ def list_filters(
     lithology: list[str] = Query(default_factory=list,
                                  description="code[:from_m:to_m], e.g. clay:10:20 (a clay layer between 10 and 20 m)"),
     lab: list[str] = Query(default_factory=list, description="parameter[:min:max], e.g. ucs:80: (UCS of at least 80)"),
-    min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
     status: StatusFilter = "all",
     group: str | None = Query(None, description="only this document group (see the 'groups' facet)"),
     rock_head_max: float | None = Query(None, description="rock head at most this deep (m)"),
@@ -210,9 +208,6 @@ def list_filters(
                        "OR qualifier = 'range' AND value_upper >= value AND value_upper <= ?)")
             params += [lab_max, lab_max]
         where.append(clause + ")")
-    if min_position is not None:
-        where.append("loc_confidence >= ?")
-        params.append(min_position)
     if status != "all":
         values = STATUS_GROUPS[status]
         where.append(f"review_status IN ({','.join('?' * len(values))})")
@@ -270,8 +265,7 @@ def list_boreholes(
         f"SELECT primary_code, COUNT(DISTINCT rid) n FROM layers WHERE rid IN (SELECT rid FROM boreholes WHERE {sql_where}) "
         "GROUP BY primary_code ORDER BY n DESC", params).fetchall()
     groups = con.execute(
-        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM({RELEASED}) released, "
-        f"MIN(lon) west, MIN(lat) south, MAX(lon) east, MAX(lat) north FROM boreholes WHERE {sql_where} "
+        f"SELECT {GROUP} AS grp, COUNT(*) total, SUM({RELEASED}) released FROM boreholes WHERE {sql_where} "
         "GROUP BY grp ORDER BY grp", params).fetchall()
     projects: dict[str, Counter] = {}
     for r in con.execute(f"SELECT {GROUP} AS grp, TRIM(project) AS project, COUNT(*) n FROM boreholes "
@@ -294,10 +288,8 @@ QUEUE_POSITION = {
 QueuePosition = Literal["printed", "estimated", "crs_inferred", "none"]
 
 
-def _queue_filters(blocking: bool, finding: str | None, position: QueuePosition | None) -> tuple[str, list]:
+def _queue_filters(finding: str | None, position: QueuePosition | None) -> tuple[str, list]:
     where, params = ["review_status = 'pending_review'"], []
-    if blocking:
-        where.append("rid IN (SELECT rid FROM findings WHERE severity = 'blocking')")
     if finding in ("blocking", "needs_look"):
         where.append("rid IN (SELECT rid FROM findings WHERE severity = ?)")
         params.append(finding)
@@ -311,7 +303,6 @@ def _queue_filters(blocking: bool, finding: str | None, position: QueuePosition 
 
 @app.get("/api/review-queue")
 def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = Query(0, ge=0),
-                 blocking: bool = Query(False, description="only records with a blocking finding"),
                  finding: str | None = Query(None, description="a finding code, or a severity: 'blocking', 'needs_look'"),
                  position: QueuePosition | None = Query(None, description="where the position comes from"),
                  audit: bool = Query(False, description="the release audit sample instead (any status)")
@@ -321,7 +312,7 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
         uids = [r["uid"] for r in (evaluate.load_audit() or {"records": []})["records"]]
         where, params = f"uid IN ({','.join('?' * len(uids)) or 'NULL'})", uids
     else:
-        where, params = _queue_filters(blocking, finding, position)
+        where, params = _queue_filters(finding, position)
     total = con.execute(f"SELECT COUNT(*) FROM boreholes WHERE {where}", params).fetchone()[0]
     rows = con.execute(
         f"SELECT id, name, project, location_name, country, score, n_layers, {SOURCE_FILE}, reasons "
@@ -337,7 +328,7 @@ def review_queue(con: DB, limit: int = Query(200, ge=1, le=2000), offset: int = 
 def queue_findings(con: DB, position: QueuePosition | None = None) -> list[models.QueueFinding]:
     """Findings among the waiting records (of one position source, if given), for the queue filter. Notes that
     hold nothing back are left out."""
-    where, params = _queue_filters(False, None, position)
+    where, params = _queue_filters(None, position)
     rows = con.execute(
         "SELECT code, severity, COUNT(DISTINCT rid) records FROM findings WHERE severity != 'info' AND rid IN "
         f"(SELECT rid FROM boreholes WHERE {where}) GROUP BY code, severity ORDER BY records DESC", params)
@@ -846,12 +837,10 @@ def cancel_upload(job_id: str, body: CancelBody, con: DB) -> uploads.UploadResul
 
 
 @app.get("/api/llm/usage")
-def llm_usage(con: DB, limit: int = Query(50, ge=1, le=500)):
-    """Model calls today against the limits, and the latest calls: where they went and what they carried."""
-    recent = con.execute(f"SELECT {', '.join(store.LLM_CALL_FIELDS)} FROM llm_calls ORDER BY id DESC LIMIT ?",
-                         (limit,)).fetchall()
+def llm_usage(con: DB):
+    """Model calls today against the limits, and where they go."""
     return {"today": store.llm_calls_today(con), "daily_limit": config.MAX_DAILY_CALLS,
-            "upload_limit": config.MAX_UPLOAD_CALLS, "endpoint": llm.endpoint(), "recent": [dict(r) for r in recent]}
+            "upload_limit": config.MAX_UPLOAD_CALLS, "endpoint": llm.endpoint()}
 
 
 @app.get("/api/pages/{doc_id}/{page}")

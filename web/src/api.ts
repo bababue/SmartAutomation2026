@@ -113,7 +113,7 @@ export const cancelUpload = (jobId: string, files?: string[]) =>
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: files ?? null }),
   })
 
-export const fetchLlmUsage = () => request<LlmUsage>('/api/llm/usage?limit=1')
+export const fetchLlmUsage = () => request<LlmUsage>('/api/llm/usage')
 
 export const fetchUploadStatus = (jobId: string) => request<UploadStatus>(`/api/uploads/${enc(jobId)}`)
 

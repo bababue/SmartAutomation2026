@@ -198,7 +198,7 @@ export interface FindingFacet {
   records: number
 }
 
-/** A document group among all matches: its project, how many holes, how many released, where. */
+/** A document group among all matches: its project, how many holes, how many released. */
 export interface GroupFacet {
   group: string
   /** The project name its holes give most often; null: none gives one. */
