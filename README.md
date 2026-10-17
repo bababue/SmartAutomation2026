@@ -59,6 +59,20 @@ depths that literally appear in that text.
   BoreholeDataFormat (sheets Metadata, Logdata, Samples, CoreRuns, SPT, Groundwater, TestResults; column
   names and units of the format), `/api/export.csv` has one row per layer. `?status=all` includes the queue.
 
+## Learning from reviewers
+
+Local rules are kept as data, not code. Reviewers' corrections and what they enter under *What we know
+here* in the detail view become knowledge items with a scope (document, project, country, everywhere) and a
+source (learned from corrections, from the documents, or told by someone, e.g. on the phone).
+
+- A confirmed coordinate system counts for the country; after three confirmations it is treated as stated.
+- Positions set by hand in a document are used as control points: a local grid is fitted on every run
+  (Helmert, affine from four points) and places the other holes printed in the same grid.
+- Local terms map to a DIN 4023 class ("caliche" → limestone), offered when a reviewer changes a lithology.
+- New extractions get the applicable knowledge as context; it is not part of the cache key, so new
+  knowledge does not trigger re-extraction (it is applied in code on every run anyway).
+- Order on every run: extraction → knowledge → reviewer corrections. Every item is visible and removable.
+
 ## Large documents
 
 Documents are never sent as a whole. Every page is rendered locally and processed on its own, so file
