@@ -459,3 +459,37 @@ def test_defect_intervals_are_not_printed_boundaries():
     text = "x" * 300 + " 1.15-1.31m: joint 2.27-2.47m: joint UCS 2.10-2.22m 28.9 MPa SPT at 7.5m"
     assert not prints_depths(bh, {("demo.pdf", 1): text})
     assert prints_depths(bh, {("demo.pdf", 1): "x" * 300 + " 1.30 4.70 9.20"})
+
+
+def test_release_rules_from_the_second_review():
+    from schema.borehole import CoreRun
+    page = ("demo.pdf", 1)
+    # Integer depths printed, extraction reads other values: a contradiction, not "not printed".
+    bh = make()
+    text = "x" * 300 + " depth 1 2 3 4 5 6 7 8 9 SAND CLAY"
+    score(bh, {page: text}, unreadable=0)
+    assert bh.review_status == ReviewStatus.pending_review
+    # Text confirms the first page only; the scanned second page must not ride along.
+    src2 = SourceRef(file="demo.pdf", page=2)
+    bh = make(layers=[Layer(top_m=0, bottom_m=1.2, description_original="Fill", primary="fill", source=SourceRef(file="demo.pdf", page=1)),
+                      Layer(top_m=1.2, bottom_m=4.5, description_original="Sand", primary="sand", source=SourceRef(file="demo.pdf", page=1)),
+                      Layer(top_m=4.5, bottom_m=6.0, description_original="Clay", primary="clay", source=src2),
+                      Layer(top_m=6.0, bottom_m=7.5, description_original="Clay", primary="clay", source=src2),
+                      Layer(top_m=7.5, bottom_m=9.0, description_original="Clay", primary="clay", source=src2)])
+    bh.issues = bh.validate_log()
+    score(bh, {page: "x" * 300 + " 1.20 4.50"}, unreadable=0)
+    assert bh.review_status == ReviewStatus.pending_review
+    # Contradictory core runs and inferred boundaries cap below release.
+    for issue in ("core run 3–4.5 m: RQD 80% above TCR 60%", "boundary inferred: top of the first layer not readable, set to 0 m"):
+        bh = make()
+        bh.issues = bh.validate_log() + [issue]
+        score(bh, {}, unreadable=0)
+        assert bh.review_status == ReviewStatus.pending_review, issue
+
+
+def test_small_sheet_totals_are_always_checked():
+    from pipeline.assemble import missing_sheets
+    def log(sheet):
+        return (type("L", (), {"sheet": sheet})(), SourceRef(file="f", page=1))
+    assert missing_sheets([log("1 of 3")]) == ["missing sheets: 2, 3 of 3"]
+    assert missing_sheets([log("Page 2 of 20")]) == []  # report pagination

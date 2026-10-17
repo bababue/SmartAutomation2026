@@ -196,8 +196,8 @@ SHEET = re.compile(r"(\d{1,2})\s*(?:of|de|von|aus|di|sur|af|av|/)\s*(\d{1,2})", 
 
 def missing_sheets(logs: list[tuple[XLog, SourceRef]]) -> list[str]:
     """'missing sheets: 2 of 3' when the printed sheet indicators ('1 of 3', 'Hoja 3 de 3') leave a hole.
-    Only numbering that plausibly counts this hole's sheets is checked (at most as many missing as found):
-    '5 of 40' is a sheet number of the whole report."""
+    Only numbering that plausibly counts this hole's sheets is checked (a total of at most 5, or at most as
+    many missing as found): '5 of 40' is a sheet number of the whole report."""
     seen: set[int] = set()
     totals: Counter[int] = Counter()
     for log, _ in logs:
@@ -209,7 +209,8 @@ def missing_sheets(logs: list[tuple[XLog, SourceRef]]) -> list[str]:
         return []
     total = totals.most_common(1)[0][0]
     missing = [k for k in range(1, total + 1) if k not in seen]
-    if not missing or len(missing) > len(seen):
+    # A small total counts this hole's sheets ('1 of 3'); a large one with many gaps is report pagination.
+    if not missing or (len(missing) > len(seen) and total > 5):
         return []
     return [f"missing sheets: {', '.join(map(str, missing))} of {total}"]
 

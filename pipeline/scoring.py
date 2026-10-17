@@ -41,22 +41,37 @@ def _variants(v: float) -> set[str]:
 RELATIVE_PIECE = re.compile(r"^\s*\d+(?:[.,]\d+)?\s*[-–]\s*\d+(?:[.,]\d+)?\s*cm\b", re.I)
 
 
-def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> float | None:
-    """Share of extracted layer boundaries that occur literally in the source page's text layer.
-    None when the source has no usable text layer (scans, images, outlined vector PDFs)."""
-    found = total = 0
+def _text_check(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> tuple[int, int, int, int]:
+    """(boundaries found, boundaries checked, layers checked, layers checkable) against the text layer."""
+    found = total = checked = checkable = 0
     for layer in bh.layers:
+        if RELATIVE_PIECE.match(layer.description_original):
+            continue
+        checkable += 1
         src = layer.source
         text = page_texts.get((src.file, src.page)) if src else None
-        if not text or len(text) < 200 or RELATIVE_PIECE.match(layer.description_original):
+        if not text or len(text) < 200:
             continue
+        checked += 1
         numbers = set(re.findall(r"\d+(?:[.,]\d+)?", text))
         for boundary in (layer.top_m, layer.bottom_m):
             if boundary == 0:
                 continue
             total += 1
             found += bool(_variants(boundary) & numbers)
+    return found, total, checked, checkable
+
+
+def text_agreement(bh: Borehole, page_texts: dict[tuple[str, int | None], str]) -> float | None:
+    """Share of extracted layer boundaries that occur literally in the source page's text layer.
+    None when the source has no usable text layer (scans, images, outlined vector PDFs)."""
+    found, total, _, _ = _text_check(bh, page_texts)
     return found / total if total >= 3 else None
+
+
+# Findings that need a look before release, without blocking: they cap the extraction confidence.
+NEEDS_LOOK = ("boundary inferred", "core loss inferred", "lithology of layer", "reached at the final depth")
+NEEDS_LOOK_RE = re.compile(r"^core run .*: (?:(?:SCR|RQD) [\d.]+% above TCR|\w+ [\d.]+% outside)")
 
 
 # Below this share of matching boundaries the text layer simply does not print them.
@@ -106,22 +121,31 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
     if unreadable:
         extraction -= min(0.2, 0.05 * unreadable)
         reasons.append(f"{unreadable} item(s) reported as unreadable")
-    agreement = text_agreement(bh, page_texts)
+    found, total, checked, checkable = _text_check(bh, page_texts)
+    agreement = found / total if total >= 3 else None
+    has_text = checked > 0
     if agreement is not None and agreement < NOT_PRINTED and not prints_depths(bh, page_texts):
         # Almost nothing matches: the log draws boundaries against a depth scale instead of printing them.
-        # Neither confirmation nor contradiction.
+        # No penalty, but no confirmation either.
         reasons.append("Layer depths are not printed as numbers in the PDF text layer (read from the depth scale)")
         agreement = None
     elif agreement is not None:
         if agreement < 0.8:
             extraction -= (0.8 - agreement) * 0.6
         reasons.append(f"{round(agreement * 100)} % of layer depths confirmed by the PDF text layer")
-    # Plausible is not the same as correct: release automatically only with positive evidence.
-    if bh.layers and not (agreement is not None and agreement >= 0.8) and not covers_full_depth(bh):
+    # Plausible is not the same as correct: release automatically only with positive evidence. With a text
+    # layer only the text can confirm, and it has to cover most layers (scanned extra sheets don't ride along);
+    # without one, a log from 0 m to a stated final depth counts.
+    confirmed = agreement is not None and agreement >= 0.8 and checked >= 0.8 * max(1, checkable)
+    if bh.layers and not confirmed and (has_text or not covers_full_depth(bh)):
         if extraction > UNCONFIRMED_CAP:
             extraction = UNCONFIRMED_CAP
-            reasons.append("Nothing confirms the layer depths independently (no matching PDF text layer, and the log "
-                           "does not run from 0 m to a stated final depth)")
+            reasons.append("Nothing confirms the layer depths independently (PDF text layer missing, partial or not "
+                           "matching, and no complete log from 0 m to a stated final depth on a scan)")
+    look = [i for i in bh.issues if i.startswith(NEEDS_LOOK) or NEEDS_LOOK_RE.match(i)]
+    if look and extraction > UNCONFIRMED_CAP:
+        extraction = UNCONFIRMED_CAP
+        reasons.append(f"{len(look)} finding(s) need a look before release (inferred values or inconsistent core runs)")
     bh.confidence = round(max(0.0, min(1.0, extraction)), 2)
 
     loc = bh.location
