@@ -18,6 +18,7 @@ import re
 import statistics
 import unicodedata
 from collections import Counter, defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass, replace
 from datetime import date
 from itertools import combinations
@@ -553,6 +554,30 @@ def flag_shared_coordinates(boreholes: list[Borehole]) -> None:
                 b.issues.append(f"same printed coordinates as {a.borehole_name} at another place ({a.location_name})")
 
 
+def unstack_place_positions(boreholes: list[Borehole], keep: Collection[str] = ()) -> None:
+    """Several holes of one folder or upload batch at one position from the place name: the point is the
+    place's centre, where none of them need be, and the map would stack distinct holes on one spot. Their
+    position is left to a reviewer; a single hole keeps its approximate one. `keep`: records a reviewer
+    decided or corrected."""
+    stacks: dict[tuple, list[Borehole]] = defaultdict(list)
+    for bh in boreholes:
+        loc = bh.location
+        if loc.method == GeorefMethod.geocoded_place and loc.lat is not None and loc.lon is not None:
+            stacks[(_group(bh), round(loc.lat, 6), round(loc.lon, 6))].append(bh)
+    for holes in stacks.values():
+        if len(holes) < 2:
+            continue
+        for bh in holes:
+            if bh.borehole_id in keep:
+                continue
+            bh.location = bh.location.model_copy(update={"lat": None, "lon": None, "method": None,
+                                                         "accuracy_m": None, "confidence": 0.0})
+            bh.issues = [i for i in bh.issues if i != "position from place name only"]
+            bh.issues.append(f"not georeferenced: {len(holes)} holes of this folder or upload batch would share "
+                             "one position from the place name")
+            corrections.rescore(bh)
+
+
 def _unique_groundwater(observations) -> list[GroundwaterObservation]:
     """Header fields are repeated on every sheet; keep one entry per distinct observation."""
     seen: dict[tuple, GroundwaterObservation] = {}
@@ -1049,6 +1074,31 @@ def _document(bh: Borehole) -> str:
     return bh.borehole_id.split(":", 1)[0]
 
 
+def _group(bh: Borehole) -> str:
+    """The folder or upload batch: files put together by a person, so one hole number there is one hole."""
+    return _document(bh).split("__")[0]
+
+
+def _name_tokens(name: str) -> list[str]:
+    return [t.lstrip("0") or "0" if t.isdigit() else t for t in re.findall(r"[^\W\d_]+|\d+", name.upper())]
+
+
+def _short_names(boreholes: list[Borehole]) -> dict[str, str]:
+    """Record id -> the hole number to match by, for a record whose name ends in the full name of a hole in
+    another file of its group ('<project> B 42' and 'B 42'). The short name needs a prefix and a number, and
+    only whole tokens count ('AB 42' is not 'B 42')."""
+    out = {}
+    for bh in boreholes:
+        mine = _name_tokens(bh.borehole_name)
+        for other in boreholes:
+            theirs = _name_tokens(other.borehole_name)
+            if (_group(other) == _group(bh) and _document(other) != _document(bh) and 2 <= len(theirs) < len(mine)
+                    and mine[-len(theirs):] == theirs and any(t.isdigit() for t in theirs)):
+                out[bh.borehole_id] = hole_key(other.borehole_name, None)[1]
+                break
+    return out
+
+
 def _where(bh: Borehole) -> str:
     src = bh.sources[0] if bh.sources else None
     if src is None:
@@ -1061,6 +1111,8 @@ def _evidence(a: Borehole, b: Borehole) -> tuple[list[str], list[str], list[str]
     that differs (it may just be spelt otherwise): printed positions, the report number and the header texts.
     An approximate position only contradicts, far beyond its uncertainty."""
     agree, differ = [], []
+    if _group(a) == _group(b):
+        agree.append("same folder or upload batch")
     la, lb = a.location, b.location
     if la.lat is not None and lb.lat is not None:
         d = haversine_km(la.lat, la.lon, lb.lat, lb.lon) * 1000
@@ -1083,13 +1135,13 @@ def _evidence(a: Borehole, b: Borehole) -> tuple[list[str], list[str], list[str]
 
 
 def _match(a: Borehole, b: Borehole) -> tuple[str, list[str], list[str]] | None:
-    """'certain' (the printed positions agree), 'probable' (the report number or two header texts agree) or
-    'conflict' (such evidence, but also a contradiction); None when the name is all they share. Without agreeing
-    positions a single differing header text is enough to keep the records apart: a reviewer can release or
-    reject a record, but not split a wrong combination."""
+    """'certain' (the printed positions agree), 'probable' (one folder or upload batch, the report number or two
+    header texts agree) or 'conflict' (such evidence, but also a contradiction); None when the name is all they
+    share. Without agreeing positions a single differing header text is enough to keep the records apart: a
+    reviewer can release or reject a record, but not split a wrong combination."""
     agree, differ, soft = _evidence(a, b)
     located = any(e.startswith("positions") for e in agree)
-    if not (located or any(e.startswith("report/project id") for e in agree) or len(agree) >= 2):
+    if not (located or any(e.startswith(("report/project id", "same folder")) for e in agree) or len(agree) >= 2):
         return None
     if differ or (soft and not located):
         return "conflict", agree, differ + soft
@@ -1209,13 +1261,15 @@ def _kind(bh: Borehole) -> str | None:
 def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
            judged: dict[str, Borehole] | None = None) -> list[Borehole]:
     """One record per hole across documents (a log, its image export, a drawing of the same hole). Records of one
-    name and type from different documents are combined by `_match`; records whose evidence points both ways stay
+    name and type from different documents are combined by `_match`, and in one folder or upload batch also a name
+    that ends in another file's hole name (`_short_names`); records whose evidence points both ways stay
     apart and go to a person. Holes of one document were told apart by assembly and are never combined, nor are
     records whose own sheets disagree. `protected` maps the records a reviewer decided or corrected to what
     identifies that review (uid, correction ids): such a record keeps its id and takes in an unreviewed copy; two
     records reviewed independently of each other both stay. `judged` holds the records as they will be stored, for
     choosing the better-checked copy. Changed records are scored again."""
     protected, judged = protected or {}, judged or {}
+    short = _short_names(boreholes)
     clusters: dict[str, list[dict]] = defaultdict(list)
     kept: list[dict] = []
     for bh in sorted(boreholes, key=lambda b: b.borehole_id):
@@ -1223,7 +1277,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
         kept.append(entry)
         if any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
             continue
-        kind, number = _kind(bh), hole_key(bh.borehole_name, None)[1]
+        kind, number = _kind(bh), short.get(bh.borehole_id) or hole_key(bh.borehole_name, None)[1]
         review = protected.get(bh.borehole_id)
         best = None
         for cluster in clusters[number]:

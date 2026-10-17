@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from pipeline.assemble import dedupe
+from pipeline.assemble import dedupe, unstack_place_positions
 from pipeline.scoring import finding_severity
 from schema.borehole import SPT, Borehole, GeorefMethod, Layer, Location, ReviewStatus, SourceRef
 
@@ -126,3 +126,42 @@ def test_spt_of_both_documents_is_kept_once():
     drawing.spt = [SPT(depth_m=1.5, blows=[3, 4, 5], n_value=9), SPT(depth_m=3.0, blows=[6, 7, 8], n_value=15)]
     kept, = merge(log, drawing)
     assert [(s.depth_m, s.n_value) for s in kept.spt] == [(1.5, 9), (3.0, 15)]
+
+
+def test_same_hole_number_in_one_upload_batch_is_one_hole():
+    drawing, copy = record("upload-x__drawing", [(0, 2), (2, 6)]), record("upload-x__copy", [(0, 2), (2, 6)])
+    elsewhere = record("other__drawing", [(0, 2), (2, 6)])  # another folder: the name alone is no evidence
+    records = merge(drawing, copy, elsewhere)
+    assert len(records) == 2
+    kept, = [r for r in records if r.borehole_id.startswith("upload-x")]
+    assert any(i.startswith("same hole assumed") for i in blocking(kept))
+
+
+def test_longer_name_ending_in_the_hole_name_joins_it_in_one_batch():
+    log = record("upload-x__log", [(0, 2), (2, 6)], MINSTER, name="Road X 12/14 B 2")
+    drawing = record("upload-x__drawing", [(0, 2), (2, 6)])
+    other_series = record("upload-x__plan", [(0, 2), (2, 6)], name="AB 2")  # whole tokens only
+    records = merge(log, drawing, other_series)
+    assert sorted(r.borehole_name for r in records) == ["AB 2", "B 2"]
+    kept, = [r for r in records if r.borehole_name == "B 2"]
+    assert (kept.location.lat, kept.location.lon) == MINSTER  # the printed position wins over none
+
+
+def test_holes_sharing_a_place_name_position_leave_the_map():
+    def placed(doc: str, name: str) -> Borehole:
+        bh = record(doc, [(0, 2)], name=name)
+        bh.borehole_id = f"{doc}:{name.replace(' ', '')}"
+        bh.location = Location(lat=MINSTER[0], lon=MINSTER[1], method=GeorefMethod.geocoded_place,
+                               accuracy_m=5000, confidence=0.3)
+        bh.issues.append("position from place name only")
+        return bh
+
+    first, second, reviewed = (placed("upload-x__plan", n) for n in ("B 1", "B 2", "B 3"))
+    alone = placed("upload-y__plan", "B 1")  # the only hole of its batch at that place
+    unstack_place_positions([first, second, reviewed, alone], keep={reviewed.borehole_id})
+    for bh in (first, second):
+        assert bh.location.lat is None and bh.location.method is None
+        assert any(i.startswith("not georeferenced: 3 holes") for i in bh.issues)
+        assert "position from place name only" not in bh.issues
+        assert bh.review_status != ReviewStatus.auto_approved
+    assert reviewed.location.lat == alone.location.lat == MINSTER[0]

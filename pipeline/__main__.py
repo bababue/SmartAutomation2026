@@ -22,7 +22,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config, corrections, evaluate, experiment, ingest, knowledge, llm, store
-from .assemble import LOG_KINDS, PageResult, assemble, dedupe, norm_name, placeholder
+from .assemble import LOG_KINDS, PageResult, assemble, dedupe, norm_name, placeholder, unstack_place_positions
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
 
@@ -343,6 +343,7 @@ def _store(con, docs, rendered, classes, extractions, labs=None, dry_run: bool =
             # The model's output for `eval`: after merging duplicates, which moves lab values, before reviewer input.
             extracted.update({bh.borehole_id: store.extracted_summary(bh) for bh in records})
             knowledge.apply_all(con, records)  # what reviewers taught beyond single records
+            unstack_place_positions(records, protected)
             for bh in records:  # reviewer fixes survive re-extraction, and win over learned knowledge
                 corrections.apply(bh, fixes[bh.borehole_id])
             stored.extend(records)
