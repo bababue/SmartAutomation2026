@@ -88,8 +88,11 @@ def _bbox_clause(bbox: str) -> tuple[str, list]:
 
 
 def _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, country, min_depth, min_position,
-             status) -> tuple[list[str], list]:
+             status, ids) -> tuple[list[str], list]:
     where, params = ["lat IS NOT NULL"], []
+    if ids:
+        where.append(f"id IN ({','.join('?' * len(ids))})")
+        params += ids
     if q and (fq := _fts_query(q)):
         # Text match, or every search word appears in the source document's file path (e.g. 'AUS01').
         tokens = re.findall(r"\w+", q, flags=re.UNICODE)
@@ -154,6 +157,7 @@ def list_boreholes(
     min_depth: float | None = None,
     min_position: float | None = Query(None, description="minimum position (georeference) confidence"),
     status: Literal["all", "released", "pending", "rejected"] = "all",
+    id: list[str] = Query(default_factory=list, max_length=500, description="only these borehole ids"),
     fields: Literal["list", "map", "layers"] = Query("list", description="'map': slim points; 'layers': depth strips for visible columns"),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
@@ -163,7 +167,7 @@ def list_boreholes(
     if fields == "layers" and not bbox:
         raise HTTPException(422, "bbox is required for layer strips")
     where, params = _filters(q, bbox, lithology, depth_from, depth_to, lab, lab_min, lab_max, country, min_depth,
-                             min_position, status)
+                             min_position, status, id)
     sql_where = " AND ".join(where)
     if fields == "layers":
         rows = con.execute(f"SELECT id, strip FROM boreholes WHERE {sql_where}", params).fetchall()

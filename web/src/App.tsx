@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchBoreholes, fetchDetail, fetchMapPoints, fetchQueue, fetchStats, fetchUploadStatus, postUpload } from './api'
+import { fetchBoreholes, fetchBoreholesById, fetchDetail, fetchMapPoints, fetchQueue, fetchStats, fetchUploadStatus, postUpload } from './api'
 import { LithologyPatterns, lithStyle, patternId } from './lithology'
 import { DetailPanel } from './components/DetailPanel'
 import { MapView } from './components/MapView'
@@ -8,16 +8,15 @@ import { ReviewQueue } from './components/ReviewQueue'
 import { SectionView, orderAlongLine } from './components/SectionView'
 import type { QueueNav } from './components/ReviewBox'
 import type { Detail, DetailUpdate, Feature, FeatureCollection, Filters, QueueItem, Stats, StatusFilter } from './types'
+import { readUrl, writeUrl, type View } from './url'
 
 const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] }
-type View = 'map' | 'review'
 
 export default function App() {
-  const [view, setView] = useState<View>('map')
-  const [filters, setFilters] = useState<Filters>({
-    q: '', lithology: [], depthFrom: null, depthTo: null, lab: null, labMin: null, minPosition: null, status: 'all',
-  })
-  const [query, setQuery] = useState('')
+  const [initial] = useState(() => readUrl(window.location.search))
+  const [view, setView] = useState<View>(initial.view)
+  const [filters, setFilters] = useState<Filters>(initial.filters)
+  const [query, setQuery] = useState(initial.filters.q)
   const [data, setData] = useState<FeatureCollection>(EMPTY)  // list: loaded pages of summaries
   const [points, setPoints] = useState<FeatureCollection>(EMPTY)  // map: every match, slim
   const [loadingMore, setLoadingMore] = useState(false)
@@ -27,10 +26,10 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId)
   const [detail, setDetail] = useState<Detail | null>(null)
   const [refresh, setRefresh] = useState(0) // bump after a review decision
-  const [sectionIds, setSectionIds] = useState<string[]>([])
+  const [sectionIds, setSectionIds] = useState<string[]>(initial.sectionIds)
   const [uploadJobId, setUploadJobId] = useState<string | null>(null)
   const [uploadNote, setUploadNote] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -46,6 +45,36 @@ export default function App() {
     features.forEach((f) => next.set(f.properties.id, f))
     return next
   }), [])
+
+  // Section holes from a URL need not be in the loaded list pages.
+  const restoreSection = useCallback((ids: string[]) => {
+    if (ids.length) fetchBoreholesById(ids).then((page) => remember(page.features)).catch(() => undefined)
+  }, [remember])
+
+  useEffect(() => { restoreSection(initial.sectionIds) }, [initial, restoreSection])
+
+  // Page and selection changes get a history entry, so Back closes a borehole or leaves the queue.
+  useEffect(() => {
+    const url = writeUrl({ view, selectedId, sectionIds, filters })
+    const shown = readUrl(window.location.search)
+    if (url === (window.location.search || window.location.pathname)) return
+    if (shown.view !== view || shown.selectedId !== selectedId) window.history.pushState(null, '', url)
+    else window.history.replaceState(null, '', url)
+  }, [view, selectedId, sectionIds, filters])
+
+  useEffect(() => {
+    const onPop = () => {
+      const s = readUrl(window.location.search)
+      setView(s.view)
+      setSelectedId(s.selectedId)
+      setSectionIds(s.sectionIds)
+      setFilters(s.filters)
+      setQuery(s.filters.q)
+      restoreSection(s.sectionIds)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [restoreSection])
 
   useEffect(() => {
     const ctrl = new AbortController()
