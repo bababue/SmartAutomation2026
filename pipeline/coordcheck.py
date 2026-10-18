@@ -67,7 +67,7 @@ def readings(items: Iterable[Target], read: Callable[[PageImage, tuple | None, s
 
 
 def _reading_for(bh: Borehole, found: dict[Key, CoordinateReading | None]) -> CoordinateReading | None:
-    doc_id, name, src = document_id(bh), norm_name(bh.borehole_name), bh.location.source
+    doc_id, name, src = document_id(bh.borehole_id), norm_name(bh.borehole_name), bh.location.source
     if bh.location.method == GeorefMethod.linked_table:
         rows = [r for (d, _, n, source), r in found.items() if d == doc_id and n == name and source == "table"]
         return rows[0] if len(rows) == 1 else None

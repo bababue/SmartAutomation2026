@@ -25,6 +25,7 @@ from schema.borehole import Borehole, GeorefMethod, GroundwaterObservation, Laye
 
 from . import config
 from .georef import apply_reading, resolve_with
+from .identity import document_id
 from .scoring import SOURCE_CONFLICTS, counts_against, score
 
 # Findings about the position that a reviewer's CRS or position correction settles.
@@ -232,7 +233,7 @@ def page_texts(bh: Borehole) -> dict[tuple[str, int | None], str]:
     """Text layers of the record's pages, from the render manifest (for the text agreement check)."""
     if not bh.sources:
         return {}
-    manifest = config.PAGES_DIR / bh.borehole_id.split(":", 1)[0] / "manifest.json"
+    manifest = config.PAGES_DIR / document_id(bh.borehole_id) / "manifest.json"
     if not manifest.exists():
         return {}
     file = bh.sources[0].file

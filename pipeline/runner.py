@@ -18,7 +18,7 @@ from . import config, coordcheck, corrections, evaluate, experiment, ingest, kno
 from .assemble import LOG_KINDS, PageResult, assemble, flag_position_outliers, placeholder, unstack_place_positions
 from .dedupe import dedupe
 from .extraction_models import CoordinateReading, PageClassification, PageExtraction, PageLabResults
-from .identity import log_key, norm_name
+from .identity import document_id, log_key, norm_name
 
 EXTRACT_KINDS = LOG_KINDS | {"coordinate_table"}
 
@@ -180,6 +180,19 @@ def _extract(todo: list[ingest.PageImage], classes: Classes, con: sqlite3.Connec
     for item, exc in failed:
         print(f"  ! extract failed {item.doc_id} p{item.page}: {type(exc).__name__}: {exc}", file=sys.stderr)
     return results, len(failed)
+
+
+def _uncached(todo: list[ingest.PageImage], classes: Classes, retry: bool) -> list[ingest.PageImage]:
+    """Pages whose extraction would call the model: the lookup `_extract` makes, with every call refused. The
+    rest of a chain counts from its first such page on, as their context comes from that page's new answer."""
+    new = []
+    extract = lambda p, kind, context, expected: llm.extract_page(p, kind, context, "", expected, retry)
+    with llm.guarded({p.doc_id for p in todo}, llm.CallGuard(max_calls=0)):
+        for chain in _chains(todo, classes):
+            _, failed = _walk(chain, classes, extract)
+            if failed:
+                new += chain[chain.index(failed[0][0]):]
+    return new
 
 
 def _check_max_pages(max_pages: int | None) -> None:
@@ -467,7 +480,7 @@ def _store(con: sqlite3.Connection, docs: list[ingest.SourceDoc], rendered: Rend
             for page, issue, name in _lost_logs(rendered[doc_id], classes, extractions):
                 # A record read from that page may hold the missing hole's layers: it is blocked as well.
                 for bh in boreholes:
-                    if store.doc_of(bh.borehole_id) == doc_id and any(s.page == page for s in bh.sources):
+                    if document_id(bh.borehole_id) == doc_id and any(s.page == page for s in bh.sources):
                         bh.issues.append(issue)
                         corrections.rescore(bh)
                 boreholes.append(placeholder(doc_id, source_file[doc_id], page, issue, name))
@@ -545,7 +558,7 @@ def run_experiment(action: str, name: str | None, doc_ids: list[str] | None, yes
             kept_coords = coordcheck.readings(coordcheck.targets([p for ch in chains for p in ch], kept),
                                               llm.cached_coordinates)
         fingerprint = experiment.use_prompt(name)
-        new = [p for p in todo if not llm.cache_path("extract", p).exists()]
+        new = _uncached(todo, classes, retry=yes)
         if new and not yes:
             raise RuntimeError(f"{len(new)} of {len(todo)} pages to extract with prompt {name} ({fingerprint}), "
                                f"≈ ${len(new) * page_cost(COST_EXTRACT, config.EXTRACT_MODEL):.2f} on the API or "

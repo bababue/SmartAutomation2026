@@ -5,7 +5,7 @@ import math
 import pytest
 from pyproj import Transformer
 
-from pipeline import corrections, knowledge, store
+from pipeline import config, corrections, knowledge, store
 from pipeline.knowledge import fit_grid, grid_position
 from pipeline.georef import haversine_km
 from pipeline.scoring import score
@@ -226,3 +226,23 @@ def test_learned_crs_keeps_a_second_reading_that_disagrees(finding):
     bh = freiburg_hole(finding)
     assert finding in bh.issues
     assert bh.review_status.value == "pending_review"
+
+
+@pytest.mark.parametrize("threshold", [0.8, 0.95])
+def test_learned_crs_confidence_follows_the_release_threshold(threshold, monkeypatch):
+    from pipeline.georef import georeference
+    monkeypatch.setattr(config, "AUTO_APPROVE_THRESHOLD", threshold)
+    lat, lon = 47.9955, 7.8529  # Freiburg Minster
+    e, n = Transformer.from_crs(4326, 25832, always_xy=True).transform(lon, lat)
+    for confirmations, released in ((3, True), (1, False)):
+        geo = georeference(f"E {e:.0f} N {n:.0f}", None, "DE", lat, lon, 3)
+        bh = hole("de:BH1", (lat, lon), f"E {e:.0f} N {n:.0f}")
+        bh.location, bh.issues = geo.location, geo.issues
+        bh.location.confidence = 0.75  # below either threshold: the learned system is asked
+        bh.issues += knowledge.apply(bh, [{"kind": "crs", "scope_type": "region", "confirmations": confirmations,
+                                           "payload": {"epsg": 25832}}])
+        score(bh, {}, 0)
+        assert bh.location.crs_epsg == 25832
+        assert bh.location.confidence == (threshold if released else round(threshold - 0.1, 2))
+        assert (bh.review_status.value == "auto_approved") is released
+        assert any(f.part == "position" and f.effect == "negative" for f in bh.score_factors) is not released

@@ -133,48 +133,58 @@ class UploadQueue:
     def _work(self, job_id: str) -> None:
         con = store.connect(self.db_path)
         try:
+            self._process(con, job_id)
+        except Exception as exc:  # the executor would swallow it and leave the job 'processing' for good
+            with con:
+                con.execute("UPDATE upload_jobs SET status = 'error', error = ? WHERE id = ? "
+                            "AND status IN ('queued', 'processing')", (f"{type(exc).__name__}: {exc}", job_id))
             with self.lock:
-                row = con.execute("SELECT status, task FROM upload_jobs WHERE id = ?", (job_id,)).fetchone()
-                if row is None or row["status"] != "queued":
-                    return  # cancelled while it waited
-                task = UploadTask.model_validate_json(row["task"])
-                with con:
-                    con.execute("UPDATE upload_jobs SET status = 'processing' WHERE id = ?", (job_id,))
-                self.cancelled[job_id] = set(task.cancelled)
-            docs = [d for d in task.docs if d.doc_id not in self.cancelled[job_id]]
-            guard = llm.CallGuard(cancelled=lambda doc_id: doc_id in self.cancelled.get(job_id, ()),
-                                  max_calls=max(0, min(config.MAX_UPLOAD_CALLS,
-                                                       config.MAX_DAILY_CALLS - store.llm_calls_today(con))))
-            try:
-                runner.run([ingest.SourceDoc(d.doc_id, d.path, d.kind) for d in docs],
-                           dataset_dir=config.UPLOADS_DIR / task.folder, guard=guard, job_id=job_id,
-                           progress=lambda stage, done, total: self.progress.__setitem__(
-                               job_id, UploadProgress(stage=stage, done=done, total=total)))
-                kept = [d.doc_id for d in docs if d.doc_id not in guard.dropped]
-                if not kept:
-                    raise llm.Cancelled("every document was cancelled")
-                rows = con.execute(f"SELECT id, name, review_status FROM boreholes WHERE doc_id IN "
-                                   f"({', '.join('?' * len(kept))}) ORDER BY name, id", kept)
-                result = UploadResult(status="done", boreholes=[UploadedBorehole.model_validate(dict(r)) for r in rows])
-            except llm.Cancelled:
-                result = UploadResult(status="cancelled")
-            except Exception as exc:
-                result = UploadResult(status="error", error=f"{type(exc).__name__}: {exc}")
-            with self.lock:
-                taken_out = self.cancelled.pop(job_id, set())
-                # Taken out before the run stored anything; a later cancellation came too late.
-                cancelled = sorted(taken_out if result.status != "done" else
-                                   {d.doc_id for d in task.docs if d not in docs} | guard.dropped)
-                task.cancelled = cancelled
-                result.cancelled = _paths(task, cancelled)
-                result.calls = _calls(con, job_id)
-                _remove_files(task, cancelled, whole=result.status == "cancelled")  # gone before the status says so
-                with con:
-                    con.execute("UPDATE upload_jobs SET status = ?, task = ?, result = ?, error = ? WHERE id = ?",
-                                (result.status, task.model_dump_json(), result.model_dump_json(), result.error, job_id))
+                self.cancelled.pop(job_id, None)
             self.progress.pop(job_id, None)
         finally:
             con.close()
+
+    def _process(self, con: sqlite3.Connection, job_id: str) -> None:
+        with self.lock:
+            row = con.execute("SELECT status, task FROM upload_jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None or row["status"] != "queued":
+                return  # cancelled while it waited
+            task = UploadTask.model_validate_json(row["task"])
+            with con:
+                con.execute("UPDATE upload_jobs SET status = 'processing' WHERE id = ?", (job_id,))
+            self.cancelled[job_id] = set(task.cancelled)
+        docs = [d for d in task.docs if d.doc_id not in self.cancelled[job_id]]
+        guard = llm.CallGuard(cancelled=lambda doc_id: doc_id in self.cancelled.get(job_id, ()),
+                              max_calls=max(0, min(config.MAX_UPLOAD_CALLS,
+                                                   config.MAX_DAILY_CALLS - store.llm_calls_today(con))))
+        try:
+            runner.run([ingest.SourceDoc(d.doc_id, d.path, d.kind) for d in docs],
+                       dataset_dir=config.UPLOADS_DIR / task.folder, guard=guard, job_id=job_id,
+                       progress=lambda stage, done, total: self.progress.__setitem__(
+                           job_id, UploadProgress(stage=stage, done=done, total=total)))
+            kept = [d.doc_id for d in docs if d.doc_id not in guard.dropped]
+            if not kept:
+                raise llm.Cancelled("every document was cancelled")
+            rows = con.execute(f"SELECT id, name, review_status FROM boreholes WHERE doc_id IN "
+                               f"({', '.join('?' * len(kept))}) ORDER BY name, id", kept)
+            result = UploadResult(status="done", boreholes=[UploadedBorehole.model_validate(dict(r)) for r in rows])
+        except llm.Cancelled:
+            result = UploadResult(status="cancelled")
+        except Exception as exc:
+            result = UploadResult(status="error", error=f"{type(exc).__name__}: {exc}")
+        with self.lock:
+            taken_out = self.cancelled.pop(job_id, set())
+            # Taken out before the run stored anything; a later cancellation came too late.
+            cancelled = sorted(taken_out if result.status != "done" else
+                               {d.doc_id for d in task.docs if d not in docs} | guard.dropped)
+            task.cancelled = cancelled
+            result.cancelled = _paths(task, cancelled)
+            result.calls = _calls(con, job_id)
+            _remove_files(task, cancelled, whole=result.status == "cancelled")  # gone before the status says so
+            with con:
+                con.execute("UPDATE upload_jobs SET status = ?, task = ?, result = ?, error = ? WHERE id = ?",
+                            (result.status, task.model_dump_json(), result.model_dump_json(), result.error, job_id))
+        self.progress.pop(job_id, None)
 
     def close(self) -> None:
         self.executor.shutdown(wait=True)

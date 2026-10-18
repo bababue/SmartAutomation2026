@@ -8,8 +8,6 @@ import re
 import unicodedata
 from typing import TypeVar
 
-from schema.borehole import Borehole
-
 from .extraction_models import XLog
 
 HoleKey = tuple[str | None, str]  # (type, number), see hole_key
@@ -101,5 +99,5 @@ def log_key(log: XLog, page_kind: str) -> HoleKey:
                     else _HOLE_KIND_OF_PAGE.get(page_kind))
 
 
-def document_id(bh: Borehole) -> str:
-    return bh.borehole_id.split(":", 1)[0]
+def document_id(borehole_id: str) -> str:
+    return borehole_id.split(":", 1)[0]

@@ -81,6 +81,14 @@ def test_scientific_exponents_are_exact_values(text):
     assert lab_upper("hydraulic_conductivity", text, "m/s") is None
 
 
+def test_comma_before_three_digits_takes_the_only_plausible_reading():
+    from pipeline.labs import lab_value
+    from schema.borehole import LabParameter as P
+    assert lab_value(P.ucs, "12,500", "kPa") == 12.5  # 12.5 kPa is implausible as UCS: thousands separator
+    assert lab_value(P.water_content, "1,250", "%") == 1.25  # 1250 % is implausible: decimal comma
+    assert lab_value(P.e_modulus, "12,500", "MPa") is None  # 12.5 and 12500 MPa are both plausible
+    assert lab_value(P.ucs, "3,5", "MPa") == 3.5
+
 
 def test_hole_id_in_sample_column_suffixes_and_implausible_values():
     holes = [hole("QX-10"), hole("QX-11"), hole("QX-01")]

@@ -69,8 +69,27 @@ def lab_qualifier(value_raw: str) -> str | None:
     return "range" if re.fullmatch(rf"\s*{_NUMBER}\s*[-–~]\s*{_NUMBER}\s*", value_raw or "") else None
 
 
+# Digits grouped by commas ('12,500', '1,250,000'), with no exponent after them.
+_GROUPED = re.compile(r"[<>≤≥~]?(\d{1,3}(?:,\d{3})+)(?![\d.,eEx×])")
+
+
 def lab_value(parameter: LabParameter, value_raw: str, unit_raw: str | None) -> float | None:
-    value = _num(value_raw)
+    grouped = _GROUPED.match((value_raw or "").replace(" ", ""))
+    if not grouped:
+        return _in_unit(parameter, _num(value_raw), unit_raw)
+    digits = grouped.group(1)
+    readings = [float(digits.replace(",", ""))]
+    if digits.count(",") == 1:  # '12,500' is 12.5 with a decimal comma or 12500 with a thousands separator
+        readings.append(float(digits.replace(",", ".")))
+    values = [v for r in readings if (v := _in_unit(parameter, r, unit_raw)) is not None]
+    fits = [v for v in values if plausible(parameter, v)]
+    if len(fits) == 1:
+        return fits[0]
+    # Both readings plausible: not published, like a value without a number. Neither: dropped as implausible.
+    return None if fits else next(iter(values), None)
+
+
+def _in_unit(parameter: LabParameter, value: float | None, unit_raw: str | None) -> float | None:
     if value is None:
         return None
     unit = (unit_raw or "").lower().replace(" ", "").replace("³", "3").replace("²", "2").strip("()[]")

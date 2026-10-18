@@ -30,11 +30,16 @@ from pyproj import Transformer
 
 from schema.borehole import Borehole, GeorefMethod, Lithology
 
-from . import corrections, store
+from . import config, corrections, store
 from .georef import apply_reading, candidates, haversine_km, pairs, parse_tokens, resolve_with
 from .scoring import RELATIVE_PIECE, finding_severity
 
 TRUSTED_CONFIRMATIONS = 3  # before a learned coordinate system counts as stated
+
+
+def _learned_confidence(trusted: bool) -> float:
+    """Position confidence of a learned value: at the release threshold when trusted, a step below it otherwise."""
+    return config.AUTO_APPROVE_THRESHOLD if trusted else round(config.AUTO_APPROVE_THRESHOLD - 0.1, 2)
 
 
 def norm_project(name: str | None) -> str | None:
@@ -221,7 +226,8 @@ def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str
     """Apply what applies to this record; returns notes for its findings."""
     notes: list[str] = []
     loc = bh.location
-    doubtful = loc.method != GeorefMethod.manual and (loc.confidence or 0) < 0.9 and loc.coords_raw
+    doubtful = (loc.method != GeorefMethod.manual and (loc.confidence or 0) < config.AUTO_APPROVE_THRESHOLD
+                and loc.coords_raw)
     if doubtful:
         crs_items = sorted((k for k in items if k["kind"] == "crs"), key=lambda k: -k["confirmations"])
         for k in crs_items:
@@ -244,7 +250,7 @@ def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str
                 doubts.append(f"coordinate notation or datum ambiguous: readings differ by up to {spread_m:.0f} m")
             apply_reading(loc, c)
             loc.crs_candidates, loc.accuracy_m = [], max(10.0, spread_m, loc.accuracy_m or 0) if doubts else 10.0
-            loc.confidence = 0.9 if k["confirmations"] >= TRUSTED_CONFIRMATIONS and not doubts else 0.8
+            loc.confidence = _learned_confidence(k["confirmations"] >= TRUSTED_CONFIRMATIONS and not doubts)
             _settle_position(bh)
             bh.issues += doubts
             notes.append(f"coordinate system from reviewer knowledge: EPSG:{epsg} "
@@ -260,7 +266,7 @@ def apply(bh: Borehole, items: list[dict], grid: dict | None = None) -> list[str
             loc.crs_proj = f"local grid fitted to {grid['n']} reviewer positions (RMS {grid['rms_m']:.1f} m)"
             loc.accuracy_m = max(grid["rms_m"], 5.0)
             # Release only on a predictive check: every control point recovered from the others within 20 m.
-            loc.confidence = 0.9 if grid["loo_m"] is not None and grid["loo_m"] <= 20 else 0.8
+            loc.confidence = _learned_confidence(grid["loo_m"] is not None and grid["loo_m"] <= 20)
             _settle_position(bh)
             notes.append(f"position from a local grid fitted to {grid['n']} reviewer positions "
                          f"(RMS {grid['rms_m']:.1f} m)")

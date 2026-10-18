@@ -96,6 +96,20 @@ def test_processing_failure_is_persisted(db_path, monkeypatch):
     assert result.status == "error" and "synthetic extraction failed" in result.error
 
 
+def test_failure_outside_the_run_still_ends_the_job_as_error(db_path, monkeypatch):
+    def fail(con):
+        raise RuntimeError("synthetic database failure")
+
+    monkeypatch.setattr("pipeline.runner.run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(store, "llm_calls_today", fail)
+    queue = uploads.UploadQueue(db_path)
+    queue.submit(task("broken-count"))
+    queue.close()
+    result = wait_result(db_path, "broken-count")
+    assert result.status == "error" and "synthetic database failure" in result.error
+    assert not queue.cancelled and not queue.progress
+
+
 def test_unreadable_queued_job_is_marked_as_error(db_path):
     con = store.connect(db_path)
     with con:

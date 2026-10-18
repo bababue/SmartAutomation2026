@@ -17,7 +17,9 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -324,7 +326,7 @@ def measured_costs() -> dict[str, tuple[int, float]]:
     for stage in ("classify", "extract", "extract-retry", "lab", "coords"):
         n, total = 0, 0.0
         for path in (config.CACHE_DIR / stage).glob("*/*.json"):
-            usage = json.loads(path.read_text(encoding="utf-8")).get("usage")
+            usage = (_entry(path) or {}).get("usage")
             cost = cost_usd(usage) if usage else None
             if cost is not None:
                 n, total = n + 1, total + cost
@@ -382,8 +384,9 @@ def _call_json(model: str, effort: str, system: str, content: list[dict], out: t
 
 def _call_openai(model: str, system: str, image: Path, text: str, out: type[T], max_tokens: int, strict: bool) -> T:
     """OpenAI-compatible chat completions. The schema is in the prompt for its field descriptions. strict: also
-    in `response_format`, enforced while decoding; providers reject the large extraction schema there (as
-    Anthropic's structured outputs do), so it gets JSON mode and local validation. One repair round."""
+    in `response_format`, without the `strict` flag, so whether decoding follows it is up to the provider; the
+    large extraction schema gets JSON mode, as providers reject it there (as Anthropic's structured outputs do).
+    Every answer is validated locally, with one repair round."""
     data = base64.standard_b64encode(image.read_bytes()).decode()
     messages: list[dict] = [
         {"role": "system", "content": f"{system}\n\n{_json_instruction(out)}"},
@@ -433,6 +436,11 @@ def _post_chat(body: dict) -> dict:
                 raise RuntimeError(f"chat API HTTP {exc.code}: {exc.read()[:500].decode(errors='replace')}") from None
             time.sleep(5 * 2**attempt)
             continue
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            if attempt == 3:
+                raise RuntimeError(f"chat API unreachable: {exc}") from None
+            time.sleep(5 * 2**attempt)
+            continue
         if "error" in result:  # OpenRouter reports upstream failures in a 200 response
             raise RuntimeError(f"chat API error: {str(result['error'])[:500]}")
         return result
@@ -440,47 +448,52 @@ def _post_chat(body: dict) -> dict:
 
 
 def _call_claude_code(model: str, system: str, image: Path, text: str, out: type[T]) -> T:
-    """Same task through the local Claude Code CLI in print mode. The page image is read with the
-    Read tool (the only tool allowed); the result is validated against the Pydantic model."""
+    """Same task through the local Claude Code CLI in print mode. The page image is read with the Read tool,
+    the only tool, which `--restricted` confines to the working directory: a temporary folder holding nothing
+    but a copy of the image, so text on a page cannot make it read other files. The result is validated
+    against the Pydantic model."""
     schema = json.dumps(out.model_json_schema(), ensure_ascii=False)
-    prompt = (
-        f"Read the page image at {image.resolve()} and process it as instructed.\n\n{text}\n\n"
-        "Return the result as structured output. Use null where a value is not printed."
-    )
-    cmd = [
-        config.CLAUDE_CLI, "-p", prompt,
-        "--output-format", "json",
-        "--model", model,
-        "--system-prompt", system,
-        "--json-schema", schema,
-        "--tools", "Read",
-        "--allowedTools", "Read",
-        "--add-dir", str(config.PAGES_DIR.resolve()),
-        "--setting-sources", "local",  # no user plugins, hooks or memory in the worker
-        "--strict-mcp-config",
-        "--no-session-persistence",
-    ]
-    last_error = ""
-    for _ in range(2):
-        run_cmd = cmd if not last_error else cmd[:2] + [cmd[2] + f"\n\nA previous answer failed validation:\n{last_error}"] + cmd[3:]
-        proc = subprocess.run(run_cmd, capture_output=True, text=True, encoding="utf-8", timeout=900,
-                              cwd=config.ROOT, env=_cli_env())
-        try:
-            result = json.loads(proc.stdout)
-        except json.JSONDecodeError:
-            raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {(proc.stderr or proc.stdout)[:500]}")
-        if result.get("is_error"):
-            raise RuntimeError(f"claude CLI error: {str(result.get('result'))[:500]}")
-        tokens = {f: result.get("usage", {}).get(f) or 0 for f in USAGE_FIELDS}
-        if any(tokens.values()):  # the subscription is not billed per token: tokens only, priced from PRICES
-            _record_usage(model, tokens)
-        data = result.get("structured_output")
-        try:
-            if data is not None:
-                return out.model_validate(data)
-            return out.model_validate_json(_strip_fences(result.get("result") or ""))
-        except ValidationError as exc:
-            last_error = str(exc)[:3000]
+    with tempfile.TemporaryDirectory(prefix="page-") as folder:
+        workdir = Path(folder).resolve()
+        page = workdir / f"page{image.suffix}"
+        shutil.copyfile(image, page)
+        prompt = (
+            f"Read the page image at {page} and process it as instructed.\n\n{text}\n\n"
+            "Return the result as structured output. Use null where a value is not printed."
+        )
+        cmd = [
+            config.CLAUDE_CLI, "-p", prompt,
+            "--output-format", "json",
+            "--model", model,
+            "--system-prompt", system,
+            "--json-schema", schema,
+            "--tools", "Read",
+            "--allowedTools", "Read",
+            "--restricted",  # also no user, project or local settings: no plugins, hooks or memory in the worker
+            "--strict-mcp-config",
+            "--no-session-persistence",
+        ]
+        last_error = ""
+        for _ in range(2):
+            run_cmd = cmd if not last_error else cmd[:2] + [cmd[2] + f"\n\nA previous answer failed validation:\n{last_error}"] + cmd[3:]
+            proc = subprocess.run(run_cmd, capture_output=True, text=True, encoding="utf-8", timeout=900,
+                                  cwd=workdir, env=_cli_env())
+            try:
+                result = json.loads(proc.stdout)
+            except json.JSONDecodeError:
+                raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {(proc.stderr or proc.stdout)[:500]}")
+            if result.get("is_error"):
+                raise RuntimeError(f"claude CLI error: {str(result.get('result'))[:500]}")
+            tokens = {f: result.get("usage", {}).get(f) or 0 for f in USAGE_FIELDS}
+            if any(tokens.values()):  # the subscription is not billed per token: tokens only, priced from PRICES
+                _record_usage(model, tokens)
+            data = result.get("structured_output")
+            try:
+                if data is not None:
+                    return out.model_validate(data)
+                return out.model_validate_json(_strip_fences(result.get("result") or ""))
+            except ValidationError as exc:
+                last_error = str(exc)[:3000]
     raise RuntimeError(f"claude CLI output did not validate: {last_error[:500]}")
 
 
@@ -508,10 +521,9 @@ def _cached(stage: str, page: PageImage, key_for: Callable[[str, str], str], mod
     """The cached answer of the configured model, else a new call. key_for(model, effort) is the cache key."""
     path = cache_path(stage, page, part)
     key = key_for(model, effort)
-    if path.exists():
-        cached = json.loads(path.read_text(encoding="utf-8"))
-        if cached.get("key") == key:
-            return out.model_validate(cached["result"])
+    cached = _entry(path)
+    if cached and cached.get("key") == key:
+        return out.model_validate(cached["result"])
     guard = _guards.get(page.doc_id)
     if guard:
         guard.admit(page)
@@ -536,8 +548,18 @@ def _cached(stage: str, page: PageImage, key_for: Callable[[str, str], str], mod
     if usage:
         entry["usage"] = usage
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
+    part_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    part_path.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
+    os.replace(part_path, path)
     return result
+
+
+def _entry(path: Path) -> dict | None:
+    """The cache entry at path; a missing or unreadable one (cut short by a crash) is a miss."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return None
 
 
 def _from_cache(stage: str, page: PageImage, key_for: Callable[[str, str], str], model: str, effort: str,
@@ -545,10 +567,9 @@ def _from_cache(stage: str, page: PageImage, key_for: Callable[[str, str], str],
     """Cached result if it was produced from the same input and prompt, checked with the model and effort recorded
     in the entry: a rebuild keeps the pages extracted before the configured model changed (a run re-extracts
     them, see _cached). Entries without a record count as made with the configured settings."""
-    path = cache_path(stage, page, part)
-    if not path.exists():
+    cached = _entry(cache_path(stage, page, part))
+    if cached is None:
         return None
-    cached = json.loads(path.read_text(encoding="utf-8"))
     key = key_for(cached.get("model", model), cached.get("effort", effort))
     return out.model_validate(cached["result"]) if cached.get("key") == key else None
 

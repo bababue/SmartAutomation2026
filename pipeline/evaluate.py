@@ -29,6 +29,7 @@ from schema.borehole import Borehole, ReviewStatus
 
 from . import config, store
 from .georef import haversine_km
+from .identity import document_id
 from .labs import lab_name
 
 EVAL_DEPTH_TOLERANCE_M = 0.1
@@ -49,7 +50,7 @@ def extracted_summary(bh: Borehole) -> dict:
 
 def entry(bh: Borehole) -> dict:
     """The parts of a record the evaluation compares (final values)."""
-    return {"doc_id": store.doc_of(bh.borehole_id), **extracted_summary(bh)}
+    return {"doc_id": document_id(bh.borehole_id), **extracted_summary(bh)}
 
 
 def _records(con: sqlite3.Connection, where: str = "", params: tuple = ()) -> dict[str, Borehole]:

@@ -220,17 +220,18 @@ def score(bh: Borehole, page_texts: dict[tuple[str, int | None], str], unreadabl
         if "coordinates confirmed by a second reading" in bh.issues:
             add("position", "positive", "Coordinates confirmed by a second reading")
         doubts = [i for i in bh.issues if i.startswith(GEOREF_DOUBTS)]
+        held = position < config.AUTO_APPROVE_THRESHOLD
         for i in doubts:  # above the threshold a doubt is settled (e.g. by repeated reviewer confirmations)
-            add("position", "negative" if position < 0.9 else "neutral", i[0].upper() + i[1:],
-                "Check the printed coordinates and their coordinate system on the source page" if position < 0.9 else None)
-        if position < 0.9 and (position < 0.8 or not doubts):
+            add("position", "negative" if held else "neutral", i[0].upper() + i[1:],
+                "Check the printed coordinates and their coordinate system on the source page" if held else None)
+        if held and (position < 0.8 or not doubts):
             if any(i.startswith("no place to cross-check") or "no place to decide" in i for i in bh.issues):
                 add("position", "negative", "No named place to check the printed coordinates against",
                     "Check the printed coordinates and their coordinate system on the source page")
             else:
                 add("position", "negative", "Printed coordinates only partly match the named place",
                     "Check the printed coordinates against the named place")
-        elif position >= 0.9 and loc.place_name and not doubts and loc.method != GeorefMethod.manual:
+        elif not held and loc.place_name and not doubts and loc.method != GeorefMethod.manual:
             add("position", "positive", "Printed coordinates match the named place")
     if len(loc.crs_candidates) > 1:
         add("position", "negative", "Coordinate system ambiguous: " + ", ".join(loc.crs_candidates[:3]))

@@ -326,6 +326,7 @@ Environment variables, from the shell or `.env`:
 | `MAX_WORKERS` | `6` (API), `3` (CLI) | parallel model calls |
 | `AUTO_APPROVE_THRESHOLD` | `0.9` | release score for automatic release |
 | `MAX_UPLOAD_PAGES` / `MAX_UPLOAD_BYTES` | `100` / 25 MB | pages and bytes per upload batch |
+| `MAX_UPLOAD_FILES` | `1000` | documents per upload batch, ZIP entries included, checked before extraction |
 | `MAX_UPLOAD_JOBS` / `MAX_UPLOAD_WORKERS` | `8` / `1` | web upload queue |
 | `MAX_UPLOAD_CALLS` / `MAX_DAILY_CALLS` | `400` / `2000` | model calls per upload batch / per UTC day (command-line runs count towards the day, but are not stopped) |
 | `DATASET_DIR` | `temp/HKBoreholeChallenge_Data_BFH2026/BoreholeData` | input documents |
@@ -390,9 +391,11 @@ The brief asks for data security at every step:
 - Not in the prototype: user accounts (see [Limitations](#limitations)).
 - Every model call of a run is recorded in `llm_calls` (document, page, stage, model, endpoint, image size and
   text length sent, tokens, cost, outcome), never its content; `GET /api/llm/usage` shows the day against the limits.
-- Documents are untrusted input. The model has no tools and its answer must pass the schema; text that addresses
-  the model ("ignore the previous instructions", chat markup, in English or German) is a blocking finding
-  (`possible prompt injection`), so that document's records go to a person. Text inside page images is not scanned.
+- Documents are untrusted input. Through the API backends the model has no tools; through the Claude Code CLI
+  its only tool is Read, confined to a temporary folder that holds just the page image. Its answer must pass the
+  schema; text that addresses the model ("ignore the previous instructions", chat markup, in English or German)
+  is a blocking finding (`possible prompt injection`), so that document's records go to a person. Text inside
+  page images is not scanned.
 
 The challenge dataset contains confidential data from real projects. It is used only for this challenge, is not
 shared outside the event and is deleted afterwards. Nothing from it is committed: tests, fixtures and docs use

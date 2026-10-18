@@ -66,7 +66,7 @@ def _unique_ids(records: list[Borehole]) -> None:
     seen = Counter(bh.borehole_id for bh in records)
     for bh in records:
         if seen[bh.borehole_id] > 1:
-            bh.borehole_id = f"{document_id(bh)}:{id_key(bh.borehole_name, separate_numbers=True)}"
+            bh.borehole_id = f"{document_id(bh.borehole_id)}:{id_key(bh.borehole_name, separate_numbers=True)}"
 
 
 _ID_PREFIX = {"test_pit": "TP", "other": "X"}

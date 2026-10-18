@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from schema.borehole import Borehole, ReviewStatus, ScoreFactor
 
 from . import config, ground, scoring
-from .identity import hole_key
+from .identity import document_id, hole_key
 
 REVIEW_STATUSES = ", ".join(f"'{s.value}'" for s in ReviewStatus)
 
@@ -361,7 +361,7 @@ def _resolve_uid(con: sqlite3.Connection, bh: Borehole) -> str | None:
     that uid. Two documents of a group can each have a hole of one natural key, so it names a hole of this
     record's own document only, and one that no current record of another document holds. A write replaces
     whole documents: the hole's old record under another id may still be stored then."""
-    doc = doc_of(bh.borehole_id)
+    doc = document_id(bh.borehole_id)
     row = con.execute("SELECT uid FROM borehole_aliases WHERE alias = ?", (natural_key(bh),)).fetchone()
     if row and doc in _documents(con, row["uid"]) and not con.execute(
             "SELECT 1 FROM boreholes WHERE uid = ? AND doc_id != ?", (row["uid"], doc)).fetchone():
@@ -374,7 +374,7 @@ def _resolve_uid(con: sqlite3.Connection, bh: Borehole) -> str | None:
 
 def _documents(con: sqlite3.Connection, uid: str) -> set[str]:
     """The documents this hole had a record in, under any id."""
-    return {doc_of(r["alias"]) for r in con.execute("SELECT alias FROM borehole_aliases WHERE uid = ?", (uid,))
+    return {document_id(r["alias"]) for r in con.execute("SELECT alias FROM borehole_aliases WHERE uid = ?", (uid,))
             if not r["alias"].startswith("nk:")}
 
 
@@ -431,7 +431,7 @@ def _write_lab_values(con: sqlite3.Connection, rid: int, bh: Borehole) -> None:
 def _insert(con: sqlite3.Connection, bh: Borehole, digest: str, extracted: str | None, uid: str, version_id: int,
             review_revision: int) -> None:
     loc = bh.location
-    doc_id = doc_of(bh.borehole_id)
+    doc_id = document_id(bh.borehole_id)
     cur = con.execute(
         """INSERT INTO boreholes (id, name, doc_id, project, location_name, country, lat, lon, depth, elevation,
            investigation_type, confidence, loc_confidence, loc_method, score, review_status, n_layers,
@@ -516,12 +516,8 @@ def record_review(con: sqlite3.Connection, borehole_id: str, decision: ReviewSta
     return bh
 
 
-def doc_of(borehole_id: str) -> str:
-    return borehole_id.split(":", 1)[0]
-
-
 def document_group(borehole_id: str) -> str:
-    return doc_of(borehole_id).split("__")[0]
+    return document_id(borehole_id).split("__")[0]
 
 
 def add_correction(con: sqlite3.Connection, scope: str, target: str, kind: str, payload: dict, reviewer: str,

@@ -52,8 +52,9 @@ def _short_names(boreholes: list[Borehole]) -> dict[str, str]:
         mine = _name_tokens(bh.borehole_name)
         for other in filter(lambda r: r.layers, boreholes):
             theirs = _name_tokens(other.borehole_name)
-            if (_group(other) == _group(bh) and document_id(other) != document_id(bh) and 2 <= len(theirs) < len(mine)
-                    and mine[-len(theirs):] == theirs and any(t.isdigit() for t in theirs)):
+            if (_group(other) == _group(bh) and document_id(other.borehole_id) != document_id(bh.borehole_id)
+                    and 2 <= len(theirs) < len(mine) and mine[-len(theirs):] == theirs
+                    and any(t.isdigit() for t in theirs)):
                 out[bh.borehole_id] = hole_key(other.borehole_name, None)[1]
                 break
     return out
@@ -62,7 +63,7 @@ def _short_names(boreholes: list[Borehole]) -> dict[str, str]:
 def _where(bh: Borehole) -> str:
     src = bh.sources[0] if bh.sources else None
     if src is None:
-        return document_id(bh)
+        return document_id(bh.borehole_id)
     return f"{src.file} p{src.page}" if src.page else src.file
 
 
@@ -239,7 +240,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
     clusters: dict[str, list[dict]] = defaultdict(list)
     kept: list[dict] = []
     for bh in sorted(boreholes, key=lambda b: b.borehole_id):
-        entry = {"bh": bh, "ids": {bh.borehole_id}, "docs": {document_id(bh)}, "changed": False}
+        entry = {"bh": bh, "ids": {bh.borehole_id}, "docs": {document_id(bh.borehole_id)}, "changed": False}
         kept.append(entry)
         if not bh.layers or any(i.startswith(("sheet header differs", "same printed coordinates as")) for i in bh.issues):
             continue
@@ -248,7 +249,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
         best = None
         for cluster in clusters[number]:
             other = cluster["bh"]
-            if document_id(bh) in cluster["docs"] or (kind and _kind(other) and kind != _kind(other)):
+            if document_id(bh.borehole_id) in cluster["docs"] or (kind and _kind(other) and kind != _kind(other)):
                 continue
             reviews = [protected[i] for i in cluster["ids"] if i in protected]
             if review is not None and reviews and not any(review & r for r in reviews):
@@ -272,7 +273,7 @@ def dedupe(boreholes: list[Borehole], protected: dict[str, set] | None = None,
         kept.pop()
         cluster["bh"] = combine(cluster["bh"], bh, how, agree, protected, judged)
         cluster["ids"].add(bh.borehole_id)
-        cluster["docs"].add(document_id(bh))
+        cluster["docs"].add(document_id(bh.borehole_id))
         cluster["changed"] = True
     for entry in kept:
         if entry["changed"]:

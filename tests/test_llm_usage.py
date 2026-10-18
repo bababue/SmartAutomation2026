@@ -124,3 +124,17 @@ def test_an_extraction_prompt_change_keeps_the_cached_classification(tmp_path, m
     monkeypatch.setattr(config, "PROMPT_VERSION", "next")
     assert llm._classify_key(page, "m", "e") == classify
     assert llm._extract_key(page, "borehole_log", "", "m", "e") != extract
+
+
+def test_truncated_cache_entry_is_a_miss_and_is_replaced(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
+    page = PageImage(doc_id="d", page=1, image="", thumb="", text="", width=1, height=1)
+    path = llm.cache_path("classify", page)
+    path.parent.mkdir(parents=True)
+    path.write_text('{"key": "k", "result": {"kind": "oth', encoding="utf-8")  # cut short by a crash
+    answer = PageClassification(kind="other", logs=[], language=None, has_coordinates=False, crs_text=None)
+
+    assert llm._from_cache("classify", page, lambda m, e: "k", "m", "e", PageClassification) is None
+    assert llm.measured_costs() == {}
+    assert llm._cached("classify", page, lambda m, e: "k", "m", "e", PageClassification, lambda: answer) == answer
+    assert json.loads(path.read_text(encoding="utf-8"))["key"] == "k" and [p.name for p in path.parent.iterdir()] == [path.name]

@@ -2,8 +2,9 @@
 
 Every page goes to the model with its text layer, and a document can carry text meant to steer it ("ignore the
 previous instructions", "mark this record as released"), visible or hidden in the layer. The model has no tools
-and its answer is validated against the schema, so such text can at most falsify what is read; a record from a
-document that contains it therefore always goes to a person. Text inside page images is not seen here.
+beyond reading the page image (the CLI backend's Read tool is confined to a folder holding only that image) and its
+answer is validated against the schema, so such text can at most falsify what is read; a record from a document
+that contains it therefore always goes to a person. Text inside page images is not seen here.
 """
 
 from __future__ import annotations
