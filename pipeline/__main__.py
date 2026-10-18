@@ -98,12 +98,14 @@ Contents
 - boreholes.sqlite   database (records, review decisions, corrections, knowledge)
 - pages/             rendered source pages shown next to each record (optional)
 - cache/             cached model output, needed only for `pipeline rebuild` (optional)
+- eval/              reviewed reference records and the release audit sample, for the statistics
 
 Run it
-1. Get the code: the repository at commit {commit} (branch marvin) and set it up as in its README
+1. Get the code: the repository at commit {commit} (branch main) and set it up as in its README
    (python3 -m venv .venv; .venv/bin/pip install -r requirements.txt; npm --prefix web install).
 2. Copy the package into the repository's data/ folder:
-   boreholes.sqlite -> data/boreholes.sqlite, pages/ -> data/pages/, cache/ -> data/cache/
+   boreholes.sqlite -> data/boreholes.sqlite, pages/ -> data/pages/, cache/ -> data/cache/,
+   eval/ -> data/eval/
    (or point DB_PATH / DATA_DIR at the package folder).
 3. Start: .venv/bin/uvicorn api.main:app --port 8000   and   npm --prefix web run dev
    then open http://localhost:5173. Without pages/ the map, profiles and exports work; the source page
@@ -114,8 +116,8 @@ Created {created} from {source}: {boreholes} boreholes, {documents} documents.
 
 
 def cmd_share(args: argparse.Namespace) -> None:
-    """A consistent copy of the database (SQLite backup API, safe while the API runs), the page images and
-    optionally the cache, with a README for colleagues."""
+    """A consistent copy of the database (SQLite backup API, safe while the API runs), the page images,
+    the evaluation reference and audit, and optionally the cache, with a README for colleagues."""
     out = Path(args.out).expanduser()
     if out.exists() and any(out.iterdir()):
         sys.exit(f"{out} exists and is not empty")
@@ -132,6 +134,11 @@ def cmd_share(args: argparse.Namespace) -> None:
         shutil.copytree(config.PAGES_DIR, out / "pages")
     if args.with_cache:
         shutil.copytree(config.CACHE_DIR, out / "cache")
+    # Prompt experiments stay behind: large, and only needed for prompt work.
+    for path in (config.REFERENCE_PATH, config.AUDIT_PATH):
+        if path.exists():
+            (out / "eval").mkdir(exist_ok=True)
+            shutil.copy2(path, out / "eval" / path.name)
     try:
         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
                                 cwd=config.ROOT).stdout.strip() or "unknown"
