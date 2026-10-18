@@ -148,7 +148,7 @@ hand-written page results.
 
 ## Workflow
 
-- Work happens on the branch **`marvin`**. Commit finished, verified work there.
+- Work happens on the branch **`main`**. Commit finished, verified work there.
   **Never push, rebase or rewrite history unless asked.**
 - Parallel sessions (Claude and Codex) often work in the same checkout. **Stage only
   your own files** (`git add <paths>`, never `git add -A`). Leave other people's
@@ -182,7 +182,7 @@ and it is not rewritten.
 
 ### Versioning — SemVer
 
-Versions are git tags `vMAJOR.MINOR.PATCH` on `marvin`, starting at `v0.1.0`. While the
+Versions are git tags `vMAJOR.MINOR.PATCH` on `main`, starting at `v0.1.0`. While the
 version is `0.x`, `feat` bumps MINOR and `fix`/`perf` bump PATCH. Tag at milestones (the
 state shown to the jury, the final submission) rather than on every commit, and only when
 asked. The Conventional Commit log is the changelog; there is no separate file.
