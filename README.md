@@ -27,6 +27,8 @@ public places; the statistics page then shows the committed evaluation snapshot
 - **Build and test without data or key:** the Docker build above runs lint, web unit tests, the TypeScript check,
   the production build and the full pytest suite; locally `make install && make check`.
 - **Run:** UI on <http://localhost:8000>, OpenAPI on <http://localhost:8000/docs>, synthetic boreholes.
+- **Extract real logs without the dataset:** [`samples/`](samples/) holds two public LGRB borehole logs;
+  `make samples` runs the full pipeline on them with a model key ([Trying the public samples](#trying-the-public-samples)).
 - **Architecture:** [docs/pipeline.md](docs/pipeline.md) (diagrams), [schema/README.md](schema/README.md) (record
   model and design decisions), [Repository layout](#repository-layout) (module map).
 - **Core rules in code:** release score and blocking findings in [`pipeline/scoring.py`](pipeline/scoring.py),
@@ -119,8 +121,8 @@ exactly what runs without them:
 | Python | `pip install`, the full test suite (390+ tests: coordinate parsing in every notation that broke, CRS resolution, sheet assembly, scoring and blocking rules, review persistence, corrections, API, upload queue, export) |
 | App | creates a database of synthetic boreholes at public places (`fixtures/demo_data.py`) and serves API and UI on port 8000 |
 
-Not part of the build: extraction itself, which needs an LLM key and the confidential documents. Tests never
-call an LLM; they use cached or hand-written page results. The same checks run locally with `make check`.
+Not part of the build: extraction itself, which needs an LLM key and documents ([public samples](#trying-the-public-samples)
+are in the repository). Tests never call an LLM; they use cached or hand-written page results. The same checks run locally with `make check`.
 
 ## Getting started
 
@@ -143,6 +145,18 @@ npm --prefix web run dev                                               # termina
 
 The header shows "Synthetic demo data" while the API serves the demo database; demo records have no source
 pages. After `npm --prefix web run build` the API serves the UI on port 8000 as well.
+
+### Trying the public samples
+
+[`samples/`](samples/) holds two public borehole logs from the LGRB portal, so the extraction can run without
+the confidential dataset. With a model key in `.env` (see below):
+
+```bash
+make samples                                                     # 2 pages, a few cents
+DATA_DIR=data/samples .venv/bin/uvicorn api.main:app --port 8000   # http://localhost:8000 after a web build
+```
+
+Pages, cache and database go to `data/samples/`, apart from any other run.
 
 ### Processing the challenge documents
 
@@ -291,6 +305,7 @@ Measured once on a laptop with 50,000 generated holes (1 GB): map points 0.8 s /
 | `web/` | React 19, Vite, TypeScript, MapLibre |
 | `tests/` | pytest suite; public landmarks and invented values only |
 | `fixtures/` | synthetic demo boreholes, evaluation snapshot for the statistics page (aggregates only) |
+| `samples/` | two public LGRB borehole logs for an extraction run without the dataset |
 | `docs/` | pipeline diagrams, model comparison, prompt backlog |
 | `temp/`, `data/` | dataset, pages, cache and database: confidential and git-ignored |
 
@@ -405,8 +420,8 @@ public landmarks and invented values.
 
 - No user accounts: reviewer names are free text and the write endpoints are open. Run it on a trusted network.
 - One API process per database (SQLite, upload queue in the same file).
-- Extraction itself cannot be reproduced without an LLM key and the confidential documents; the build covers
-  everything after the page cache.
+- Extraction itself needs an LLM key; the figures above cannot be reproduced without the confidential
+  documents, only the run on the public samples. The build covers everything after the page cache.
 - The reference was approved from the pipeline's own output, which flatters the scores (see
   [Evaluation](#evaluation)).
 - Text inside page images is not scanned for prompt injection; only text layers are.

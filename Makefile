@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: install check test web demo docker
+.PHONY: install check test web demo samples docker
 
 install:
 	python3 -m venv .venv
@@ -18,6 +18,9 @@ web:
 
 demo:
 	DB_PATH=data/demo.sqlite $(PY) -m fixtures.demo_data
+
+samples:
+	DATASET_DIR=samples DATA_DIR=data/samples GAZETTEER_PATH=data/gazetteer.sqlite $(PY) -m pipeline run --all
 
 docker:
 	docker build -t borehole-atlas .
