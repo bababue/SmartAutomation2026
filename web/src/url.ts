@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useState, type SetStateAction } from 'react'
 import { parseDecimal } from './format'
 import type { Filters, QueuePosition, RangeFilter, ReviewFilters, StatusFilter } from './types'
 
@@ -107,4 +108,46 @@ export function writeUrl(s: UrlState): string {
   f.material.forEach((m) => p.append('mat', m))
   const qs = p.toString()
   return qs ? `?${qs}` : window.location.pathname
+}
+
+type UrlPatch = Partial<UrlState> | ((state: UrlState) => Partial<UrlState>)
+
+/** The page state that lives in the address: read on load and on Back/Forward, written back on every change. */
+export function useUrlState() {
+  const [state, setState] = useState(() => readUrl(window.location.search))
+  // The search box text, which reaches the filters debounced.
+  const [query, setQuery] = useState(state.filters.q)
+
+  const show = useCallback((patch: UrlPatch) =>
+    setState((s) => ({ ...s, ...(typeof patch === 'function' ? patch(s) : patch) })), [])
+  const select = useCallback((selectedId: string | null) => show({ selectedId }), [show])
+  const setFilters = useCallback((next: SetStateAction<Filters>) =>
+    show((s) => ({ filters: typeof next === 'function' ? next(s.filters) : next })), [show])
+
+  useEffect(() => {
+    const t = setTimeout(() => setState((s) => (s.filters.q === query ? s : { ...s, filters: { ...s.filters, q: query } })), 250)
+    return () => clearTimeout(t)
+  }, [query])
+
+  // Page and selection changes get a history entry, so Back closes a borehole or leaves the queue.
+  useEffect(() => {
+    const url = writeUrl(state)
+    const shown = readUrl(window.location.search)
+    if (url === (window.location.search || window.location.pathname)) return
+    if (shown.view !== state.view || shown.routeActive !== state.routeActive ||
+      (state.routeActive && shown.tunnelId !== state.tunnelId) || shown.selectedId !== state.selectedId) window.history.pushState(null, '', url)
+    else window.history.replaceState(null, '', url)
+  }, [state])
+
+  useEffect(() => {
+    const onPop = () => {
+      const s = readUrl(window.location.search)
+      setState(s)
+      setQuery(s.filters.q)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  return { ...state, query, setQuery, show, select, setFilters }
 }

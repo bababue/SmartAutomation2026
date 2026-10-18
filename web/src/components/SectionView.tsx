@@ -472,3 +472,19 @@ export function SectionView({ features, route, selectedId, hoveredId, onHover, o
     </section>
   )
 }
+
+/** The profile's place, held for a tunnel that has no route yet. */
+export function EmptySection({ title }: { title: string }) {
+  return (
+    <section className="section" aria-label="Tunnel profile">
+      <header className="section-head"><h2>{title}</h2></header>
+      <div className="section-plot section-empty">
+        <svg width="100%" height="290" aria-hidden="true" preserveAspectRatio="none">
+          <line x1="58" x2="100%" y1="257" y2="257" className="section-axis" />
+          <line x1="58" x2="58" y1="36" y2="257" className="section-axis" />
+        </svg>
+        <p>Draw a tunnel route to see its profile here.</p>
+      </div>
+    </section>
+  )
+}
