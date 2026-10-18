@@ -1,5 +1,7 @@
 # Builds and checks everything that runs without the confidential dataset or an LLM key, then serves the app
 # with synthetic demo boreholes: docker build -t borehole-atlas . && docker run -p 8000:8000 borehole-atlas
+# The public logs in samples/ are built from their committed model answers into a second database:
+# docker run -p 8000:8000 -e DATA_DIR=/app/data/samples -e DB_PATH=/app/data/samples/boreholes.sqlite borehole-atlas
 
 FROM node:24-slim AS web
 WORKDIR /app/web
@@ -21,10 +23,13 @@ COPY pipeline/ pipeline/
 COPY api/ api/
 COPY fixtures/ fixtures/
 COPY tests/ tests/
+COPY samples/ samples/
 RUN python -m pytest -q -p no:cacheprovider
 COPY --from=web /app/web/dist web/dist
 ENV DATA_DIR=/app/data DB_PATH=/app/data/demo.sqlite
 RUN mkdir -p data && python -m fixtures.demo_data \
+    && DATASET_DIR=samples DATA_DIR=data/samples CACHE_DIR=samples/cache DB_PATH=data/samples/boreholes.sqlite \
+       python -m pipeline rebuild \
     && useradd --create-home --uid 10001 atlas && chown -R atlas data
 # The code stays root-owned and read-only; the API writes only under data/ (the DB and its WAL, uploads, pages).
 USER atlas

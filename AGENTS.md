@@ -30,8 +30,9 @@ may use it, only for this challenge, and it is deleted after the event.
   way.
 - **Nothing from the dataset goes into the repo.** That covers names, project names,
   borehole IDs, coordinates, places, excerpts and file names. It applies to code, tests,
-  fixtures, prompts, docs and commit messages. Examples and tests use public landmarks or
-  invented values (see `tests/test_georef.py`, `fixtures/demo_data.py`).
+  fixtures, prompts, docs and commit messages. Examples and tests use public landmarks,
+  invented values or the public LGRB logs in `samples/` (see `tests/test_georef.py`,
+  `fixtures/demo_data.py`, `tests/test_samples.py`).
 - Describe findings generically ("multi-sheet log in feet"), never by document.
 - Never print, log or ask for credentials. Look at `.env` only with the values redacted.
   A subscription OAuth token (`sk-ant-oat…`) is not an API key and is never routed into
@@ -62,12 +63,13 @@ Python runs in `.venv` (`source .venv/bin/activate`). The frontend uses `npm` in
 | `python -m pipeline rebuild` | reassemble from the cache, free |
 | `python -m pipeline eval` | extraction quality against human-checked records |
 | `DB_PATH=data/demo.sqlite python -m fixtures.demo_data` | synthetic demo DB, no data or key needed |
+| `make samples` | the public logs in `samples/` from their committed model answers, no key needed |
 
 **LLM runs cost money or subscription quota.** Run `pipeline run` beyond a single test
 document only when asked. The same goes for anything that invalidates the cache. A
 `PROMPT_VERSION` bump re-extracts every page, which is why prompt changes are collected in
-`docs/prompt-backlog.md` and shipped together. Code changes in assembly, georef or scoring
-need only `rebuild`.
+`docs/prompt-backlog.md` and shipped together; it also needs fresh answers in `samples/cache`
+(see `samples/README.md`). Code changes in assembly, georef or scoring need only `rebuild`.
 
 ### Live checks
 

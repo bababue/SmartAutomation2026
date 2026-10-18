@@ -27,8 +27,9 @@ public places; the statistics page then shows the committed evaluation snapshot
 - **Build and test without data or key:** the Docker build above runs lint, web unit tests, the TypeScript check,
   the production build and the full pytest suite; locally `make install && make check`.
 - **Run:** UI on <http://localhost:8000>, OpenAPI on <http://localhost:8000/docs>, synthetic boreholes.
-- **Extract real logs without the dataset:** [`samples/`](samples/) holds two public LGRB borehole logs;
-  `make samples` runs the full pipeline on them with a model key ([Trying the public samples](#trying-the-public-samples)).
+- **Real documents without the dataset:** [`samples/`](samples/) holds two public LGRB borehole logs with the
+  model's answers for them. The build runs every step after the model on them, without a key; with a key,
+  `make samples-extract` extracts them afresh ([Trying the public samples](#trying-the-public-samples)).
 - **Architecture:** [docs/pipeline.md](docs/pipeline.md) (diagrams), [schema/README.md](schema/README.md) (record
   model and design decisions), [Repository layout](#repository-layout) (module map).
 - **Core rules in code:** release score and blocking findings in [`pipeline/scoring.py`](pipeline/scoring.py),
@@ -118,11 +119,11 @@ exactly what runs without them:
 | Stage | Checks |
 |---|---|
 | Web | `npm ci`, `oxlint`, unit tests, TypeScript check and production build |
-| Python | `pip install`, the full test suite (390+ tests: coordinate parsing in every notation that broke, CRS resolution, sheet assembly, scoring and blocking rules, review persistence, corrections, API, upload queue, export) |
-| App | creates a database of synthetic boreholes at public places (`fixtures/demo_data.py`) and serves API and UI on port 8000 |
+| Python | `pip install`, the full test suite (430+ tests: coordinate parsing in every notation that broke, CRS resolution, sheet assembly, scoring and blocking rules, review persistence, corrections, API, upload queue, export, and the public samples from rendered page to stored record) |
+| App | creates a database of synthetic boreholes at public places (`fixtures/demo_data.py`) and one of the public samples from their committed model answers, and serves API and UI on port 8000 |
 
-Not part of the build: extraction itself, which needs an LLM key and documents ([public samples](#trying-the-public-samples)
-are in the repository). Tests never call an LLM; they use cached or hand-written page results. The same checks run locally with `make check`.
+Not part of the build: the model calls themselves, which need an LLM key. Tests never call an LLM; they use
+cached or hand-written page results. The same checks run locally with `make check`.
 
 ## Getting started
 
@@ -148,15 +149,23 @@ pages. After `npm --prefix web run build` the API serves the UI on port 8000 as 
 
 ### Trying the public samples
 
-[`samples/`](samples/) holds two public borehole logs from the LGRB portal, so the extraction can run without
-the confidential dataset. With a model key in `.env` (see below):
+[`samples/`](samples/) holds two public borehole logs from the LGRB portal and the answers Claude Opus 5.5 gave
+for them (`samples/cache/`), so real documents run through the pipeline without the confidential dataset:
 
 ```bash
-make samples                                                     # 2 pages, a few cents
+make samples                                                       # from the committed answers: no key, free
+make samples-extract                                               # fresh model calls with the key in .env (below)
 DATA_DIR=data/samples .venv/bin/uvicorn api.main:app --port 8000   # http://localhost:8000 after a web build
 ```
 
-Pages, cache and database go to `data/samples/`, apart from any other run.
+Pages, database and fresh answers go to `data/samples/`, apart from any other run. In Docker:
+
+```bash
+docker run --rm -p 8000:8000 -e DATA_DIR=/app/data/samples -e DB_PATH=/app/data/samples/boreholes.sqlite borehole-atlas
+```
+
+Both holes wait for review: their sheets print northing and easting without naming the coordinate system, so the
+pipeline infers ETRS89 / UTM 32N and leaves the confirmation to a person.
 
 ### Processing the challenge documents
 
@@ -305,7 +314,7 @@ Measured once on a laptop with 50,000 generated holes (1 GB): map points 0.8 s /
 | `web/` | React 19, Vite, TypeScript, MapLibre |
 | `tests/` | pytest suite; public landmarks and invented values only |
 | `fixtures/` | synthetic demo boreholes, evaluation snapshot for the statistics page (aggregates only) |
-| `samples/` | two public LGRB borehole logs for an extraction run without the dataset |
+| `samples/` | two public LGRB borehole logs and the model's answers for them, to run real documents without the dataset |
 | `docs/` | pipeline diagrams, model comparison, prompt backlog |
 | `temp/`, `data/` | dataset, pages, cache and database: confidential and git-ignored |
 
@@ -346,6 +355,7 @@ Environment variables, from the shell or `.env`:
 | `MAX_UPLOAD_CALLS` / `MAX_DAILY_CALLS` | `400` / `2000` | model calls per upload batch / per UTC day (command-line runs count towards the day, but are not stopped) |
 | `DATASET_DIR` | `temp/HKBoreholeChallenge_Data_BFH2026/BoreholeData` | input documents |
 | `DATA_DIR` / `DB_PATH` | `data` / `data/boreholes.sqlite` | pages, cache, database |
+| `CACHE_DIR` | `data/cache` | model answers; `samples/cache` for the public samples |
 | `GAZETTEER_PATH` | `data/gazetteer.sqlite` | offline GeoNames index |
 | `EXTRACT_LONG_EDGE` / `THUMB_LONG_EDGE` | `2000` / `900` | rendering size in pixels |
 
@@ -420,8 +430,8 @@ public landmarks and invented values.
 
 - No user accounts: reviewer names are free text and the write endpoints are open. Run it on a trusted network.
 - One API process per database (SQLite, upload queue in the same file).
-- Extraction itself needs an LLM key; the figures above cannot be reproduced without the confidential
-  documents, only the run on the public samples. The build covers everything after the page cache.
+- The model calls need an LLM key, and the figures above need the confidential documents. Without them, the build
+  covers everything after the page cache, on synthetic records and on the public samples.
 - The reference was approved from the pipeline's own output, which flatters the scores (see
   [Evaluation](#evaluation)).
 - Text inside page images is not scanned for prompt injection; only text layers are.

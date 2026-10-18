@@ -14,7 +14,7 @@ load_dotenv(ROOT / ".env")
 DATASET_DIR = Path(os.getenv("DATASET_DIR", ROOT / "temp/HKBoreholeChallenge_Data_BFH2026/BoreholeData"))
 DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
 PAGES_DIR = DATA_DIR / "pages"  # rendered page images, served to the UI
-CACHE_DIR = DATA_DIR / "cache"  # LLM responses, keyed by input hash
+CACHE_DIR = Path(os.getenv("CACHE_DIR", DATA_DIR / "cache"))  # LLM responses, keyed by input hash
 UPLOADS_DIR = DATA_DIR / "uploads"  # documents submitted through the web UI, one subfolder per upload
 GAZETTEER_PATH = Path(os.getenv("GAZETTEER_PATH", DATA_DIR / "gazetteer.sqlite"))  # GeoNames index, see pipeline/gazetteer.py
 # A page cap keeps a single web upload's API cost bounded without asking for confirmation. The byte

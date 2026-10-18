@@ -1,0 +1,1 @@
+{"key": "f49d941e6e021795d2919f3ec2fb5246255b0f89d227a91a4db77fb8707efe67", "model": "anthropic/claude-opus-5.5", "effort": "low", "result": {"coords_raw": "Nord: 5381191.324 Ost: 477113.766", "crs_raw": null}, "seconds": 3.1, "usage": {"anthropic/claude-opus-5.5": {"input_tokens": 1566, "output_tokens": 40, "cost_usd": 0.007064}}}
