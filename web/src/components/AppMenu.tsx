@@ -70,9 +70,10 @@ export function AppMenu({ inStats, uploading, dark, view3d, onToggleStats,
       else close()
       return
     }
-    if (e.key === 'ArrowLeft' && active?.getAttribute('aria-haspopup')) {
+    const controls = active?.getAttribute('aria-controls')
+    if (e.key === 'ArrowLeft' && controls?.startsWith('menu-')) {
       e.preventDefault()
-      openSub(active.getAttribute('aria-controls')!.slice(5) as Sub)
+      openSub(controls.slice(5) as Sub)
       return
     }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return

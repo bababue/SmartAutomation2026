@@ -57,6 +57,7 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
   const [whole, setWhole] = useState<StatsDetail | null>(null)
   const [narrowed, setNarrowed] = useState<StatsDetail | null>(null)
   const [dataError, setDataError] = useState<string | null>(null)
+  const [narrowedError, setNarrowedError] = useState<string | null>(null)
   const [quality, setQuality] = useState<Quality | null>(null)
   const [qualityError, setQualityError] = useState<string | null>(null)
   const pending = useRef<Target | null>(null)
@@ -76,8 +77,8 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
     if (!filtered) return
     const ctrl = new AbortController()
     fetchStatsDetail(filters, ctrl.signal)
-      .then((s) => { setNarrowed(s); setDataError(null) })
-      .catch((e) => { if (!ctrl.signal.aborted) setDataError(`Could not load the statistics (${e.message}).`) })
+      .then((s) => { setNarrowed(s); setNarrowedError(null) })
+      .catch((e) => { if (!ctrl.signal.aborted) setNarrowedError(`Could not load the statistics (${e.message}).`) })
     return () => ctrl.abort()
   }, [filters, filtered])
 
@@ -120,7 +121,7 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
         {tab === 'overview' && (
           <>
             <Claims whole={whole} quality={quality} onOpen={open} />
-            <Overview stats={filtered ? narrowed : whole} filtered={filtered} error={dataError} quality={quality}
+            <Overview stats={filtered ? narrowed : whole} filtered={filtered} error={filtered ? narrowedError : dataError} quality={quality}
               onShowGroup={onShowGroup} onReview={onReview} />
           </>
         )}

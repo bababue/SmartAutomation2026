@@ -11,6 +11,7 @@ export function ConfirmCrs({ crs, onChanged }: { crs: CrsGroup; onChanged: () =>
   const [error, setError] = useState<string | null>(null)
 
   async function confirm() {
+    if (busy) return
     if (!reviewer.trim()) { setAsking(true); return }
     setBusy(true)
     setError(null)

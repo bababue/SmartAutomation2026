@@ -93,7 +93,7 @@ function Section({ title, rows }: { title: ReactNode; rows: Row[] }) {
     <tbody>
       <tr className="models-section"><th colSpan={COLUMNS.length + 1} scope="rowgroup">{title}</th></tr>
       {rows.map((r, i) => (
-        <tr key={r.name} className={r.name === SELECTED ? 'models-selected' : undefined}>
+        <tr key={i} className={r.name === SELECTED ? 'models-selected' : undefined}>
           <th scope="row">
             {r.name}{r.name === SELECTED && <span className="models-tag">selected</span>}
             {r.route && <span className="models-hint">{r.route}</span>}
