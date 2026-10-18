@@ -131,7 +131,7 @@ def cancel_upload(job_id: str, body: CancelBody, con: DB, queue: Queue) -> uploa
 
 
 @router.get("/api/llm/usage")
-def llm_usage(con: DB):
+def llm_usage(con: DB) -> models.LlmUsage:
     """Model calls today against the limits, and where they go."""
     return {"today": store.llm_calls_today(con), "daily_limit": config.MAX_DAILY_CALLS,
             "upload_limit": config.MAX_UPLOAD_CALLS, "endpoint": llm.endpoint()}

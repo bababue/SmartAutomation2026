@@ -93,7 +93,7 @@ def crs_groups(con: DB) -> list[models.CrsGroup]:
 
 
 @router.get("/api/corrections/orphans")
-def orphan_corrections(con: DB):
+def orphan_corrections(con: DB) -> list[models.OrphanCorrection]:
     """Reviewer corrections of holes that no current record carries (renamed beyond recognition or gone)."""
     return store.orphan_corrections(con)
 

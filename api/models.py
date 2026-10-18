@@ -139,6 +139,10 @@ class CorrectionRecord(BaseModel):
     at: str
 
 
+class OrphanCorrection(CorrectionRecord):
+    uid: str | None
+
+
 class ReviewResult(BaseModel):
     borehole: Borehole
     review_log: list[ReviewEvent]
@@ -158,6 +162,29 @@ class Detail(ReviewResult):
     severity: dict[str, str]  # per finding; a blocking one keeps the record in the queue whatever its score
     threshold: float
     crs_group: CrsGroup | None  # the document-wide CRS confirmation this waiting hole belongs to
+
+
+class SimilarHole(BaseModel):
+    id: str
+    name: str
+    project: str | None
+    country: str | None
+    review_status: ReviewStatus
+    score: float | None
+    similarity: float
+    reason: str
+
+
+class GroundFilters(BaseModel):
+    rock_head_max: int | None
+    groundwater_max: float | None
+    material: list[str]
+
+
+class SimilarGround(BaseModel):
+    ground: str | None
+    like: GroundFilters | None
+    similar: list[SimilarHole]
 
 
 class Stats(BaseModel):
@@ -367,6 +394,13 @@ class Quality(BaseModel):
     evaluation: ModelEvaluation | None
     audit: Audit | None
     usage: list[UsageRow]
+
+
+class LlmUsage(BaseModel):
+    today: int
+    daily_limit: int
+    upload_limit: int
+    endpoint: str
 
 
 class DuplicateFile(BaseModel):

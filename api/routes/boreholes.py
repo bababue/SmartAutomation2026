@@ -78,7 +78,7 @@ def list_boreholes(
 
 
 @router.get("/api/boreholes/{borehole_id:path}/similar")
-def similar_boreholes(borehole_id: str, con: DB, limit: int = Query(5, ge=1, le=20)):
+def similar_boreholes(borehole_id: str, con: DB, limit: int = Query(5, ge=1, le=20)) -> models.SimilarGround:
     """Holes of other documents with the most similar ground (lithology per depth band, water level)."""
     found = similar.similar(con, borehole_id, limit)
     if found is None:
