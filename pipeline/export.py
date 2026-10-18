@@ -14,6 +14,7 @@ from collections import defaultdict
 from functools import lru_cache
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from pyproj import CRS
@@ -77,8 +78,14 @@ def _sheet(wb: Workbook, title: str, header: list[str], rows: list[list]) -> Non
     ws.append(header)
     for cell in ws[1]:
         cell.font = Font(bold=True)
-    for row in rows:
-        ws.append(row)
+    for r, row in enumerate(rows, start=2):
+        for c, value in enumerate(row, start=1):
+            if isinstance(value, str):
+                # Text from documents and reviewers: a control character would fail the whole workbook, and a
+                # leading '=' would make openpyxl store it as a formula.
+                ws.cell(r, c, ILLEGAL_CHARACTERS_RE.sub("", value)).data_type = "s"
+            else:
+                ws.cell(r, c, value)
     ws.freeze_panes = "A2"
     for i, name in enumerate(header, start=1):
         ws.column_dimensions[get_column_letter(i)].width = min(max(12, len(name) + 2), 60)

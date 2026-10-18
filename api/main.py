@@ -31,12 +31,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Borehole Atlas API", lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=2000)  # map points and lists compress about 6:1
+app.add_middleware(uploads.UploadSizeLimit)
 
 # Review first: the catch-all GET /api/boreholes/{id:path} must not shadow its POST routes below that path, or a
 # wrong method on them would be answered with the detail route's Allow header.
 for module in (review, boreholes, uploads, stats, export):
     app.include_router(module.router)
 
-# Last: the SPA catches every path the API does not.
+# Last: the built web app under every path the API does not claim. It routes by query string, so unknown paths
+# need no fallback to index.html.
 if WEB_DIST.exists():
     app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")

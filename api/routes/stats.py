@@ -76,7 +76,7 @@ def stats_detail(con: DB, filters: ListFilters) -> models.StatsDetail:
     metres = rows("SELECT primary_code, SUM(bottom_m - top_m) m FROM layers WHERE rid IN ({scope}) "
                   "GROUP BY primary_code ORDER BY m DESC")
     depths = [0] * (DEPTH_BINS + 1)
-    for r in rows(f"SELECT MIN(CAST(depth / {DEPTH_BIN_M} AS INTEGER), {DEPTH_BINS}) bin, COUNT(*) n "
+    for r in rows(f"SELECT MAX(MIN(CAST(depth / {DEPTH_BIN_M} AS INTEGER), {DEPTH_BINS}), 0) bin, COUNT(*) n "
                   "FROM boreholes WHERE rid IN ({scope}) AND depth IS NOT NULL GROUP BY bin"):
         depths[r["bin"]] = r["n"]
     group_rows = rows(

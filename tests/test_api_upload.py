@@ -218,6 +218,19 @@ def test_byte_cap_applies_to_the_extracted_zip(client):
     assert not any(config.UPLOADS_DIR.iterdir())
 
 
+def test_file_cap_applies_to_the_whole_batch_before_a_zip_is_extracted(client, monkeypatch):
+    monkeypatch.setattr(config, "MAX_UPLOAD_FILES", 2)
+    one, two = _zip_bytes({"a.pdf": b"", "b.pdf": b""}), _zip_bytes({"a.pdf": b""})
+    extracted = []
+    monkeypatch.setattr(zipfile.ZipFile, "open", lambda self, info, *a, **k: extracted.append(info) or io.BytesIO())
+    res = client.post("/api/uploads", files=[("files", ("one.zip", one, "application/zip")),
+                                            ("files", ("two.zip", two, "application/zip"))])
+    assert res.status_code == 413
+    assert "2 documents" in res.json()["detail"]
+    assert len(extracted) == 2  # the first zip only; the second was refused from its directory
+    assert not any(config.UPLOADS_DIR.iterdir())
+
+
 def test_status_reports_the_running_stage(client, monkeypatch):
     import threading
 

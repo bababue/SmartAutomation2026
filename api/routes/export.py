@@ -82,7 +82,7 @@ def _csv_record(w, row: sqlite3.Row) -> None:
     pages = {s.page for s in bh.sources if s.page is not None and (source_file is None or s.file == source_file)}
     source_pages = ";".join(str(p) for p in sorted(pages)) or None
     for layer in bh.layers or [None]:
-        w.writerow([
+        w.writerow(map(_csv_cell, [
             bh.borehole_id, bh.borehole_name, source_file, source_pages, bh.project_name, bh.location_name,
             loc.lat, loc.lon,
             loc.coords_raw, original_crs, bh.surface_elevation_m, bh.elevation_datum, bh.depth_m,
@@ -90,4 +90,12 @@ def _csv_record(w, row: sqlite3.Row) -> None:
                layer.stratigraphic_name, layer.stratigraphic_code, layer.geologic_age, layer.color)
               if layer else [None] * 8),
             bh.review_status.value, bh.reviewed_by, bh.score,
-        ])
+        ]))
+
+
+def _csv_cell(value):
+    # Spreadsheet apps run text starting with one of these as a formula (OWASP CSV injection); the text comes
+    # from documents and reviewers.
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + value
+    return value

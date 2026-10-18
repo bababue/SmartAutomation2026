@@ -313,6 +313,22 @@ def test_inferred_crs_without_a_code_is_left_out_of_document_confirmations(clien
     assert detail.status_code == 200 and detail.json()["crs_group"] is None
 
 
+def test_negative_depth_correction_is_refused(client):
+    response = client.post("/api/boreholes/q:A/corrections", json={"kind": "field", "reviewer": "Ana",
+                            "payload": {"field": "depth_m", "value": -50}})
+    assert response.status_code == 422
+    assert client.get("/api/boreholes/q:A").json()["borehole"]["depth_m"] == 30
+
+
+def test_negative_depth_counts_into_the_shallowest_bin(client):
+    con = store.connect()
+    con.execute("UPDATE boreholes SET depth = -50 WHERE id = 'q:C'")
+    con.commit()
+    con.close()
+    depths = client.get("/api/stats/detail").json()["depths"]
+    assert depths[0] == 1 and depths[1] == 0 and sum(depths) == 3
+
+
 @pytest.mark.parametrize("kind, payload", [
     ("layer_add", '{"top": 30, "bottom": 1e999, "primary": "clay"}'),
     ("groundwater", '{"depth_m": Infinity}'),

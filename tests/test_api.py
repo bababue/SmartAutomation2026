@@ -72,3 +72,13 @@ def test_csv_lists_source_file_and_pages(client):
 def test_filter_by_ids(client):
     features = client.get("/api/boreholes", params={"id": ["QRS02:BH7", "missing"]}).json()["features"]
     assert [f["properties"]["id"] for f in features] == ["QRS02:BH7"]
+
+
+def test_csv_neutralises_formulas_but_keeps_negative_numbers(client):
+    con = store.connect()
+    store.save_borehole(con, record("XYZ01:BH2", "reports/XYZ01_site_report.pdf", [3], name="=1+2"))
+    con.close()
+    rows = list(csv.reader(io.StringIO(client.get("/api/export.csv").text)))
+    row = dict(zip(rows[0], next(r for r in rows if r[0] == "XYZ01:BH2")))
+    assert row["BoreholeName"] == "'=1+2"
+    assert row["Latitude_WGS84"] == "-33.873"

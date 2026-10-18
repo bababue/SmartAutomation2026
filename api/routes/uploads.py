@@ -16,7 +16,10 @@ from typing import IO, Annotated
 
 import pymupdf
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from pipeline import config, ingest, llm, runner, store, uploads
 
@@ -25,6 +28,8 @@ from ..db import DB
 from ..requests import CancelBody
 
 router = APIRouter()
+
+MULTIPART_OVERHEAD = 1 << 20  # part headers and boundaries beside the file bytes, generous for 1000 parts
 
 
 def _upload_queue(request: Request) -> uploads.UploadQueue:
@@ -57,7 +62,7 @@ async def upload_documents(queue: Queue, files: list[UploadFile] = File(...)) ->
     upload_dir.mkdir(parents=True, exist_ok=True)
     docs: list[ingest.SourceDoc] = []
     try:
-        budget = _ByteBudget()
+        budget = _Budget()
         for file, name in batch:
             if name.lower().endswith(".zip"):
                 with tempfile.TemporaryFile() as archive:
@@ -66,6 +71,7 @@ async def upload_documents(queue: Queue, files: list[UploadFile] = File(...)) ->
                         archive.write(chunk)
                     skipped += await run_in_threadpool(_extract_zip, archive, name, upload_dir, budget)
             else:
+                budget.documents(1)
                 with _unique_path(upload_dir, name).open("wb") as out:
                     while chunk := await file.read(1 << 20):
                         budget.received(len(chunk))
@@ -174,12 +180,18 @@ def _check_daily_calls(pages: int) -> None:
                                  f"({today} made today, this upload needs at least {pages}); try again tomorrow")
 
 
-class _ByteBudget:
-    """MAX_UPLOAD_BYTES applies to the whole batch: to the bytes received and to the documents stored,
-    so a small zip cannot expand past the limit."""
+class _Budget:
+    """The limits apply to the whole batch. MAX_UPLOAD_BYTES to the bytes received and to the documents stored,
+    so a small zip cannot expand past it; MAX_UPLOAD_FILES to the documents, counted before a zip is extracted, so
+    a small zip of many empty entries is refused before they are written out."""
 
     def __init__(self) -> None:
-        self.received_bytes = self.stored_bytes = 0
+        self.received_bytes = self.stored_bytes = self.document_count = 0
+
+    def documents(self, n: int) -> None:
+        self.document_count += n
+        if self.document_count > config.MAX_UPLOAD_FILES:
+            raise HTTPException(413, f"the upload holds more than the {config.MAX_UPLOAD_FILES} documents allowed")
 
     def received(self, n: int) -> None:
         self.received_bytes += n
@@ -192,7 +204,29 @@ class _ByteBudget:
     @staticmethod
     def _check(total: int) -> None:
         if total > config.MAX_UPLOAD_BYTES:
-            raise HTTPException(413, f"the upload exceeds the {config.MAX_UPLOAD_BYTES // (1 << 20)} MB upload limit")
+            raise _over_byte_limit()
+
+
+def _over_byte_limit() -> HTTPException:
+    return HTTPException(413, f"the upload exceeds the {config.MAX_UPLOAD_BYTES // (1 << 20)} MB upload limit")
+
+
+class UploadSizeLimit:
+    """Refuses an upload whose declared length is past the byte limit before its body is read: FastAPI spools the
+    whole multipart body to disk before the route runs. A chunked body declares no length; the batch budget
+    catches it after parsing."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "POST" and scope["path"] == "/api/uploads":
+            length = Headers(scope=scope).get("content-length", "")
+            if length.isdigit() and int(length) > config.MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD:
+                exc = _over_byte_limit()
+                await JSONResponse({"detail": exc.detail}, exc.status_code)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
 
 
 def _safe_part(part: str) -> str:
@@ -210,7 +244,7 @@ def _unique_path(folder: Path, rel: str) -> Path:
     return dest
 
 
-def _extract_zip(archive: IO[bytes], name: str, upload_dir: Path, budget: _ByteBudget) -> list[str]:
+def _extract_zip(archive: IO[bytes], name: str, upload_dir: Path, budget: _Budget) -> list[str]:
     """Extracts the documents; returns the other files it skipped."""
     skipped = []
     try:
@@ -218,6 +252,7 @@ def _extract_zip(archive: IO[bytes], name: str, upload_dir: Path, budget: _ByteB
     except zipfile.BadZipFile:
         raise HTTPException(422, f"could not read {name}: is it a valid ZIP file?") from None
     with zf:
+        documents = []
         for info in zf.infolist():
             parts = info.filename.replace("\\", "/").split("/")
             if parts[0] == "" or ".." in parts or ":" in parts[0]:  # absolute, traversing or drive-qualified
@@ -229,6 +264,9 @@ def _extract_zip(archive: IO[bytes], name: str, upload_dir: Path, budget: _ByteB
             if Path(parts[-1]).suffix.lower() not in ingest.SUPPORTED:
                 skipped.append("/".join(parts))
                 continue
+            documents.append((info, parts))
+        budget.documents(len(documents))
+        for info, parts in documents:
             dest = _unique_path(upload_dir, "/".join(_safe_part(p) or "_" for p in parts))
             if upload_dir.resolve() not in dest.resolve().parents:
                 raise HTTPException(400, f"{name} contains an unsafe path: {info.filename}")

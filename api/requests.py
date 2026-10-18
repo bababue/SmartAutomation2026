@@ -102,6 +102,8 @@ class FieldFix(Body):
             raise ValueError("a borehole name cannot be empty")
         if kind is float and self.value is not None and not math.isfinite(self.value):
             raise ValueError("numeric fields must be finite")
+        if self.field == "depth_m" and self.value is not None and self.value < 0:
+            raise ValueError("a depth cannot be negative")
         return self
 
 

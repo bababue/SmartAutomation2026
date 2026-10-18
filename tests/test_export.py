@@ -48,3 +48,12 @@ def test_workbook_preserves_replicates_other_parameters_and_qualifiers():
     assert len(rows) == 2
     assert {r["UCS [MPa]"] for r in rows} == {"<5", "6–9"}
     assert "Analyte A" in rows[0]["Raw values"] and "Analyte B" in rows[1]["Raw values"]
+
+
+def test_workbook_keeps_document_text_as_text():
+    formula = '=HYPERLINK("http://example.invalid","open")'
+    bh = Borehole(borehole_id="t:BH1", borehole_name=formula, notes="dense\x0bsand")
+    meta = load_workbook(io.BytesIO(workbook([(bh, "t.pdf")])))["Metadata"]
+    cells = {h.value: c for h, c in zip(meta[1], meta[2])}
+    assert cells["BoreholeName"].value == formula and cells["BoreholeName"].data_type == "s"
+    assert cells["Notes"].value == "densesand"  # openpyxl refuses control characters

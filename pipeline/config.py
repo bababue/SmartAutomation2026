@@ -21,6 +21,7 @@ GAZETTEER_PATH = Path(os.getenv("GAZETTEER_PATH", DATA_DIR / "gazetteer.sqlite")
 # cap is checked first (while streaming to disk) so an oversized file is rejected before it is rendered.
 MAX_UPLOAD_PAGES = int(os.getenv("MAX_UPLOAD_PAGES", "100"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+MAX_UPLOAD_FILES = int(os.getenv("MAX_UPLOAD_FILES", "1000"))  # documents per batch, zip entries included
 MAX_UPLOAD_JOBS = int(os.getenv("MAX_UPLOAD_JOBS", "8"))
 MAX_UPLOAD_WORKERS = int(os.getenv("MAX_UPLOAD_WORKERS", "1"))
 MAX_UPLOAD_CALLS = int(os.getenv("MAX_UPLOAD_CALLS", "400"))  # model calls one upload batch may make

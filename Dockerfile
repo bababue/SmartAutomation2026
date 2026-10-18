@@ -24,6 +24,9 @@ COPY tests/ tests/
 RUN python -m pytest -q -p no:cacheprovider
 COPY --from=web /app/web/dist web/dist
 ENV DATA_DIR=/app/data DB_PATH=/app/data/demo.sqlite
-RUN mkdir -p data && python -m fixtures.demo_data
+RUN mkdir -p data && python -m fixtures.demo_data \
+    && useradd --create-home --uid 10001 atlas && chown -R atlas data
+# The code stays root-owned and read-only; the API writes only under data/ (the DB and its WAL, uploads, pages).
+USER atlas
 EXPOSE 8000
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
