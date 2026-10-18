@@ -296,7 +296,9 @@ def rebuild(docs: list[ingest.SourceDoc], max_pages: int | None = None, dry_run:
     store.migrate()
     con = store.connect()
     try:
-        rendered, truncated = _truncate({d.doc_id: ingest.render(d) for d in docs}, max_pages)
+        # Registering the documents gives a fresh database its source pages; a dry run writes nothing.
+        rendered, truncated = _truncate({d.doc_id: ingest.render(d) for d in docs} if dry_run else _ingest(docs, con),
+                                        max_pages)
         classes, labs = cached_inputs(rendered)
         extractions = _cached_extractions(_chains(extract_todo(rendered, classes), classes), classes)
         print(f"{len(classes)} classified pages, {len(extractions)} extracted pages from cache")
