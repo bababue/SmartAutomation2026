@@ -7,7 +7,7 @@ geodatabase.*
 Borehole Atlas reads borehole logs from PDFs, scans, images and Word files, converts them into one standard
 record, georeferences them and stores them in a searchable database with a world map. A vision LLM reads the
 pages; our code decides what a value means, where the hole is and whether the record can be trusted.
-Uncertain records go to a person.
+Uncertain records go to a person. The web app carries the name **Drilldown**.
 
 ```bash
 docker build -t borehole-atlas . && docker run --rm -p 8000:8000 borehole-atlas   # http://localhost:8000
