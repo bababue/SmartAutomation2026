@@ -3,14 +3,13 @@ import { fetchQuality, fetchStatsDetail } from '../api'
 import { fmtCount as n, fmtError, percentOf as pct, words } from '../format'
 import { lithStyle, patternId } from '../lithology'
 import { SEVERITY_LABEL } from '../review'
-import { DEFAULT_FILTERS, DEFAULT_REVIEW_FILTERS, hasFilters, type StatsTab } from '../url'
-import type { CrsDetermination, Filters, Quality, ReviewFilters, StatsDetail } from '../types'
+import { DEFAULT_FILTERS, DEFAULT_REVIEW_FILTERS, type StatsTab } from '../url'
+import type { CrsDetermination, Quality, ReviewFilters, StatsDetail } from '../types'
 import { MethodView } from './MethodView'
 import { ModelSummary, QualityDetails } from './QualityView'
 import { Bar, Shares } from './StatsParts'
 
 interface Props {
-  filters: Filters
   tab: StatsTab
   onTab: (tab: StatsTab) => void
   /** Narrow the map to a document group (the list's group filter). */
@@ -52,16 +51,13 @@ function reveal(target: Target): boolean {
   return true
 }
 
-export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onReview }: Props) {
+export function StatsView({ tab, onTab, onShowGroup, onReviewAudit, onReview }: Props) {
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
   const [whole, setWhole] = useState<StatsDetail | null>(null)
-  const [narrowed, setNarrowed] = useState<StatsDetail | null>(null)
   const [dataError, setDataError] = useState<string | null>(null)
-  const [narrowedError, setNarrowedError] = useState<string | null>(null)
   const [quality, setQuality] = useState<Quality | null>(null)
   const [qualityError, setQualityError] = useState<string | null>(null)
   const pending = useRef<Target | null>(null)
-  const filtered = hasFilters(filters)
 
   useEffect(() => {
     const ctrl = new AbortController()
@@ -73,19 +69,10 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
     return () => ctrl.abort()
   }, [])
 
-  useEffect(() => {
-    if (!filtered) return
-    const ctrl = new AbortController()
-    fetchStatsDetail(filters, ctrl.signal)
-      .then((s) => { setNarrowed(s); setNarrowedError(null) })
-      .catch((e) => { if (!ctrl.signal.aborted) setNarrowedError(`Could not load the statistics (${e.message}).`) })
-    return () => ctrl.abort()
-  }, [filters, filtered])
-
   // The target card renders once its tab is open and its data has arrived.
   useEffect(() => {
     if (pending.current && reveal(pending.current)) pending.current = null
-  }, [tab, whole, narrowed, quality])
+  }, [tab, whole, quality])
 
   const open = (to: StatsTab, target: Target) => {
     if (to === tab && reveal(target)) return
@@ -121,7 +108,7 @@ export function StatsView({ filters, tab, onTab, onShowGroup, onReviewAudit, onR
         {tab === 'overview' && (
           <>
             <Claims whole={whole} quality={quality} onOpen={open} />
-            <Overview stats={filtered ? narrowed : whole} filtered={filtered} error={filtered ? narrowedError : dataError} quality={quality}
+            <Overview stats={whole} error={dataError} quality={quality}
               onShowGroup={onShowGroup} onReview={onReview} />
           </>
         )}
@@ -175,9 +162,8 @@ function Claim({ figure, label, note, onClick }: { figure: ReactNode; label: str
   )
 }
 
-function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }: {
+function Overview({ stats: s, error, quality, onShowGroup, onReview }: {
   stats: StatsDetail | null
-  filtered: boolean
   error: string | null
   quality: Quality | null
   onShowGroup: Props['onShowGroup']
@@ -199,7 +185,6 @@ function Overview({ stats: s, filtered, error, quality, onShowGroup, onReview }:
       {error && <p className="error" role="alert">{error}</p>}
       {!s ? (!error && <p className="muted">Loading…</p>) : (
         <>
-          {filtered && <p className="stats-scope">Below: only the records the list filters select.</p>}
           <Coordinates s={s} quality={quality} onReview={onReview} />
           <Funnel s={s} />
 

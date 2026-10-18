@@ -223,7 +223,9 @@ export default function App() {
           crsGroups={!auditOnly && reviewFilters.status === 'pending' && reviewFilters.position === 'crs_inferred' ? queue.crsGroups : []}
           onChanged={reload} />
         </> : <>
-        <FilterBar filters={filters} setFilters={setFilters} lithologies={boreholes.lithologies} />
+        <FilterBar filters={filters} setFilters={setFilters} lithologies={boreholes.lithologies}
+          groupName={data.facets?.groups.find((group) => group.group === filters.group)?.project ?? filters.group ?? undefined}
+          onClearGroup={() => showGroup(null)} />
         <div className="result-head">
           <span>{loading ? 'Loading…' : `${(data.total ?? data.features.length).toLocaleString('en')} found`}</span>
           <GroupingToggle grouped={grouped} onChange={setGrouped} />
@@ -265,7 +267,7 @@ export default function App() {
           />
         ) : shownTunnel && <EmptySection title={shownTunnel.name || 'Tunnel profile'} />}
         {inStats && (
-          <StatsView filters={filters} tab={statsTab} onTab={(tab) => show({ statsTab: tab })}
+          <StatsView tab={statsTab} onTab={(tab) => show({ statsTab: tab })}
             onReviewAudit={() => openReview({ auditOnly: true })}
             onReview={(f) => openReview({ reviewFilters: f })}
             onShowGroup={(group) => showGroup(group, { view: 'map' })} />

@@ -99,12 +99,14 @@ interface Props {
   setFilters: Dispatch<SetStateAction<Filters>>
   /** Lithology keys with match counts, most frequent first. */
   lithologies: [string, number][]
+  groupName?: string
+  onClearGroup?: () => void
   /** Review mode: only the filters of the waiting records, by position source and finding. */
   review?: { filters: ReviewFilters; onChange: (filters: ReviewFilters) => void; findings: FindingFacet[] }
 }
 
 /** Filter pills; each opens a dropdown below the row. */
-export function FilterBar({ filters, setFilters, lithologies, review }: Props) {
+export function FilterBar({ filters, setFilters, lithologies, groupName, onClearGroup, review }: Props) {
   const [open, setOpen] = useState<Menu | null>(null)
   const [top, setTop] = useState(0)
   const root = useRef<HTMLDivElement>(null)
@@ -186,6 +188,12 @@ export function FilterBar({ filters, setFilters, lithologies, review }: Props) {
         {lithologies.length > 0 && pill('lithology', liths.length ? summary(liths, lithName, false) : 'Lithology', liths.length > 0)}
         {pill('lab', lab.length ? summary(lab, labName, true) : 'Lab value', lab.length > 0)}
         {pill('ground', 'Ground', ground)}
+        {filters.group && onClearGroup && (
+          <button className="pill pill-on group-chip" onClick={onClearGroup}
+            aria-label={`Clear group filter: ${groupName ?? filters.group}`} title={groupName ?? filters.group}>
+            <span className="group-chip-name">Group: {groupName ?? filters.group}</span><span aria-hidden="true">×</span>
+          </button>
+        )}
         {filters.rockMax != null && (
           <button className="pill pill-on" onClick={() => set({ rockMax: null })} aria-label={`Remove rock head at most ${filters.rockMax} m`}>
             Rock head ≤ {filters.rockMax} m <span aria-hidden="true">×</span>
